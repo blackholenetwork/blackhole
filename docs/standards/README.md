@@ -24,6 +24,52 @@ This directory contains all coding standards, development practices, and convent
 - Monitoring standards
 - Documentation requirements
 
+### 3. [API Standards](./API_STANDARDS.md)
+- REST API conventions
+- WebSocket protocols
+- GraphQL standards
+- Error response formats
+- Versioning strategy
+- Rate limiting
+- API documentation
+- Testing standards
+
+### 4. [Security Standards](./SECURITY_STANDARDS.md)
+- Authentication & authorization
+- Input validation
+- Cryptography standards
+- Security headers
+- Audit logging
+- Rate limiting & DDoS protection
+- Secure coding practices
+- Incident response
+
+### 5. [Performance Standards](./PERFORMANCE_STANDARDS.md)
+- Response time SLAs
+- Throughput requirements
+- Memory optimization
+- CPU optimization
+- I/O optimization
+- Caching strategies
+- Profiling & benchmarking
+- Load testing
+
+### 6. [Deployment Standards](./DEPLOYMENT_STANDARDS.md)
+- Build pipeline
+- Container standards
+- Kubernetes deployment
+- Configuration management
+- GitOps workflow
+- Monitoring setup
+- Backup & recovery
+- Production checklist
+
+### 7. [Developer Checklist](./DEVELOPER_CHECKLIST.md)
+- Pre-commit checklist
+- Code quality checks
+- Common mistakes to avoid
+- PR requirements
+
 ## Quick Reference
 
 ### Most Important Rules
