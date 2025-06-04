@@ -1,151 +1,55 @@
-# Plugin System
+# Internal Plugin Framework
 
-A flexible plugin system that allows extending functionality without modifying core code.
+This package provides the internal plugin framework for Blackhole Network core components.
 
-## Overview
+## Purpose
 
-The plugin system enables:
-- Adding new storage backends
-- Custom authentication methods
-- Additional API endpoints
-- New data processors
-- Custom metrics collectors
+- **Internal Use Only**: This framework is for building core Blackhole Network components
+- **Compiled Into Binary**: All plugins using this framework become part of the main executable
+- **High Performance**: Direct function calls, no network overhead
+- **Type Safe**: Full Go type checking and compile-time verification
 
-## Plugin Interface
+## Components
 
-```go
-type Plugin interface {
-    // Metadata
-    Name() string
-    Version() string
-    Description() string
-    
-    // Lifecycle
-    Init(config map[string]interface{}) error
-    Start(ctx context.Context) error
-    Stop(ctx context.Context) error
-    
-    // Health
-    Health() HealthStatus
-}
-```
-
-## Plugin Types
-
-### Storage Plugin
-```go
-type StoragePlugin interface {
-    Plugin
-    Storage // Implements storage interface
-}
-
-// Register custom storage
-registry.RegisterStorage("s3", &S3StoragePlugin{})
-```
-
-### Processor Plugin
-```go
-type ProcessorPlugin interface {
-    Plugin
-    Process(ctx context.Context, data []byte) ([]byte, error)
-}
-
-// Add custom processor
-registry.RegisterProcessor("compress", &CompressionPlugin{})
-```
-
-### API Plugin
-```go
-type APIPlugin interface {
-    Plugin
-    RegisterRoutes(router fiber.Router)
-}
-
-// Add custom endpoints
-registry.RegisterAPI("analytics", &AnalyticsPlugin{})
-```
+- `plugin.go` - Core interfaces and types
+- `registry.go` - Plugin registration and lifecycle management
+- `base.go` - Base implementations and helpers
+- `utils/` - Common utilities for plugin development
 
 ## Usage
 
-```go
-// Load plugins
-registry := plugin.NewRegistry()
+This framework is used internally for:
+- Networking component (libp2p integration)
+- Storage component (erasure coding)
+- Security component (DID management)
+- Monitoring component (metrics collection)
 
-// Register built-in plugins
-registry.Register(&LocalStoragePlugin{})
-registry.Register(&S3StoragePlugin{})
+## NOT for External Plugins
 
-// Load external plugins
-if err := registry.LoadFromDir("/etc/blackhole/plugins"); err != nil {
-    log.Fatal(err)
-}
+If you're looking to build external plugins for Blackhole Network, you'll need the Blackhole SDK (coming soon as a separate package).
 
-// Initialize all plugins
-if err := registry.InitAll(config); err != nil {
-    log.Fatal(err)
-}
-
-// Start plugins
-if err := registry.StartAll(ctx); err != nil {
-    log.Fatal(err)
-}
-
-// Use plugin
-storage := registry.GetStorage(config.StorageType)
-```
-
-## Creating a Plugin
+### Internal Plugin Example
 
 ```go
-package myplugin
+package main
 
 import (
-    "github.com/blackhole/pkg/plugin"
+    "github.com/blackholenetwork/blackhole/pkg/plugin"
 )
 
-type MyStoragePlugin struct {
-    config Config
+type MyInternalPlugin struct {
+    *plugin.BasePlugin
 }
 
-func (p *MyStoragePlugin) Name() string {
-    return "my-storage"
-}
-
-func (p *MyStoragePlugin) Init(config map[string]interface{}) error {
-    // Parse configuration
+func (p *MyInternalPlugin) Start(ctx context.Context) error {
+    // Internal implementation
     return nil
 }
-
-func (p *MyStoragePlugin) StoreFile(ctx context.Context, data []byte) (string, error) {
-    // Custom storage implementation
-    return "", nil
-}
-
-// Export plugin
-var Plugin plugin.Plugin = &MyStoragePlugin{}
 ```
 
-## Plugin Discovery
+### External Plugin (Future SDK)
 
-Plugins are discovered from:
-1. Built-in plugins (compiled in)
-2. Plugin directory (`/etc/blackhole/plugins/`)
-3. Environment variable (`BLACKHOLE_PLUGINS`)
-4. Explicit registration
-
-## Plugin Configuration
-
-```yaml
-plugins:
-  - name: s3-storage
-    enabled: true
-    config:
-      bucket: my-bucket
-      region: us-east-1
-      
-  - name: compression
-    enabled: true
-    config:
-      level: 9
-      types: ["text", "json"]
+External plugins will use a separate SDK package:
+```go
+import "github.com/blackholenetwork/sdk"  // Separate module
 ```
