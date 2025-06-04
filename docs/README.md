@@ -32,6 +32,14 @@ Development guides and tooling
 Reusable patterns and solutions
 - **[Common Patterns](./patterns/COMMON_PATTERNS.md)** - Copy-paste solutions for common problems
 
+### 🎯 [Implementation](./implementation/)
+Project planning and implementation tracking
+- **[Project Scope](./implementation/PROJECT_SCOPE.md)** - Vision and boundaries
+- **[MVP Features](./implementation/MVP_FEATURES.md)** - What's in the first release
+- **[User Stories](./implementation/USER_STORIES.md)** - Use cases and scenarios
+- **[Implementation Roadmap](./implementation/IMPLEMENTATION_ROADMAP.md)** - 6-month development plan
+- **[Current Status](./implementation/CURRENT_STATUS.md)** - Progress tracking
+
 ## 🚀 Quick Start for Developers
 
 1. **New to the project?**
@@ -57,12 +65,14 @@ Reusable patterns and solutions
 - **✅ Standards**: Rules and conventions
 - **🔧 Development**: How to build
 - **🎨 Patterns**: Reusable solutions
+- **📊 Implementation**: Planning and tracking
 
 ### By Audience
 - **👨‍💼 Architects**: Architecture, Design folders
 - **👩‍💻 Developers**: Standards, Development, Patterns
 - **🚀 DevOps**: Standards (Deployment), Architecture
 - **🔒 Security**: Standards (Security), Design
+- **📈 Project Managers**: Implementation folder
 
 ## 🔍 Finding Information
 
@@ -78,6 +88,8 @@ Reusable patterns and solutions
 - **API conventions?** → [API Standards](./standards/API_STANDARDS.md)
 - **Common utilities?** → `/pkg/common/`
 - **Middleware?** → `/pkg/middleware/`
+- **Project roadmap?** → [Implementation Roadmap](./implementation/IMPLEMENTATION_ROADMAP.md)
+- **Feature list?** → [MVP Features](./implementation/MVP_FEATURES.md)
 
 ## 📝 Documentation Maintenance
 
