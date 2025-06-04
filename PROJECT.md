@@ -21,12 +21,10 @@ Blackhole Network is a decentralized infrastructure platform that transforms idl
 ### 0. Infrastructure Layer
 **Foundation for all other layers**
 - **Project Setup**: Go module structure, build system, and development tooling
-- **CI/CD Pipeline**: Automated testing, building, and deployment workflows
-- **Package Distribution**: Cross-platform packaging for macOS (Homebrew), Windows (MSI), Linux (packages)
+- **Build Pipeline**: CI/CD workflows, automated testing, cross-platform packaging and distribution
 
 ### 1. Core Layer
-- **Orchestrator**: System coordination and component management across all layers
-- **Lifecycle**: Health monitoring, startup/shutdown sequencing, and component state management
+- **Orchestrator**: System coordination, component lifecycle management, health monitoring, and startup/shutdown sequencing
 - **Security**: Authentication, authorization, and self-sovereign identity (DID) management
 - **Networking**: P2P communication, peer discovery, and inter-component messaging using libp2p
 - **ResourceManager**: Resource allocation, job scheduling, and economic priority management
@@ -136,13 +134,11 @@ Blackhole Network is a decentralized infrastructure platform that transforms idl
 ## Development Phases
 
 ### Phase 0: Infrastructure (Feb 2025)
-- Project setup and Go module structure
-- Build system and CI/CD pipeline
-- Package distribution for macOS, Windows, Linux
+- Project Setup: Go module structure and development tooling
+- Build Pipeline: CI/CD, testing, packaging, and distribution
 
 ### Phase 1: Core Layer (Mar 2025)
-- Orchestrator: System coordination and component management
-- Lifecycle: Health monitoring and startup/shutdown sequencing  
+- Orchestrator: System coordination, lifecycle management, and health monitoring
 - Security: Authentication, authorization, and DID management
 - Networking: P2P communication using libp2p
 - ResourceManager: Resource allocation and job scheduling
