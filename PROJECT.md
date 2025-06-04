@@ -125,6 +125,42 @@ Blackhole Network is a decentralized infrastructure platform that transforms idl
 - Bad actors lose opportunity
 - Network effects reward growth
 
+## Development Phases
+
+### Phase 0: Infrastructure (Feb 2025)
+- Project setup and Go module structure
+- Build system and CI/CD pipeline
+- Package distribution for macOS, Windows, Linux
+
+### Phase 1: Core Layer (Mar 2025)
+- Orchestrator: System coordination and component management
+- Lifecycle: Health monitoring and startup/shutdown sequencing  
+- Security: Authentication, authorization, and DID management
+- Networking: P2P communication using libp2p
+- ResourceManager: Resource allocation and job scheduling
+- Monitoring: Telemetry collection and system notifications
+
+### Phase 2: Resources Layer (Apr 2025)
+- Storage: Distributed file storage with CID addressing
+- Compute: CPU/GPU processing with economic priority
+- Bandwidth: Content delivery and routing management
+- Memory: RAM allocation with real-time monitoring
+
+### Phase 3: Data Layer (May 2025)
+- Schema: Dynamic schema evolution with metadata management
+- Indexer: Global search and discovery with Bleve engine
+- Query: SQL-like analytics across distributed services
+- Search: ML-enhanced intelligent search across network data
+
+### Phase 4: Service Layer (Jun 2025)
+- WebServer: HTTP/WebSocket API with Fiber v2
+- RealTime: WebSocket/WebRTC communication for live interactions
+- Social: Comprehensive social graph system with VFS integration
+
+### Phase 5: Economic Layer (Jul 2025)
+- Incentive: Real-time market distribution with load-aware pricing
+- Contract: Subscription management with tier-based priority
+
 ## Success Metrics
 
 - **Network Growth**: Active nodes, total resources
