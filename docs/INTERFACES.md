@@ -418,6 +418,141 @@ type BalanceManager interface {
 }
 ```
 
+## Cross-Resource Communication Interfaces
+
+```go
+package resource
+
+import (
+    "context"
+    "io"
+)
+
+// Resource coordination - how resources talk to each other
+type ResourceCoordinator interface {
+    // Storage → Compute: Process stored data
+    ScheduleCompute(ctx context.Context, data StorageRef, job ComputeJob) (*JobHandle, error)
+    
+    // Compute → Storage: Store results
+    StoreResult(ctx context.Context, jobID JobID, result io.Reader) (*StorageRef, error)
+    
+    // Storage → Bandwidth: Serve data
+    AllocateBandwidthForTransfer(ctx context.Context, size int64, priority Priority) (*BWHandle, error)
+    
+    // Compute → Memory: Reserve for job
+    ReserveMemoryForJob(ctx context.Context, jobID JobID, size int64) (*MemHandle, error)
+    
+    // Bandwidth → Storage: Track transfer
+    RecordTransfer(ctx context.Context, storageRef StorageRef, bytes int64, direction Direction) error
+}
+
+// Storage to Compute communication
+type StorageComputeBridge interface {
+    // Make data available for compute
+    PrepareDataForCompute(ctx context.Context, chunks []ChunkID) (*ComputeDataHandle, error)
+    
+    // Stream data to compute job
+    StreamToCompute(ctx context.Context, handle *ComputeDataHandle, writer io.Writer) error
+    
+    // Clean up after compute
+    ReleaseComputeData(ctx context.Context, handle *ComputeDataHandle) error
+}
+
+// Compute to Storage communication  
+type ComputeStorageBridge interface {
+    // Request data chunks for processing
+    RequestChunks(ctx context.Context, chunks []ChunkID) (<-chan *Chunk, error)
+    
+    // Stream results back to storage
+    StreamResults(ctx context.Context, jobID JobID) (io.WriteCloser, error)
+    
+    // Atomic result commit
+    CommitResults(ctx context.Context, jobID JobID, manifest ResultManifest) error
+}
+
+// Memory coordination for jobs
+type MemoryCoordinator interface {
+    // Pre-allocate memory for incoming job
+    ReserveForJob(jobID JobID, estimate MemoryEstimate) (*Reservation, error)
+    
+    // Adjust reservation based on actual usage
+    AdjustReservation(jobID JobID, newSize int64) error
+    
+    // Memory pressure handling
+    OnMemoryPressure(handler PressureHandler) error
+    
+    // Get memory stats for scheduling
+    GetAvailableForTier(tier UserTier) int64
+}
+
+// Bandwidth allocation for transfers
+type BandwidthCoordinator interface {
+    // Reserve bandwidth for data transfer
+    ReserveForTransfer(transferID TransferID, estimate BWEstimate) (*BWReservation, error)
+    
+    // Dynamic bandwidth adjustment
+    AdjustAllocation(transferID TransferID, newRate int64) error
+    
+    // Priority-based scheduling
+    ScheduleTransfer(transfer Transfer) error
+    
+    // Congestion control
+    OnCongestion(handler CongestionHandler) error
+}
+
+// Inter-resource events
+type ResourceEventBus interface {
+    // Storage events that compute cares about
+    OnDataAvailable(handler func(StorageRef) error) error
+    OnStorageFull(handler func() error) error
+    
+    // Compute events that storage cares about  
+    OnJobComplete(handler func(JobID, ResultRef) error) error
+    OnJobFailed(handler func(JobID, error) error) error
+    
+    // Memory events
+    OnMemoryLow(handler func(Available int64) error) error
+    OnOOM(handler func() error) error
+    
+    // Bandwidth events
+    OnBandwidthSaturated(handler func() error) error
+    OnTransferComplete(handler func(TransferID) error) error
+}
+
+// Resource allocation requests between components
+type CrossResourceRequest interface {
+    // Storage requesting compute
+    RequestCompute(ctx context.Context, req ComputeRequest) (*ComputeAllocation, error)
+    
+    // Compute requesting storage
+    RequestStorage(ctx context.Context, req StorageRequest) (*StorageAllocation, error)
+    
+    // Anyone requesting bandwidth
+    RequestBandwidth(ctx context.Context, req BandwidthRequest) (*BandwidthAllocation, error)
+    
+    // Compute requesting memory
+    RequestMemory(ctx context.Context, req MemoryRequest) (*MemoryAllocation, error)
+    
+    // Multi-resource request (atomic)
+    RequestMultiple(ctx context.Context, reqs ...ResourceRequest) (*MultiAllocation, error)
+}
+
+// Data locality optimization
+type LocalityManager interface {
+    // Find compute near storage
+    FindComputeNearData(dataRefs []StorageRef) ([]ComputeNode, error)
+    
+    // Find storage near compute  
+    FindStorageNearCompute(computeID ComputeID) ([]StorageNode, error)
+    
+    // Co-locate related resources
+    OptimizePlacement(job Job) (*PlacementPlan, error)
+    
+    // Migration for better locality
+    MigrateForLocality(resource ResourceRef, target NodeID) error
+}
+```
+
 ## Component Lifecycle Interface
 
 ```go

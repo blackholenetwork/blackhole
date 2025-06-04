@@ -815,7 +815,93 @@ func (m *AddChunkIndexMigration) Up(ctx context.Context) error {
 }
 ```
 
-## 10. Security Considerations
+## 10. Cross-Resource Communication Flow
+
+Example: User uploads a video for transcoding
+
+```go
+// 1. API receives upload request
+func (api *APIServer) HandleVideoUpload(c *fiber.Ctx) error {
+    // Validate and get file
+    video := c.FormFile("video")
+    
+    // 2. Storage stores the file
+    storageRef, err := api.storage.StoreFile(ctx, video.Reader, metadata)
+    
+    // 3. Storage triggers compute job through coordinator
+    coordinator := api.resourceCoordinator
+    job := ComputeJob{
+        Type:     "transcode",
+        Input:    storageRef,
+        Output:   OutputSpec{Format: "mp4", Quality: "1080p"},
+        Priority: UserTier(c.Locals("tier")),
+    }
+    
+    jobHandle, err := coordinator.ScheduleCompute(ctx, storageRef, job)
+    
+    // 4. ResourceCoordinator orchestrates:
+    //    - Finds compute node with capacity
+    //    - Reserves memory for transcoding
+    //    - Allocates bandwidth for data transfer
+    //    - Notifies compute to start job
+}
+
+// 5. Compute node processes the job
+func (compute *ComputeNode) ProcessJob(job ComputeJob) error {
+    // Reserve memory first
+    memHandle, err := compute.coordinator.ReserveMemoryForJob(ctx, job.ID, job.EstimatedMemory)
+    defer memHandle.Release()
+    
+    // Stream data from storage
+    bridge := compute.storageBridge
+    dataHandle, err := bridge.PrepareDataForCompute(ctx, job.Input.Chunks)
+    defer bridge.ReleaseComputeData(ctx, dataHandle)
+    
+    // Allocate bandwidth for streaming
+    bwHandle, err := compute.coordinator.AllocateBandwidthForTransfer(ctx, job.Input.Size, job.Priority)
+    defer bwHandle.Release()
+    
+    // Process with memory and bandwidth limits
+    reader := bridge.StreamToCompute(ctx, dataHandle, bwHandle.LimitedWriter())
+    result := compute.transcode(reader, job.Output)
+    
+    // Store results back
+    resultRef, err := compute.coordinator.StoreResult(ctx, job.ID, result)
+    
+    // Notify completion
+    compute.eventBus.Publish(JobComplete{ID: job.ID, Result: resultRef})
+}
+
+// 6. Resource pressure handling
+func (memory *MemoryManager) HandlePressure() {
+    // Notify compute to pause low-priority jobs
+    memory.eventBus.Publish(MemoryPressure{
+        Available: memory.Available(),
+        Action:    PauseLowPriorityJobs,
+    })
+}
+
+// 7. Bandwidth congestion handling  
+func (bandwidth *BandwidthManager) HandleCongestion() {
+    // Reduce transfer rates for free tier
+    for _, transfer := range bandwidth.activeTransfers {
+        if transfer.Tier == TierFree {
+            bandwidth.coordinator.AdjustAllocation(transfer.ID, transfer.Rate * 0.5)
+        }
+    }
+}
+```
+
+### Resource Communication Patterns
+
+1. **Direct Communication**: Storage ↔ Compute via bridges
+2. **Coordinated Allocation**: Through ResourceCoordinator
+3. **Event-Driven Updates**: Via ResourceEventBus
+4. **Priority-Based Scheduling**: Economic tiers respected
+
+This ensures resources work together efficiently while respecting priorities and limits.
+
+## 11. Security Considerations
 
 ```go
 // Defense in depth
