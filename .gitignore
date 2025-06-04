@@ -19,9 +19,9 @@ go.work
 go.work.sum
 
 # Build output
+/build/
 /bin/
 /dist/
-/build/
 /out/
 
 # IDE specific files
