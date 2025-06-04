@@ -137,8 +137,8 @@ session.*
 *.backup
 *~
 
-# Core dumps
-core
+# Core dumps (but not pkg/core)
+/core
 core.*
 
 # PID files
