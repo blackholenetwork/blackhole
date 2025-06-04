@@ -2,7 +2,7 @@
 
 ## Vision
 
-Blackhole Network is a decentralized infrastructure platform that transforms idle computing resources into a global, shared network. Home users monetize their unused storage, compute, and bandwidth while developers build applications on a universal data layer where users truly own their data.
+Blackhole Network is a decentralized infrastructure platform that transforms idle computing resources into a global, shared network. Built with a six-layer architecture, home users monetize their unused storage, compute, and bandwidth while developers build applications on a universal data layer where users truly own their data.
 
 ## Core Principles
 
@@ -16,7 +16,13 @@ Blackhole Network is a decentralized infrastructure platform that transforms idl
 8. **Resilient by Default**: Designed for unreliable home networks (50-80% uptime)
 9. **Intelligent Resource Management**: Load-based decisions with economic priority enforcement
 
-## Five-Layer Architecture
+## Six-Layer Architecture
+
+### 0. Infrastructure Layer
+**Foundation for all other layers**
+- **Project Setup**: Go module structure, build system, and development tooling
+- **CI/CD Pipeline**: Automated testing, building, and deployment workflows
+- **Package Distribution**: Cross-platform packaging for macOS (Homebrew), Windows (MSI), Linux (packages)
 
 ### 1. Core Layer
 - **Orchestrator**: System coordination and component management across all layers
@@ -63,12 +69,14 @@ Blackhole Network is a decentralized infrastructure platform that transforms idl
 - **Database**: Embedded BadgerDB for local state
 
 ### Architecture Design
+- **Six-Layer Structure**: Infrastructure → Core → Resources → Data → Service → Economic
 - **Monolithic**: Single binary with modular internal services
 - **Dependency Injection**: Clean interfaces between services
 - **Service Lifecycle**: Managed start/stop with health checks
 - **Context-based**: Proper cancellation and timeout handling
 - **Load-Aware**: Intelligent resource allocation with economic priority
 - **Economic Tiers**: Ultimate > Advance > Normal > Free user prioritization
+- **Cross-Platform**: Unified codebase with platform-specific distribution
 
 ## Use Cases
 
