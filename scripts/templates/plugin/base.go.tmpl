@@ -1,0 +1,48 @@
+package {{.PackageName}}
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/blackholenetwork/blackhole/pkg/plugin"
+)
+
+// Plugin implements the {{.Name}} plugin
+type Plugin struct {
+	*plugin.BasePlugin
+	// Add your plugin-specific fields here
+}
+
+// New creates a new {{.Name}} plugin
+func New() *Plugin {
+	info := plugin.Info{
+		Name:         "{{.Name}}",
+		Version:      "{{.Version}}",
+		Description:  "{{.Description}}",
+		Author:       "{{.Author}}",
+		License:      "{{.License}}",
+		Dependencies: []string{},
+		Capabilities: []string{},
+	}
+
+	return &Plugin{
+		BasePlugin: plugin.NewBasePlugin(info),
+	}
+}
+
+// Start starts the plugin
+func (p *Plugin) Start(ctx context.Context) error {
+	// TODO: Implement your plugin startup logic
+	
+	return p.BasePlugin.Start(ctx)
+}
+
+// Stop stops the plugin
+func (p *Plugin) Stop(ctx context.Context) error {
+	// TODO: Implement your plugin cleanup logic
+	
+	return p.BasePlugin.Stop(ctx)
+}
+
+// Ensure Plugin implements plugin.Plugin interface
+var _ plugin.Plugin = (*Plugin)(nil)

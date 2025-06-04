@@ -1,0 +1,107 @@
+run:
+  timeout: 5m
+  tests: true
+  skip-dirs:
+    - vendor
+    - .git
+    - dist
+
+linters:
+  enable:
+    - gofmt
+    - goimports
+    - golint
+    - govet
+    - ineffassign
+    - misspell
+    - unconvert
+    - gocritic
+    - gocognit
+    - godox
+    - gosec
+    - nakedret
+    - prealloc
+    - scopelint
+    - goconst
+    - gocyclo
+    - errcheck
+    - dupl
+    - gosimple
+    - staticcheck
+    - unused
+    - typecheck
+    - bodyclose
+    - noctx
+    - rowserrcheck
+    - sqlclosecheck
+    - structcheck
+    - varcheck
+    - deadcode
+    - unparam
+    - gochecknoinits
+    - gochecknoglobals
+
+linters-settings:
+  gocyclo:
+    min-complexity: 15
+  goconst:
+    min-len: 3
+    min-occurrences: 3
+  misspell:
+    locale: US
+  goimports:
+    local-prefixes: github.com/blackholenetwork/blackhole
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - experimental
+      - opinionated
+      - performance
+      - style
+  gosec:
+    excludes:
+      - G104  # We handle errors explicitly
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+  dupl:
+    threshold: 100
+  funlen:
+    lines: 50
+    statements: 40
+
+issues:
+  exclude-rules:
+    # Test files can be longer and more complex
+    - path: _test\.go
+      linters:
+        - gocyclo
+        - errcheck
+        - dupl
+        - gosec
+        - funlen
+        - gocognit
+    
+    # Generated files
+    - path: .*\.pb\.go
+      linters:
+        - all
+    
+    # Mock files
+    - path: mocks/
+      linters:
+        - all
+
+  # Maximum issues count per one linter
+  max-issues-per-linter: 50
+
+  # Maximum count of issues with the same text
+  max-same-issues: 3
+
+  # Show only new issues for PRs
+  new: false
+
+output:
+  format: colored-line-number
+  print-issued-lines: true
+  print-linter-name: true

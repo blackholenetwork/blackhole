@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          
+      - name: Install golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.54.2
+          
+      - name: Run linters
+        run: make lint
+
+  test:
+    name: Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        go: ['1.22', '1.23']
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          
+      - name: Install dependencies
+        run: go mod download
+        
+      - name: Run tests
+        run: go test -v -race -coverprofile=coverage.out ./...
+        
+      - name: Upload coverage
+        if: matrix.os == 'ubuntu-latest' && matrix.go == '1.22'
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.out
+          fail_ci_if_error: false
+
+  build:
+    name: Build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          
+      - name: Build binary
+        run: make build
+        
+      - name: Test binary
+        run: ./blackhole version
+        if: matrix.os != 'windows-latest'
+        
+      - name: Test binary (Windows)
+        run: ./blackhole.exe version
+        if: matrix.os == 'windows-latest'
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          
+      - name: Run gosec
+        uses: securego/gosec@master
+        with:
+          args: ./...
+          
+      - name: Run go mod audit
+        run: |
+          go list -json -m all | nancy sleuth || true

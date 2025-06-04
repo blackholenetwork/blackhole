@@ -1,0 +1,51 @@
+# {{.Name}} Plugin
+
+{{.Description}}
+
+## Overview
+
+This plugin provides {{.Name}} functionality for the Blackhole Network.
+
+## Configuration
+
+```yaml
+{{.Name}}:
+  # Add configuration options here
+```
+
+## Usage
+
+The {{.Name}} plugin is automatically loaded by the orchestrator.
+
+## Development
+
+### Running Tests
+
+```bash
+go test -v ./pkg/{{.Type}}/{{.PackageName}}/
+```
+
+### Benchmarks
+
+```bash
+go test -bench=. ./pkg/{{.Type}}/{{.PackageName}}/
+```
+
+## API
+
+### Methods
+
+TODO: Document plugin-specific methods
+
+### Events
+
+TODO: Document events emitted by this plugin
+
+## Dependencies
+
+{{range .Dependencies}}- {{.}}
+{{end}}
+
+## License
+
+{{.License}}

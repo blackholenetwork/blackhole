@@ -1,0 +1,56 @@
+package {{.PackageName}}
+
+import (
+	"context"
+	"testing"
+
+	"github.com/blackholenetwork/blackhole/pkg/plugin"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestPlugin_Lifecycle(t *testing.T) {
+	ctx := context.Background()
+	p := New()
+
+	// Test plugin info
+	assert.Equal(t, "{{.Name}}", p.Info().Name)
+	assert.Equal(t, "{{.Version}}", p.Info().Version)
+
+	// Test initialization
+	config := plugin.Config{
+		// Add test configuration
+	}
+
+	err := p.Init(ctx, config)
+	require.NoError(t, err)
+
+	// Test start
+	err = p.Start(ctx)
+	require.NoError(t, err)
+
+	// Test health
+	health := p.Health()
+	assert.NotEqual(t, plugin.HealthStatusUnhealthy, health.Status)
+
+	// Test stop
+	err = p.Stop(ctx)
+	require.NoError(t, err)
+}
+
+func TestPlugin_Configuration(t *testing.T) {
+	// TODO: Add configuration tests
+}
+
+func BenchmarkPlugin_Start(b *testing.B) {
+	ctx := context.Background()
+	config := plugin.Config{}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		p := New()
+		_ = p.Init(ctx, config)
+		_ = p.Start(ctx)
+		_ = p.Stop(ctx)
+	}
+}
