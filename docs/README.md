@@ -11,10 +11,8 @@ High-level system design and architectural decisions
 - **[ADR-001: Use Go](./architecture/ADR-001-use-go.md)** - Why we chose Go as our language
 
 ### 🎨 [Design](./design/)
-Detailed component design and interactions
+Detailed system design and implementation approach
 - **[System Design](./design/SYSTEM_DESIGN.md)** - Complete component implementations
-- **[Interfaces](./design/INTERFACES.md)** - All component contracts
-- **[Component Interactions](./design/COMPONENT_INTERACTIONS.md)** - How components communicate
 
 ### 📏 [Standards](./standards/)
 Coding standards and best practices
@@ -47,9 +45,9 @@ Reusable patterns and solutions
    - Follow [Development Practices](./standards/DEVELOPMENT_PRACTICES.md)
 
 3. **Implementing a feature?**
-   - Check [Component Interactions](./design/COMPONENT_INTERACTIONS.md)
-   - Review relevant [Interfaces](./design/INTERFACES.md)
+   - Check [System Design](./design/SYSTEM_DESIGN.md)
    - Apply [Design Principles](./development/CODE_DESIGN_PRINCIPLES.md)
+   - Use [Common Patterns](./patterns/COMMON_PATTERNS.md)
 
 ## 📋 Document Categories
 
@@ -72,11 +70,11 @@ Reusable patterns and solutions
 - **Write code?** → [Coding Standards](./standards/CODING_STANDARDS.md)
 - **Design a component?** → [System Design](./design/SYSTEM_DESIGN.md)
 - **Handle errors?** → [Error Handling Strategy](./standards/ERROR_HANDLING_STRATEGY.md)
-- **Add a feature?** → [Component Interactions](./design/COMPONENT_INTERACTIONS.md)
+- **Add a feature?** → [System Design](./design/SYSTEM_DESIGN.md)
 - **Deploy?** → [Deployment Standards](./standards/DEPLOYMENT_STANDARDS.md)
 
 ### "Where is...?"
-- **Component interfaces?** → [Interfaces](./design/INTERFACES.md)
+- **Component design?** → [System Design](./design/SYSTEM_DESIGN.md)
 - **API conventions?** → [API Standards](./standards/API_STANDARDS.md)
 - **Common utilities?** → `/pkg/common/`
 - **Middleware?** → `/pkg/middleware/`
