@@ -13,9 +13,9 @@ type BasePlugin struct {
 	info    Info
 	config  Config
 	started bool
-	health  Health
 	hooks   map[Hook][]HookFunc
 	events  chan Event
+	registry *Registry
 }
 
 // NewBasePlugin creates a new base plugin
@@ -30,12 +30,14 @@ func NewBasePlugin(info Info) *BasePlugin {
 		config: make(Config),
 		hooks:  make(map[Hook][]HookFunc),
 		events: make(chan Event, 100),
-		health: Health{
-			Status:    HealthStatusUnknown,
-			Message:   "Not initialized",
-			LastCheck: time.Now(),
-		},
 	}
+}
+
+// SetRegistry sets the plugin registry for event publishing
+func (bp *BasePlugin) SetRegistry(registry *Registry) {
+	bp.mu.Lock()
+	defer bp.mu.Unlock()
+	bp.registry = registry
 }
 
 // Info returns metadata about the plugin
@@ -53,11 +55,6 @@ func (bp *BasePlugin) Init(ctx context.Context, config Config) error {
 	}
 
 	bp.config = config
-	bp.health = Health{
-		Status:    HealthStatusHealthy,
-		Message:   "Initialized",
-		LastCheck: time.Now(),
-	}
 
 	// Trigger init hooks
 	bp.triggerHook(HookPostInit, nil)
@@ -75,11 +72,6 @@ func (bp *BasePlugin) Start(ctx context.Context) error {
 	}
 
 	bp.started = true
-	bp.health = Health{
-		Status:    HealthStatusHealthy,
-		Message:   "Running",
-		LastCheck: time.Now(),
-	}
 
 	// Trigger start hooks
 	bp.triggerHook(HookPostStart, nil)
@@ -100,11 +92,6 @@ func (bp *BasePlugin) Stop(ctx context.Context) error {
 	bp.triggerHook(HookPreStop, nil)
 
 	bp.started = false
-	bp.health = Health{
-		Status:    HealthStatusUnknown,
-		Message:   "Stopped",
-		LastCheck: time.Now(),
-	}
 
 	close(bp.events)
 
@@ -112,12 +99,24 @@ func (bp *BasePlugin) Stop(ctx context.Context) error {
 }
 
 // Health returns the current health status
+// This is a default implementation that should be overridden by plugins
 func (bp *BasePlugin) Health() Health {
 	bp.mu.RLock()
 	defer bp.mu.RUnlock()
 
-	bp.health.LastCheck = time.Now()
-	return bp.health
+	if !bp.started {
+		return Health{
+			Status:    HealthStatusUnknown,
+			Message:   "Plugin not started",
+			LastCheck: time.Now(),
+		}
+	}
+
+	return Health{
+		Status:    HealthStatusHealthy,
+		Message:   "Plugin is running",
+		LastCheck: time.Now(),
+	}
 }
 
 // Configure updates the plugin configuration
@@ -170,28 +169,56 @@ func (bp *BasePlugin) Events() <-chan Event {
 	return bp.events
 }
 
-// SetHealth updates the plugin health
+// SetHealth publishes a health change event
+// Note: This method only publishes events, it does not store health state
+// Plugins should manage their own health status internally
 func (bp *BasePlugin) SetHealth(status HealthStatus, message string) {
-	bp.mu.Lock()
-	defer bp.mu.Unlock()
+	bp.mu.RLock()
+	registry := bp.registry
+	name := bp.info.Name
+	bp.mu.RUnlock()
 
-	bp.health = Health{
+	health := Health{
 		Status:    status,
 		Message:   message,
 		LastCheck: time.Now(),
 	}
+
+	// Publish health change event
+	if registry != nil {
+		registry.Publish(Event{
+			Type:      EventHealthChanged,
+			Source:    name,
+			Data:      health,
+			Timestamp: time.Now(),
+		})
+	}
 }
 
-// SetHealthWithDetails updates the plugin health with details
+// SetHealthWithDetails publishes a health change event with details
+// Note: This method only publishes events, it does not store health state
+// Plugins should manage their own health status internally
 func (bp *BasePlugin) SetHealthWithDetails(status HealthStatus, message string, details map[string]interface{}) {
-	bp.mu.Lock()
-	defer bp.mu.Unlock()
+	bp.mu.RLock()
+	registry := bp.registry
+	name := bp.info.Name
+	bp.mu.RUnlock()
 
-	bp.health = Health{
+	health := Health{
 		Status:    status,
 		Message:   message,
 		Details:   details,
 		LastCheck: time.Now(),
+	}
+
+	// Publish health change event
+	if registry != nil {
+		registry.Publish(Event{
+			Type:      EventHealthChanged,
+			Source:    name,
+			Data:      health,
+			Timestamp: time.Now(),
+		})
 	}
 }
 

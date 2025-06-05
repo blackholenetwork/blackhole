@@ -78,5 +78,24 @@ func (a *PluginComponentAdapter) Health() orchestrator.ComponentHealth {
 	}
 }
 
+// SetHealth sets the health status on the underlying plugin
+func (a *PluginComponentAdapter) SetHealth(status string, message string) {
+	// Convert string status to plugin health status
+	var healthStatus plugin.HealthStatus
+	switch status {
+	case "healthy":
+		healthStatus = plugin.HealthStatusHealthy
+	case "degraded":
+		healthStatus = plugin.HealthStatusDegraded
+	case "unhealthy":
+		healthStatus = plugin.HealthStatusUnhealthy
+	default:
+		healthStatus = plugin.HealthStatusUnknown
+	}
+	
+	// Call SetHealth on the plugin's base
+	a.plugin.SetHealth(healthStatus, message)
+}
+
 // Ensure PluginComponentAdapter implements Component interface
 var _ orchestrator.Component = (*PluginComponentAdapter)(nil)

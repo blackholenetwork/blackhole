@@ -21,6 +21,9 @@ type Plugin interface {
 	
 	// Health returns the current health status
 	Health() Health
+	
+	// SetHealth sets the current health status
+	SetHealth(status HealthStatus, message string)
 }
 
 // Info contains plugin metadata
