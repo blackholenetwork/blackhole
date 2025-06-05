@@ -5,11 +5,12 @@ import (
 	"log"
 
 	"github.com/blackholenetwork/blackhole/internal/config"
-	"github.com/blackholenetwork/blackhole/pkg/core/monitoring"
+	"github.com/blackholenetwork/blackhole/pkg/core/analytics"
 	"github.com/blackholenetwork/blackhole/pkg/core/networking"
 	"github.com/blackholenetwork/blackhole/pkg/core/orchestrator"
 	"github.com/blackholenetwork/blackhole/pkg/core/security"
 	"github.com/blackholenetwork/blackhole/pkg/plugin"
+	"github.com/blackholenetwork/blackhole/pkg/service/webserver"
 )
 
 // InitializeOrchestrator creates and configures the orchestrator with all core plugins
@@ -27,7 +28,7 @@ func InitializeOrchestrator(cfg *config.Config, logger *log.Logger) (*orchestrat
 	// The order matters: dependencies must be registered before dependents
 
 	// 1. Security Plugin - No dependencies, needed for authentication
-	securityPlugin := security.NewSecurityPlugin()
+	securityPlugin := security.NewSecurityPlugin(registry)
 	securityAdapter := NewPluginComponentAdapter(securityPlugin, []string{})
 	if err := orch.Register(securityAdapter); err != nil {
 		return nil, fmt.Errorf("failed to register security plugin: %w", err)
@@ -36,19 +37,36 @@ func InitializeOrchestrator(cfg *config.Config, logger *log.Logger) (*orchestrat
 		return nil, fmt.Errorf("failed to register security plugin in registry: %w", err)
 	}
 
-	// 2. Monitoring Plugin - No dependencies, provides system metrics
-	monitoringPlugin := monitoring.NewMonitoringPlugin()
-	monitoringAdapter := NewPluginComponentAdapter(monitoringPlugin, []string{})
-	if err := orch.Register(monitoringAdapter); err != nil {
-		return nil, fmt.Errorf("failed to register monitoring plugin: %w", err)
+	// 2. Analytics Plugin - No dependencies, provides system metrics
+	analyticsPlugin := analytics.NewAnalyticsPlugin(registry)
+	analyticsAdapter := NewPluginComponentAdapter(analyticsPlugin, []string{})
+	if err := orch.Register(analyticsAdapter); err != nil {
+		return nil, fmt.Errorf("failed to register analytics plugin: %w", err)
 	}
-	if err := registry.Register(monitoringPlugin); err != nil {
-		return nil, fmt.Errorf("failed to register monitoring plugin in registry: %w", err)
+	if err := registry.Register(analyticsPlugin); err != nil {
+		return nil, fmt.Errorf("failed to register analytics plugin in registry: %w", err)
 	}
 
-	// 3. Networking Plugin - Depends on security for node identity
-	networkingPlugin := networking.New(registry)
-	networkingConfig := plugin.Config{
+	// 3. Web Server Plugin - Depends on security for auth, starts early with limited functionality
+	webserverPlugin := webserver.New(registry, orch)
+	webserverConfig := plugin.Config{
+		"port":             8080,
+		"host":             "127.0.0.1", // Localhost only for security
+		"enable_dashboard": true,
+		"enable_websocket": true,
+	}
+	webserverAdapter := NewPluginComponentAdapter(webserverPlugin, []string{"security"}).
+		WithConfig(webserverConfig)
+	if err := orch.Register(webserverAdapter); err != nil {
+		return nil, fmt.Errorf("failed to register webserver plugin: %w", err)
+	}
+	if err := registry.Register(webserverPlugin); err != nil {
+		return nil, fmt.Errorf("failed to register webserver plugin in registry: %w", err)
+	}
+
+	// 4. Network Plugin - Depends on security for node identity
+	networkPlugin := networking.New(registry)
+	networkConfig := plugin.Config{
 		"enable_auto_relay": false, // Disable for local development without bootstrap peers
 		"port": 4001,
 		// In production, add bootstrap peers:
@@ -57,13 +75,13 @@ func InitializeOrchestrator(cfg *config.Config, logger *log.Logger) (*orchestrat
 		//     "/ip4/5.6.7.8/tcp/4001/p2p/QmPeerId2",
 		// },
 	}
-	networkingAdapter := NewPluginComponentAdapter(networkingPlugin, []string{"security"}).
-		WithConfig(networkingConfig)
-	if err := orch.Register(networkingAdapter); err != nil {
-		return nil, fmt.Errorf("failed to register networking plugin: %w", err)
+	networkAdapter := NewPluginComponentAdapter(networkPlugin, []string{"security"}).
+		WithConfig(networkConfig)
+	if err := orch.Register(networkAdapter); err != nil {
+		return nil, fmt.Errorf("failed to register network plugin: %w", err)
 	}
-	if err := registry.Register(networkingPlugin); err != nil {
-		return nil, fmt.Errorf("failed to register networking plugin in registry: %w", err)
+	if err := registry.Register(networkPlugin); err != nil {
+		return nil, fmt.Errorf("failed to register network plugin in registry: %w", err)
 	}
 
 	// Future plugins would be registered here with their dependencies:
@@ -77,7 +95,7 @@ func InitializeOrchestrator(cfg *config.Config, logger *log.Logger) (*orchestrat
 	// 6. Economic Plugin - Depends on all resource plugins
 	// economicAdapter := NewPluginComponentAdapter(economicPlugin, []string{"storage", "compute", "networking"})
 
-	logger.Printf("Registered %d core plugins", 3)
+	logger.Printf("Registered %d core plugins", 4)
 	
 	return orch, nil
 }
@@ -85,14 +103,15 @@ func InitializeOrchestrator(cfg *config.Config, logger *log.Logger) (*orchestrat
 // Plugin Dependency Tree:
 //
 // security (no deps)
-// monitoring (no deps)
-// networking (depends on security)
-// ├── storage (depends on networking)
-// ├── compute (depends on networking, monitoring)
-// └── economic (depends on storage, compute, networking)
+// analytics (no deps)
+// webserver (depends on security) - starts early with progressive API activation
+// network (depends on security)
+// ├── storage (depends on network)
+// ├── compute (depends on network, analytics)
+// └── economic (depends on storage, compute, network)
 //
 // Startup Order (topological sort):
-// 1. security, monitoring (can start in parallel)
-// 2. networking
+// 1. security, analytics (can start in parallel)
+// 2. webserver, network (can start in parallel after security)
 // 3. storage, compute (can start in parallel)
 // 4. economic
