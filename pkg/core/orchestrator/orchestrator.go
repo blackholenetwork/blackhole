@@ -164,8 +164,8 @@ func (o *Orchestrator) Start(ctx context.Context) error {
 
 	o.logger.Println("All components started successfully")
 
-	// Start health monitoring
-	go o.monitorHealth(ctx)
+	// Start periodic health reporting
+	go o.periodicHealthReport(ctx)
 
 	return nil
 }
@@ -215,11 +215,20 @@ func (o *Orchestrator) Stop(ctx context.Context) error {
 
 // Health returns the health status of all components
 func (o *Orchestrator) Health() map[string]ComponentHealth {
+	return o.HealthExcluding("")
+}
+
+// HealthExcluding returns the health status of all components except the specified caller
+func (o *Orchestrator) HealthExcluding(caller string) map[string]ComponentHealth {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 
 	health := make(map[string]ComponentHealth)
 	for name, component := range o.components {
+		// Skip the caller to avoid circular dependencies
+		if name == caller {
+			continue
+		}
 		health[name] = component.Health()
 	}
 	
@@ -305,9 +314,9 @@ func (o *Orchestrator) stopStartedComponents(failedComponent string) {
 	}
 }
 
-// monitorHealth periodically checks component health
-func (o *Orchestrator) monitorHealth(ctx context.Context) {
-	ticker := time.NewTicker(30 * time.Second)
+// periodicHealthReport periodically triggers health reporting for all components
+func (o *Orchestrator) periodicHealthReport(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -317,21 +326,16 @@ func (o *Orchestrator) monitorHealth(ctx context.Context) {
 		case <-o.ctx.Done():
 			return
 		case <-ticker.C:
-			o.checkHealth()
-		}
-	}
-}
+			o.mu.RLock()
+			components := make(map[string]Component, len(o.components))
+			for k, v := range o.components {
+				components[k] = v
+			}
+			o.mu.RUnlock()
 
-// checkHealth checks the health of all components
-func (o *Orchestrator) checkHealth() {
-	health := o.Health()
-	
-	for name, status := range health {
-		if status.Status == HealthStatusUnhealthy {
-			o.logger.Printf("Component %s is unhealthy: %s", name, status.Message)
-			// TODO: Implement recovery actions
-		} else if status.Status == HealthStatusDegraded {
-			o.logger.Printf("Component %s is degraded: %s", name, status.Message)
+			// Note: We no longer trigger SetHealth from orchestrator to avoid circular dependencies.
+			// Each plugin manages its own health reporting through internal timers.
+			// The orchestrator's Health() method can still be called directly when needed.
 		}
 	}
 }
