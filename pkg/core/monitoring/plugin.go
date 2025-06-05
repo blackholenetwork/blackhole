@@ -19,7 +19,10 @@ type MonitoringPlugin struct {
 }
 
 // NewMonitoringPlugin creates a new monitoring plugin using the builder pattern
-func NewMonitoringPlugin() plugin.Plugin {
+func NewMonitoringPlugin(registry *plugin.Registry) plugin.Plugin {
+	// Store registry for use in the plugin
+	monitoringRegistry = registry
+	
 	return plugin.NewPluginBuilder("monitoring").
 		WithDescription("System monitoring and metrics collection").
 		WithAuthor("Blackhole Network").
@@ -34,71 +37,127 @@ func NewMonitoringPlugin() plugin.Plugin {
 
 // Plugin state stored in context
 type monitoringState struct {
-	metrics  map[string]interface{}
-	ticker   *time.Ticker
-	stopChan chan struct{}
-	mu       sync.RWMutex
+	metrics       map[string]interface{}
+	ticker        *time.Ticker
+	stopChan      chan struct{}
+	mu            sync.RWMutex
+	healthStatus  plugin.HealthStatus
+	healthMessage string
 }
 
 var stateKey = struct{}{}
+var monitoringRegistry *plugin.Registry
+var globalState *monitoringState
+var healthTicker *time.Ticker
+var healthDone chan struct{}
 
 func initMonitoring(ctx context.Context, config plugin.Config) error {
-	state := &monitoringState{
-		metrics:  make(map[string]interface{}),
-		stopChan: make(chan struct{}),
+	globalState = &monitoringState{
+		metrics:       make(map[string]interface{}),
+		stopChan:      make(chan struct{}),
+		healthStatus:  plugin.HealthStatusHealthy,
+		healthMessage: "Monitoring initialized",
 	}
 
-	// Store state in context (in real implementation, use proper state management)
-	context.WithValue(ctx, stateKey, state)
+	// Publish initial health status
+	if monitoringRegistry != nil {
+		monitoringRegistry.Publish(plugin.Event{
+			Type:      plugin.EventHealthChanged,
+			Source:    "monitoring",
+			Data:      healthMonitoring(),
+			Timestamp: time.Now(),
+		})
+	}
 
 	return nil
 }
 
 func startMonitoring(ctx context.Context) error {
-	// In a real implementation, retrieve state properly
-	state := &monitoringState{
-		metrics:  make(map[string]interface{}),
-		stopChan: make(chan struct{}),
-		ticker:   time.NewTicker(10 * time.Second),
+	if globalState == nil {
+		globalState = &monitoringState{
+			metrics:       make(map[string]interface{}),
+			stopChan:      make(chan struct{}),
+			healthStatus:  plugin.HealthStatusHealthy,
+			healthMessage: "Monitoring is operational",
+		}
 	}
+
+	globalState.ticker = time.NewTicker(10 * time.Second)
+
+	// Update health status
+	globalState.mu.Lock()
+	globalState.healthStatus = plugin.HealthStatusHealthy
+	globalState.healthMessage = "Monitoring is operational"
+	globalState.mu.Unlock()
 
 	// Start metrics collection
 	go func() {
 		for {
 			select {
-			case <-state.ticker.C:
-				collectMetrics(state)
-			case <-state.stopChan:
+			case <-globalState.ticker.C:
+				collectMetrics(globalState)
+			case <-globalState.stopChan:
 				return
 			}
 		}
 	}()
+	
+	// Start health monitoring
+	healthDone = make(chan struct{})
+	healthTicker = time.NewTicker(5 * time.Second)
+	go monitorHealth(ctx)
 
 	return nil
 }
 
 func stopMonitoring(ctx context.Context) error {
-	// In a real implementation, retrieve state properly
-	state := &monitoringState{
-		stopChan: make(chan struct{}),
-	}
+	if globalState != nil {
+		// Update health status
+		globalState.mu.Lock()
+		globalState.healthStatus = plugin.HealthStatusUnknown
+		globalState.healthMessage = "Monitoring stopped"
+		globalState.mu.Unlock()
 
-	close(state.stopChan)
-	if state.ticker != nil {
-		state.ticker.Stop()
+		close(globalState.stopChan)
+		if globalState.ticker != nil {
+			globalState.ticker.Stop()
+		}
+	}
+	
+	// Stop health monitoring
+	if healthTicker != nil {
+		healthTicker.Stop()
+	}
+	if healthDone != nil {
+		close(healthDone)
 	}
 
 	return nil
 }
 
 func healthMonitoring() plugin.Health {
+	if globalState == nil {
+		return plugin.Health{
+			Status:    plugin.HealthStatusUnknown,
+			Message:   "Monitoring not initialized",
+			LastCheck: time.Now(),
+		}
+	}
+
+	globalState.mu.RLock()
+	status := globalState.healthStatus
+	message := globalState.healthMessage
+	metricsCount := len(globalState.metrics)
+	globalState.mu.RUnlock()
+
 	return plugin.Health{
-		Status:    plugin.HealthStatusHealthy,
-		Message:   "Monitoring is operational",
+		Status:    status,
+		Message:   message,
 		LastCheck: time.Now(),
 		Details: map[string]interface{}{
-			"goroutines": runtime.NumGoroutine(),
-			"cpu_count":  runtime.NumCPU(),
+			"goroutines":    runtime.NumGoroutine(),
+			"cpu_count":     runtime.NumCPU(),
+			"metrics_count": metricsCount,
 		},
 	}
 }
@@ -116,6 +175,58 @@ func collectMetrics(state *monitoringState) {
 	state.metrics["num_gc"] = m.NumGC
 	state.metrics["goroutines"] = runtime.NumGoroutine()
 	state.metrics["timestamp"] = time.Now()
+}
+
+// monitorHealth periodically reports health status
+func monitorHealth(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-healthDone:
+			return
+		case <-healthTicker.C:
+			if globalState == nil {
+				continue
+			}
+			
+			// Check current status
+			globalState.mu.RLock()
+			status := globalState.healthStatus
+			message := globalState.healthMessage
+			metricsCount := len(globalState.metrics)
+			globalState.mu.RUnlock()
+			
+			// Determine health based on metrics
+			if metricsCount == 0 {
+				status = plugin.HealthStatusDegraded
+				message = "No metrics collected yet"
+			} else {
+				status = plugin.HealthStatusHealthy
+				message = "Monitoring is operational"
+			}
+			
+			// Update if changed
+			globalState.mu.Lock()
+			if globalState.healthStatus != status || globalState.healthMessage != message {
+				globalState.healthStatus = status
+				globalState.healthMessage = message
+				globalState.mu.Unlock()
+				
+				// Publish health event
+				if monitoringRegistry != nil {
+					monitoringRegistry.Publish(plugin.Event{
+						Type:      plugin.EventHealthChanged,
+						Source:    "monitoring",
+						Data:      healthMonitoring(),
+						Timestamp: time.Now(),
+					})
+				}
+			} else {
+				globalState.mu.Unlock()
+			}
+		}
+	}
 }
 
 // Alternative: Full implementation as a struct
