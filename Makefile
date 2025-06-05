@@ -56,6 +56,7 @@ clean:
 	@go clean
 	@rm -rf ${BUILD_DIR}
 	@rm -f coverage.out coverage.html
+	@rm -rf web/build web/node_modules
 	@rm -rf logs/
 
 # Development setup
@@ -159,3 +160,26 @@ help:
 	@echo "  build-all   Build for all platforms"
 	@echo "  proto       Generate protobuf files"
 	@echo "  help        Show this help message"
+	@echo ""
+	@echo "Web Development:"
+	@echo "  web-deps    Install React dependencies"
+	@echo "  web-dev     Run React development server"
+	@echo "  web-build   Build React production bundle"
+	@echo "  full-build  Build both backend and frontend"
+
+# Web commands
+web-deps:
+	@echo "Installing web dependencies..."
+	@cd web && npm install
+
+web-dev:
+	@echo "Starting React development server..."
+	@cd web && npm run dev
+
+web-build: web-deps
+	@echo "Building React production bundle..."
+	@cd web && npm run build
+
+# Full build - backend and frontend
+full-build: build web-build
+	@echo "Full build complete!"

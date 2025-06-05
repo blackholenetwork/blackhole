@@ -40,26 +40,6 @@ Configuration priority (highest to lowest):
 3. Config file (if specified)
 4. Default values
 
-### Health Checker (`health.go`)
-Provides health check functionality for plugins.
-
-```go
-hc := utils.NewHealthChecker(30 * time.Second)
-
-// Register checks
-hc.RegisterCheck("database", func(ctx context.Context) error {
-    return db.Ping()
-})
-
-hc.RegisterCheck("disk_space", utils.CheckResource("disk", 0.9, getDiskUsage))
-
-// Start periodic checks
-hc.Start(ctx)
-
-// Get health status
-health := hc.GetHealth()
-```
-
 ### Metrics Collector (`metrics.go`)
 Collects and manages plugin metrics.
 
@@ -88,7 +68,6 @@ metrics := mc.GetMetrics()
 type MyPlugin struct {
     *plugin.BasePlugin
     lifecycle *utils.LifecycleManager
-    health    *utils.HealthChecker
     metrics   *utils.MetricsCollector
     config    *MyConfig
 }
@@ -97,7 +76,6 @@ func New() *MyPlugin {
     return &MyPlugin{
         BasePlugin: plugin.NewBasePlugin(info),
         lifecycle:  utils.NewLifecycleManager(),
-        health:     utils.NewHealthChecker(30 * time.Second),
         metrics:    utils.NewMetricsCollector(),
     }
 }
@@ -108,9 +86,6 @@ func (p *MyPlugin) Init(ctx context.Context, config plugin.Config) error {
     if err := utils.LoadConfig("myplugin", config, p.config); err != nil {
         return err
     }
-    
-    // Register health checks
-    p.health.RegisterCheck("service", p.checkService)
     
     // Register metrics
     p.metrics.RegisterCounter("operations_total", nil)
