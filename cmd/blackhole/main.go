@@ -80,17 +80,23 @@ func handleNodeCommand(ctx context.Context, action string, logger *log.Logger) {
 	}
 }
 
+// Variables that can be overridden for testing
+var (
+	loadConfig             = config.Load
+	initializeOrchestrator = core.InitializeOrchestrator
+)
+
 func startNode(ctx context.Context, logger *log.Logger) {
 	logger.Printf("Starting Blackhole Network node v%s...\n", version.Get())
 
 	// Load configuration
-	cfg, err := config.Load()
+	cfg, err := loadConfig()
 	if err != nil {
 		logger.Fatalf("Failed to load configuration: %v", err)
 	}
 
 	// Initialize orchestrator with all plugins
-	orch, err := core.InitializeOrchestrator(cfg, logger)
+	orch, err := initializeOrchestrator(cfg, logger)
 	if err != nil {
 		logger.Fatalf("Failed to initialize orchestrator: %v", err)
 	}

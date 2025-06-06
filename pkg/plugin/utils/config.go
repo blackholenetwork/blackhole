@@ -130,6 +130,16 @@ func applyEnvVars(pluginName string, target interface{}) error {
 
 // setFieldValue sets a field value from a string
 func setFieldValue(field reflect.Value, value string) error {
+	// Special handling for time.Duration (must be checked before int64)
+	if field.Type() == reflect.TypeOf(time.Duration(0)) {
+		duration, err := time.ParseDuration(value)
+		if err != nil {
+			return err
+		}
+		field.Set(reflect.ValueOf(duration))
+		return nil
+	}
+
 	switch field.Kind() {
 	case reflect.String:
 		field.SetString(value)
@@ -167,16 +177,6 @@ func setFieldValue(field reflect.Value, value string) error {
 		}
 
 	default:
-		// Special handling for time.Duration
-		if field.Type() == reflect.TypeOf(time.Duration(0)) {
-			duration, err := time.ParseDuration(value)
-			if err != nil {
-				return err
-			}
-			field.Set(reflect.ValueOf(duration))
-			return nil
-		}
-
 		return fmt.Errorf("unsupported field type: %v", field.Type())
 	}
 
@@ -189,6 +189,27 @@ func setFieldFromInterface(field reflect.Value, value interface{}) error {
 	if reflect.TypeOf(value) == field.Type() {
 		field.Set(reflect.ValueOf(value))
 		return nil
+	}
+
+	// Special handling for time.Duration when value is a string
+	if field.Type() == reflect.TypeOf(time.Duration(0)) {
+		switch v := value.(type) {
+		case string:
+			duration, err := time.ParseDuration(v)
+			if err != nil {
+				return err
+			}
+			field.Set(reflect.ValueOf(duration))
+			return nil
+		case int64:
+			// Assume nanoseconds
+			field.Set(reflect.ValueOf(time.Duration(v)))
+			return nil
+		case float64:
+			// Assume nanoseconds
+			field.Set(reflect.ValueOf(time.Duration(int64(v))))
+			return nil
+		}
 	}
 
 	// Otherwise convert to string and use setFieldValue

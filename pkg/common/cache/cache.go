@@ -37,7 +37,7 @@ func New[K comparable, V any](opts ...Option[K, V]) *Cache[K, V] {
 		opt(c)
 	}
 
-	// Start cleanup goroutine if TTL is set
+	// Start cleanup goroutine if TTL is set and reasonable
 	if c.ttl > 0 {
 		go c.cleanupLoop()
 	}
@@ -127,7 +127,12 @@ func (c *Cache[K, V]) Close() {
 
 // cleanupLoop periodically removes expired items
 func (c *Cache[K, V]) cleanupLoop() {
-	ticker := time.NewTicker(c.ttl / 2)
+	// Use a reasonable cleanup interval (minimum 1 second)
+	interval := c.ttl / 2
+	if interval < time.Second {
+		interval = time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {

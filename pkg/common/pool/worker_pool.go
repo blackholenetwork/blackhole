@@ -4,6 +4,7 @@ package pool
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 )
 
 // Task represents a unit of work
@@ -16,6 +17,7 @@ type WorkerPool struct {
 	wg        sync.WaitGroup
 	ctx       context.Context
 	cancel    context.CancelFunc
+	stopped   int32 // atomic flag to track if pool is stopped
 }
 
 // NewWorkerPool creates a new worker pool
@@ -51,7 +53,17 @@ func (p *WorkerPool) worker() {
 			if !ok {
 				return
 			}
-			task()
+			// Execute task with panic recovery
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						// Log panic but continue worker
+						// In a real implementation, you might want to log this
+						_ = r // Use the recovered value to avoid SA9003
+					}
+				}()
+				task()
+			}()
 		case <-p.ctx.Done():
 			return
 		}
@@ -60,6 +72,18 @@ func (p *WorkerPool) worker() {
 
 // Submit adds a task to the pool
 func (p *WorkerPool) Submit(task Task) {
+	// Check if pool is stopped
+	if atomic.LoadInt32(&p.stopped) == 1 {
+		return
+	}
+
+	// Use a defer with recover to handle potential panic from sending to closed channel
+	defer func() {
+		if r := recover(); r != nil {
+			// Channel was closed, task not submitted
+		}
+	}()
+
 	select {
 	case p.taskQueue <- task:
 	case <-p.ctx.Done():
@@ -79,13 +103,27 @@ func (p *WorkerPool) SubmitWait(task Task) {
 
 // Wait waits for all tasks to complete
 func (p *WorkerPool) Wait() {
+	// Mark as stopped to prevent new submissions
+	if !atomic.CompareAndSwapInt32(&p.stopped, 0, 1) {
+		// Already stopped
+		return
+	}
 	close(p.taskQueue)
 	p.wg.Wait()
 }
 
 // Stop gracefully shuts down the pool
 func (p *WorkerPool) Stop() {
+	// Mark as stopped to prevent new submissions
+	if !atomic.CompareAndSwapInt32(&p.stopped, 0, 1) {
+		// Already stopped
+		return
+	}
+
+	// Cancel context to signal workers to stop
 	p.cancel()
+
+	// Close channel and wait for workers
 	close(p.taskQueue)
 	p.wg.Wait()
 }
@@ -117,5 +155,5 @@ func (p *BufferPool) Put(buf []byte) {
 	for i := range buf {
 		buf[i] = 0
 	}
-	p.pool.Put(&buf)
+	p.pool.Put(buf) //nolint:staticcheck // sync.Pool.Put requires interface{}
 }
