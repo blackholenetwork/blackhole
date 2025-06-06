@@ -1,0 +1,326 @@
+package contract
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/rs/zerolog"
+)
+
+// PaymentProcessor interface defines methods for processing payments
+type PaymentProcessor interface {
+	// Initialize the payment processor
+	Initialize(config PaymentProcessorConfig) error
+	
+	// Payment method management
+	CreatePaymentMethod(ctx context.Context, req PaymentMethodRequest) (*PaymentMethod, error)
+	ValidatePaymentMethod(ctx context.Context, paymentMethodID string) (bool, error)
+	DeletePaymentMethod(ctx context.Context, paymentMethodID string) error
+	
+	// Payment processing
+	ProcessPayment(ctx context.Context, payment *Payment) (*PaymentResult, error)
+	RefundPayment(ctx context.Context, paymentID string, amount float64, reason string) (*RefundResult, error)
+	
+	// Subscription management (if supported by provider)
+	CreateSubscription(ctx context.Context, subscription *Subscription) (*ProviderSubscription, error)
+	UpdateSubscription(ctx context.Context, subscriptionID string, updates SubscriptionUpdateRequest) error
+	CancelSubscription(ctx context.Context, subscriptionID string) error
+	
+	// Webhook handling
+	HandleWebhook(ctx context.Context, payload []byte, signature string) (*WebhookEvent, error)
+	
+	// Provider information
+	GetProviderName() string
+	GetSupportedCurrencies() []string
+	GetCapabilities() PaymentCapabilities
+}
+
+// PaymentResult represents the result of a payment processing attempt
+type PaymentResult struct {
+	Success           bool              `json:"success"`
+	TransactionID     string            `json:"transaction_id"`
+	ExternalPaymentID string            `json:"external_payment_id"`
+	Status            PaymentStatus     `json:"status"`
+	Amount            float64           `json:"amount"`
+	Currency          string            `json:"currency"`
+	ProcessedAt       time.Time         `json:"processed_at"`
+	FailureReason     string            `json:"failure_reason,omitempty"`
+	Metadata          map[string]string `json:"metadata,omitempty"`
+}
+
+// RefundResult represents the result of a refund attempt
+type RefundResult struct {
+	Success       bool              `json:"success"`
+	RefundID      string            `json:"refund_id"`
+	Amount        float64           `json:"amount"`
+	Currency      string            `json:"currency"`
+	ProcessedAt   time.Time         `json:"processed_at"`
+	Reason        string            `json:"reason"`
+	FailureReason string            `json:"failure_reason,omitempty"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
+}
+
+// ProviderSubscription represents a subscription in the payment provider's system
+type ProviderSubscription struct {
+	ExternalID        string            `json:"external_id"`
+	Status            string            `json:"status"`
+	CurrentPeriodStart time.Time        `json:"current_period_start"`
+	CurrentPeriodEnd   time.Time        `json:"current_period_end"`
+	Metadata          map[string]string `json:"metadata,omitempty"`
+}
+
+// WebhookEvent represents a webhook event from a payment provider
+type WebhookEvent struct {
+	ID                string            `json:"id"`
+	Type              string            `json:"type"`
+	PaymentID         string            `json:"payment_id,omitempty"`
+	SubscriptionID    string            `json:"subscription_id,omitempty"`
+	Status            string            `json:"status"`
+	Data              map[string]interface{} `json:"data"`
+	Timestamp         time.Time         `json:"timestamp"`
+}
+
+// PaymentCapabilities represents what a payment processor supports
+type PaymentCapabilities struct {
+	SupportsSubscriptions bool     `json:"supports_subscriptions"`
+	SupportsRefunds      bool     `json:"supports_refunds"`
+	SupportsWebhooks     bool     `json:"supports_webhooks"`
+	SupportedMethods     []string `json:"supported_methods"` // "card", "bank", "crypto", etc.
+}
+
+// MockPaymentProcessor is a simple implementation for testing and development
+type MockPaymentProcessor struct {
+	logger       zerolog.Logger
+	config       PaymentProcessorConfig
+	payments     map[string]*Payment
+	paymentMethods map[string]*PaymentMethod
+	subscriptions map[string]*ProviderSubscription
+	
+	// Mock behavior settings
+	failPayments      bool
+	paymentFailureRate float64
+	processingDelay   time.Duration
+}
+
+// NewMockPaymentProcessor creates a new mock payment processor
+func NewMockPaymentProcessor(logger zerolog.Logger) *MockPaymentProcessor {
+	return &MockPaymentProcessor{
+		logger:            logger.With().Str("component", "mock_payment_processor").Logger(),
+		payments:          make(map[string]*Payment),
+		paymentMethods:    make(map[string]*PaymentMethod),
+		subscriptions:     make(map[string]*ProviderSubscription),
+		paymentFailureRate: 0.1, // 10% failure rate by default
+		processingDelay:   100 * time.Millisecond,
+	}
+}
+
+// Initialize implements PaymentProcessor
+func (mpp *MockPaymentProcessor) Initialize(config PaymentProcessorConfig) error {
+	mpp.config = config
+	mpp.logger.Info().
+		Str("provider", config.Provider).
+		Str("currency", config.Currency).
+		Msg("Initialized mock payment processor")
+	return nil
+}
+
+// CreatePaymentMethod implements PaymentProcessor
+func (mpp *MockPaymentProcessor) CreatePaymentMethod(ctx context.Context, req PaymentMethodRequest) (*PaymentMethod, error) {
+	paymentMethod := &PaymentMethod{
+		ID:         fmt.Sprintf("pm_mock_%d", time.Now().UnixNano()),
+		UserID:     req.UserID,
+		Type:       req.Type,
+		Provider:   req.Provider,
+		ExternalID: fmt.Sprintf("ext_%d", time.Now().UnixNano()),
+		IsDefault:  req.IsDefault,
+		IsValid:    true,
+		Metadata:   req.Metadata,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	
+	// Mock card details
+	if req.Type == "card" {
+		paymentMethod.CardLast4 = "4242"
+		paymentMethod.CardBrand = "visa"
+		paymentMethod.CardExpMonth = 12
+		paymentMethod.CardExpYear = 2030
+	}
+	
+	mpp.paymentMethods[paymentMethod.ID] = paymentMethod
+	
+	mpp.logger.Info().
+		Str("payment_method_id", paymentMethod.ID).
+		Str("user_id", req.UserID).
+		Str("type", req.Type).
+		Msg("Created mock payment method")
+	
+	return paymentMethod, nil
+}
+
+// ValidatePaymentMethod implements PaymentProcessor
+func (mpp *MockPaymentProcessor) ValidatePaymentMethod(ctx context.Context, paymentMethodID string) (bool, error) {
+	paymentMethod, exists := mpp.paymentMethods[paymentMethodID]
+	if !exists {
+		return false, nil
+	}
+	return paymentMethod.IsValid, nil
+}
+
+// DeletePaymentMethod implements PaymentProcessor
+func (mpp *MockPaymentProcessor) DeletePaymentMethod(ctx context.Context, paymentMethodID string) error {
+	delete(mpp.paymentMethods, paymentMethodID)
+	mpp.logger.Info().
+		Str("payment_method_id", paymentMethodID).
+		Msg("Deleted mock payment method")
+	return nil
+}
+
+// ProcessPayment implements PaymentProcessor
+func (mpp *MockPaymentProcessor) ProcessPayment(ctx context.Context, payment *Payment) (*PaymentResult, error) {
+	// Simulate processing delay
+	time.Sleep(mpp.processingDelay)
+	
+	result := &PaymentResult{
+		TransactionID:     fmt.Sprintf("txn_mock_%d", time.Now().UnixNano()),
+		ExternalPaymentID: fmt.Sprintf("pay_mock_%d", time.Now().UnixNano()),
+		Amount:            payment.Amount,
+		Currency:          payment.Currency,
+		ProcessedAt:       time.Now(),
+		Metadata:          make(map[string]string),
+	}
+	
+	// Simulate payment failures based on failure rate
+	if mpp.failPayments || (mpp.paymentFailureRate > 0 && time.Now().UnixNano()%100 < int64(mpp.paymentFailureRate*100)) {
+		result.Success = false
+		result.Status = PaymentFailed
+		result.FailureReason = "Mock payment failure for testing"
+	} else {
+		result.Success = true
+		result.Status = PaymentCompleted
+	}
+	
+	mpp.payments[payment.ID] = payment
+	
+	mpp.logger.Info().
+		Str("payment_id", payment.ID).
+		Bool("success", result.Success).
+		Float64("amount", payment.Amount).
+		Str("status", string(result.Status)).
+		Msg("Processed mock payment")
+	
+	return result, nil
+}
+
+// RefundPayment implements PaymentProcessor
+func (mpp *MockPaymentProcessor) RefundPayment(ctx context.Context, paymentID string, amount float64, reason string) (*RefundResult, error) {
+	result := &RefundResult{
+		Success:     true,
+		RefundID:    fmt.Sprintf("ref_mock_%d", time.Now().UnixNano()),
+		Amount:      amount,
+		Currency:    mpp.config.Currency,
+		ProcessedAt: time.Now(),
+		Reason:      reason,
+	}
+	
+	mpp.logger.Info().
+		Str("payment_id", paymentID).
+		Float64("amount", amount).
+		Str("reason", reason).
+		Msg("Processed mock refund")
+	
+	return result, nil
+}
+
+// CreateSubscription implements PaymentProcessor
+func (mpp *MockPaymentProcessor) CreateSubscription(ctx context.Context, subscription *Subscription) (*ProviderSubscription, error) {
+	providerSub := &ProviderSubscription{
+		ExternalID:         fmt.Sprintf("sub_mock_%d", time.Now().UnixNano()),
+		Status:             "active",
+		CurrentPeriodStart: subscription.StartDate,
+		CurrentPeriodEnd:   subscription.EndDate,
+		Metadata:           make(map[string]string),
+	}
+	
+	mpp.subscriptions[subscription.ID] = providerSub
+	
+	mpp.logger.Info().
+		Str("subscription_id", subscription.ID).
+		Str("external_id", providerSub.ExternalID).
+		Msg("Created mock subscription")
+	
+	return providerSub, nil
+}
+
+// UpdateSubscription implements PaymentProcessor
+func (mpp *MockPaymentProcessor) UpdateSubscription(ctx context.Context, subscriptionID string, updates SubscriptionUpdateRequest) error {
+	mpp.logger.Info().
+		Str("subscription_id", subscriptionID).
+		Msg("Updated mock subscription")
+	return nil
+}
+
+// CancelSubscription implements PaymentProcessor
+func (mpp *MockPaymentProcessor) CancelSubscription(ctx context.Context, subscriptionID string) error {
+	if providerSub, exists := mpp.subscriptions[subscriptionID]; exists {
+		providerSub.Status = "cancelled"
+	}
+	
+	mpp.logger.Info().
+		Str("subscription_id", subscriptionID).
+		Msg("Cancelled mock subscription")
+	return nil
+}
+
+// HandleWebhook implements PaymentProcessor
+func (mpp *MockPaymentProcessor) HandleWebhook(ctx context.Context, payload []byte, signature string) (*WebhookEvent, error) {
+	event := &WebhookEvent{
+		ID:        fmt.Sprintf("evt_mock_%d", time.Now().UnixNano()),
+		Type:      "payment.completed",
+		Timestamp: time.Now(),
+		Data:      make(map[string]interface{}),
+	}
+	
+	mpp.logger.Info().
+		Str("event_id", event.ID).
+		Str("event_type", event.Type).
+		Msg("Processed mock webhook")
+	
+	return event, nil
+}
+
+// GetProviderName implements PaymentProcessor
+func (mpp *MockPaymentProcessor) GetProviderName() string {
+	return "mock"
+}
+
+// GetSupportedCurrencies implements PaymentProcessor
+func (mpp *MockPaymentProcessor) GetSupportedCurrencies() []string {
+	return []string{"USD", "EUR", "GBP"}
+}
+
+// GetCapabilities implements PaymentProcessor
+func (mpp *MockPaymentProcessor) GetCapabilities() PaymentCapabilities {
+	return PaymentCapabilities{
+		SupportsSubscriptions: true,
+		SupportsRefunds:      true,
+		SupportsWebhooks:     true,
+		SupportedMethods:     []string{"card", "bank", "crypto"},
+	}
+}
+
+// SetFailureRate sets the mock payment failure rate (0.0 to 1.0)
+func (mpp *MockPaymentProcessor) SetFailureRate(rate float64) {
+	mpp.paymentFailureRate = rate
+}
+
+// SetProcessingDelay sets the mock payment processing delay
+func (mpp *MockPaymentProcessor) SetProcessingDelay(delay time.Duration) {
+	mpp.processingDelay = delay
+}
+
+// ForceFailPayments forces all payments to fail (for testing)
+func (mpp *MockPaymentProcessor) ForceFailPayments(fail bool) {
+	mpp.failPayments = fail
+}

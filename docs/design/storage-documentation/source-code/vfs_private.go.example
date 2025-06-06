@@ -1,0 +1,581 @@
+package storage
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"path/filepath"
+	"strings"
+	"time"
+	
+	"github.com/rs/zerolog"
+)
+
+// PrivateVFS implements the privacy-focused virtual filesystem with secret hash-based directories
+type PrivateVFS struct {
+	*VirtualFilesystem // Embed existing VFS
+	
+	// Namespace management
+	userSecret   string // User's secret for generating private base
+	userDID      string // User's DID
+	userBase     string // User's computed private base directory
+	
+	// Known namespaces
+	publicBases  []string            // Public discoverable directories
+	sharedBases  map[string]string   // friendDID -> shared base path
+	knownSecrets map[string]string   // DID -> secret (for testing/sharing)
+}
+
+// DirectoryMetadata represents metadata for a directory (stored as .vfs_directory.json)
+type DirectoryMetadata struct {
+	Path        string                     `json:"path"`
+	Type        string                     `json:"type"`        // "directory"
+	Updated     time.Time                  `json:"updated"`
+	CreatedBy   string                     `json:"created_by"`  // DID of creator
+	Permissions map[string]PermissionInfo  `json:"permissions"` // DID -> permission info
+	Entries     map[string]EntryInfo       `json:"entries"`     // filename -> entry info
+}
+
+// EntryInfo represents information about a file or directory entry
+type EntryInfo struct {
+	Name        string    `json:"name"`
+	Type        string    `json:"type"`         // "file" or "directory"
+	ContentHash string    `json:"content_hash"` // For files, empty for directories
+	Size        int64     `json:"size"`
+	ContentType string    `json:"content_type"`
+	Modified    time.Time `json:"modified"`
+	CreatedBy   string    `json:"created_by"`
+}
+
+// PermissionInfo represents permissions for a specific DID
+type PermissionInfo struct {
+	Level     string    `json:"level"`      // "read", "write", "admin"
+	GrantedBy string    `json:"granted_by"` // DID who granted permission
+	GrantedAt time.Time `json:"granted_at"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+}
+
+// NamespaceInfo represents information about a namespace
+type NamespaceInfo struct {
+	Type        string    `json:"type"`         // "public", "private", "shared"
+	BasePath    string    `json:"base_path"`
+	OwnerDID    string    `json:"owner_did"`
+	Description string    `json:"description"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// Well-known public directories that everyone can discover
+var PublicDirectories = []string{
+	"/system/",
+	"/schemas/", 
+	"/governance/",
+	"/network/",
+	"/public/",
+	"/private/", // Listed but cannot be enumerated - access requires secret
+}
+
+// NewPrivateVFS creates a new privacy-focused VFS
+func NewPrivateVFS(storage Service, config *VFSConfig, logger zerolog.Logger, userDID string) (*PrivateVFS, error) {
+	// Create base VFS
+	baseVFS, err := NewVirtualFilesystem(storage, config, logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create base VFS: %w", err)
+	}
+	
+	pvfs := &PrivateVFS{
+		VirtualFilesystem: baseVFS,
+		userDID:          userDID,
+		publicBases:      PublicDirectories,
+		sharedBases:      make(map[string]string),
+		knownSecrets:     make(map[string]string),
+	}
+	
+	return pvfs, nil
+}
+
+// NewPrivateVFSWithExistingVFS creates a PrivateVFS that reuses an existing VirtualFilesystem
+func NewPrivateVFSWithExistingVFS(baseVFS *VirtualFilesystem, logger zerolog.Logger, userDID string) (*PrivateVFS, error) {
+	pvfs := &PrivateVFS{
+		VirtualFilesystem: baseVFS,
+		userDID:          userDID,
+		publicBases:      PublicDirectories,
+		sharedBases:      make(map[string]string),
+		knownSecrets:     make(map[string]string),
+	}
+	
+	return pvfs, nil
+}
+
+
+// GenerateUserSecret creates a new cryptographic secret for the user
+func (pvfs *PrivateVFS) GenerateUserSecret() (string, error) {
+	secretBytes := make([]byte, 32) // 256-bit secret
+	if _, err := rand.Read(secretBytes); err != nil {
+		return "", fmt.Errorf("failed to generate random secret: %w", err)
+	}
+	
+	secret := hex.EncodeToString(secretBytes)
+	pvfs.userSecret = secret
+	pvfs.userBase = pvfs.computePrivateBase(pvfs.userDID, secret)
+	
+	return secret, nil
+}
+
+// LoadUserSecret loads an existing secret for the user
+func (pvfs *PrivateVFS) LoadUserSecret(secret string) error {
+	if secret == "" {
+		return fmt.Errorf("secret cannot be empty")
+	}
+	
+	pvfs.userSecret = secret
+	pvfs.userBase = pvfs.computePrivateBase(pvfs.userDID, secret)
+	
+	return nil
+}
+
+// GetUserBase returns the user's private base directory
+func (pvfs *PrivateVFS) GetUserBase() string {
+	return pvfs.userBase
+}
+
+// computePrivateBase computes the private base directory from DID and secret
+func (pvfs *PrivateVFS) computePrivateBase(did, secret string) string {
+	hash := sha256.Sum256([]byte(did + ":" + secret))
+	return "/private/" + hex.EncodeToString(hash[:]) + "/"
+}
+
+// IsPublicPath checks if a path is in a public namespace
+func (pvfs *PrivateVFS) IsPublicPath(path string) bool {
+	for _, publicBase := range pvfs.publicBases {
+		if strings.HasPrefix(path, publicBase) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsUserPath checks if a path is in the user's private namespace
+func (pvfs *PrivateVFS) IsUserPath(path string) bool {
+	if pvfs.userBase == "" {
+		return false
+	}
+	return strings.HasPrefix(path, pvfs.userBase)
+}
+
+// InitializeUserSpace creates the basic structure for a user's private space
+func (pvfs *PrivateVFS) InitializeUserSpace(ctx context.Context) error {
+	if pvfs.userBase == "" {
+		return fmt.Errorf("user base not set - call GenerateUserSecret or LoadUserSecret first")
+	}
+	
+	// Create root directory metadata for user space
+	rootMetadata := &DirectoryMetadata{
+		Path:      pvfs.userBase,
+		Type:      "directory",
+		Updated:   time.Now(),
+		CreatedBy: pvfs.userDID,
+		Permissions: map[string]PermissionInfo{
+			pvfs.userDID: {
+				Level:     "admin",
+				GrantedBy: pvfs.userDID,
+				GrantedAt: time.Now(),
+			},
+		},
+		Entries: map[string]EntryInfo{
+			"personal/": {
+				Name:      "personal",
+				Type:      "directory",
+				Modified:  time.Now(),
+				CreatedBy: pvfs.userDID,
+			},
+			"shared/": {
+				Name:      "shared",
+				Type:      "directory", 
+				Modified:  time.Now(),
+				CreatedBy: pvfs.userDID,
+			},
+			"schemas/": {
+				Name:      "schemas",
+				Type:      "directory",
+				Modified:  time.Now(),
+				CreatedBy: pvfs.userDID,
+			},
+		},
+	}
+	
+	// Store root directory metadata
+	if err := pvfs.storeDirectoryMetadata(ctx, pvfs.userBase, rootMetadata); err != nil {
+		return fmt.Errorf("failed to store root directory metadata: %w", err)
+	}
+	
+	// Create subdirectories
+	subdirs := []string{"personal/", "shared/", "schemas/"}
+	for _, subdir := range subdirs {
+		subdirPath := pvfs.userBase + subdir
+		subdirMetadata := &DirectoryMetadata{
+			Path:      subdirPath,
+			Type:      "directory",
+			Updated:   time.Now(),
+			CreatedBy: pvfs.userDID,
+			Permissions: map[string]PermissionInfo{
+				pvfs.userDID: {
+					Level:     "admin",
+					GrantedBy: pvfs.userDID,
+					GrantedAt: time.Now(),
+				},
+			},
+			Entries: make(map[string]EntryInfo),
+		}
+		
+		if err := pvfs.storeDirectoryMetadata(ctx, subdirPath, subdirMetadata); err != nil {
+			return fmt.Errorf("failed to create subdirectory %s: %w", subdir, err)
+		}
+	}
+	
+	pvfs.logger.Info().
+		Str("user_did", pvfs.userDID).
+		Str("user_base", pvfs.userBase).
+		Msg("Initialized user private space")
+	
+	return nil
+}
+
+// WriteFileToNamespace writes a file to a specific namespace with proper metadata management
+func (pvfs *PrivateVFS) WriteFileToNamespace(ctx context.Context, path string, data []byte, metadata map[string]string) error {
+	// Validate path
+	if err := pvfs.validatePath(path); err != nil {
+		return fmt.Errorf("invalid path: %w", err)
+	}
+	
+	// Check permissions
+	if err := pvfs.checkWritePermission(ctx, path); err != nil {
+		return fmt.Errorf("permission denied: %w", err)
+	}
+	
+	// Ensure parent directories exist (auto-create if configured)
+	dirOptions := DefaultDirectoryOptions()
+	if pvfs.VirtualFilesystem != nil && pvfs.VirtualFilesystem.config != nil {
+		dirOptions = pvfs.VirtualFilesystem.config.DirectoryOptions
+	}
+	
+	if err := pvfs.ensureParentDirectories(ctx, path, dirOptions); err != nil {
+		return fmt.Errorf("failed to create parent directories: %w", err)
+	}
+	
+	// Store the actual file content
+	reader := strings.NewReader(string(data))
+	contentCID, err := pvfs.storage.Store(ctx, reader)
+	if err != nil {
+		return fmt.Errorf("failed to store content: %w", err)
+	}
+	
+	// Create entry info
+	entryInfo := EntryInfo{
+		Name:        filepath.Base(path),
+		Type:        "file",
+		ContentHash: string(contentCID),
+		Size:        int64(len(data)),
+		ContentType: detectContentTypePrivate(path, data),
+		Modified:    time.Now(),
+		CreatedBy:   pvfs.userDID,
+	}
+	
+	// Update parent directory metadata
+	parentDir := filepath.Dir(path) + "/"
+	if err := pvfs.updateDirectoryMetadata(ctx, parentDir, entryInfo); err != nil {
+		return fmt.Errorf("failed to update directory metadata: %w", err)
+	}
+	
+	pvfs.logger.Info().
+		Str("path", path).
+		Str("content_hash", string(contentCID)).
+		Int("size", len(data)).
+		Msg("File written to private VFS")
+	
+	return nil
+}
+
+// ReadFileFromNamespace reads a file from any accessible namespace
+func (pvfs *PrivateVFS) ReadFileFromNamespace(ctx context.Context, path string) ([]byte, error) {
+	// Check read permissions
+	if err := pvfs.checkReadPermission(ctx, path); err != nil {
+		return nil, fmt.Errorf("permission denied: %w", err)
+	}
+	
+	// Get file info from parent directory metadata
+	parentDir := filepath.Dir(path) + "/"
+	filename := filepath.Base(path)
+	
+	dirMetadata, err := pvfs.loadDirectoryMetadata(ctx, parentDir)
+	if err != nil {
+		return nil, fmt.Errorf("directory not found: %w", err)
+	}
+	
+	entryInfo, exists := dirMetadata.Entries[filename]
+	if !exists {
+		return nil, fmt.Errorf("file not found: %s", path)
+	}
+	
+	if entryInfo.Type != "file" {
+		return nil, fmt.Errorf("path is not a file: %s", path)
+	}
+	
+	// Retrieve content from storage
+	reader, err := pvfs.storage.Retrieve(ctx, ContentCID(entryInfo.ContentHash))
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve content: %w", err)
+	}
+	defer reader.Close()
+	
+	// Read all data
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read content: %w", err)
+	}
+	
+	pvfs.logger.Debug().
+		Str("path", path).
+		Str("content_hash", entryInfo.ContentHash).
+		Int("size", len(data)).
+		Msg("File read from private VFS")
+	
+	return data, nil
+}
+
+// ListDirectoryInNamespace lists the contents of a directory
+func (pvfs *PrivateVFS) ListDirectoryInNamespace(ctx context.Context, path string) ([]VFSFileInfo, error) {
+	// Normalize directory path
+	dirPath := pvfs.normalizePath(path)
+	if !strings.HasSuffix(dirPath, "/") {
+		dirPath += "/"
+	}
+	
+	// Handle root directory listing (only show public directories)
+	if dirPath == "/" {
+		return pvfs.listRootDirectory(ctx)
+	}
+	
+	// Handle /private/ directory listing - deny enumeration but allow access to specific paths
+	if dirPath == "/private/" {
+		return nil, fmt.Errorf("directory enumeration not allowed for /private/ - access requires secret")
+	}
+	
+	// Check read permissions
+	if err := pvfs.checkReadPermission(ctx, dirPath); err != nil {
+		return nil, fmt.Errorf("permission denied: %w", err)
+	}
+	
+	// Load directory metadata
+	dirMetadata, err := pvfs.loadDirectoryMetadata(ctx, dirPath)
+	if err != nil {
+		return nil, fmt.Errorf("directory not found: %w", err)
+	}
+	
+	// Convert entries to VFSFileInfo
+	var entries []VFSFileInfo
+	for _, entryInfo := range dirMetadata.Entries {
+		fullPath := dirPath + entryInfo.Name
+		if entryInfo.Type == "directory" {
+			fullPath += "/"
+		}
+		
+		entries = append(entries, VFSFileInfo{
+			Path:        fullPath,
+			ContentHash: entryInfo.ContentHash,
+			Size:        entryInfo.Size,
+			ContentType: entryInfo.ContentType,
+			CreatedAt:   entryInfo.Modified, // Use modified as created for now
+			ModifiedAt:  entryInfo.Modified,
+			CreatedBy:   entryInfo.CreatedBy,
+			IsDirectory: entryInfo.Type == "directory",
+		})
+	}
+	
+	return entries, nil
+}
+
+// Helper methods
+
+// getPathLocation computes deterministic bucket and chunk ID for a path
+func (pvfs *PrivateVFS) getPathLocation(path string) (int, string) {
+	// Use SHA256 hash of path for deterministic placement
+	hash := sha256.Sum256([]byte(path))
+	hashHex := hex.EncodeToString(hash[:])
+	
+	// Bucket ID from first 4 bytes of hash
+	bucketID := int(hash[0])<<24 | int(hash[1])<<16 | int(hash[2])<<8 | int(hash[3])
+	bucketID = bucketID % 65536 // Ensure within bucket range
+	if bucketID < 0 {
+		bucketID = -bucketID // Handle negative values
+	}
+	
+	// Chunk ID is the full hash as hex
+	chunkID := "vfs:" + hashHex
+	
+	return bucketID, chunkID
+}
+
+// storeDirectoryMetadata stores directory metadata at the deterministic location
+func (pvfs *PrivateVFS) storeDirectoryMetadata(ctx context.Context, dirPath string, metadata *DirectoryMetadata) error {
+	data, err := json.Marshal(metadata)
+	if err != nil {
+		return fmt.Errorf("failed to marshal directory metadata: %w", err)
+	}
+	
+	// Store at deterministic location: dirPath + ".vfs_directory.json"
+	metadataPath := dirPath + ".vfs_directory.json"
+	bucketID, chunkID := pvfs.getPathLocation(metadataPath)
+	
+	return pvfs.storage.StoreChunkInBucket(bucketID, chunkID, data)
+}
+
+// loadDirectoryMetadata loads directory metadata from the deterministic location
+func (pvfs *PrivateVFS) loadDirectoryMetadata(ctx context.Context, dirPath string) (*DirectoryMetadata, error) {
+	metadataPath := dirPath + ".vfs_directory.json"
+	bucketID, chunkID := pvfs.getPathLocation(metadataPath)
+	
+	data, err := pvfs.storage.RetrieveChunkFromBucket(bucketID, chunkID)
+	if err != nil {
+		return nil, fmt.Errorf("directory metadata not found: %w", err)
+	}
+	
+	var metadata DirectoryMetadata
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal directory metadata: %w", err)
+	}
+	
+	return &metadata, nil
+}
+
+// updateDirectoryMetadata updates a directory's metadata with a new entry
+func (pvfs *PrivateVFS) updateDirectoryMetadata(ctx context.Context, dirPath string, entryInfo EntryInfo) error {
+	// Load existing metadata or create new
+	metadata, err := pvfs.loadDirectoryMetadata(ctx, dirPath)
+	if err != nil {
+		// Create new directory metadata
+		metadata = &DirectoryMetadata{
+			Path:      dirPath,
+			Type:      "directory",
+			Updated:   time.Now(),
+			CreatedBy: pvfs.userDID,
+			Permissions: map[string]PermissionInfo{
+				pvfs.userDID: {
+					Level:     "admin",
+					GrantedBy: pvfs.userDID,
+					GrantedAt: time.Now(),
+				},
+			},
+			Entries: make(map[string]EntryInfo),
+		}
+	}
+	
+	// Update entry
+	metadata.Entries[entryInfo.Name] = entryInfo
+	metadata.Updated = time.Now()
+	
+	// Store updated metadata
+	return pvfs.storeDirectoryMetadata(ctx, dirPath, metadata)
+}
+
+// listRootDirectory returns only public directories for root listing
+func (pvfs *PrivateVFS) listRootDirectory(ctx context.Context) ([]VFSFileInfo, error) {
+	var entries []VFSFileInfo
+	
+	for _, publicDir := range pvfs.publicBases {
+		entries = append(entries, VFSFileInfo{
+			Path:        publicDir,
+			Size:        0,
+			IsDirectory: true,
+			ContentType: "",
+			CreatedAt:   time.Time{}, // Unknown
+			ModifiedAt:  time.Time{}, // Unknown
+		})
+	}
+	
+	return entries, nil
+}
+
+// Helper methods continued...
+
+// validatePath validates that a path is properly formatted and safe
+func (pvfs *PrivateVFS) validatePath(path string) error {
+	if path == "" {
+		return fmt.Errorf("path cannot be empty")
+	}
+	
+	if !strings.HasPrefix(path, "/") {
+		return fmt.Errorf("path must be absolute: %s", path)
+	}
+	
+	// Check for dangerous path elements
+	if strings.Contains(path, "..") {
+		return fmt.Errorf("path contains dangerous element '..': %s", path)
+	}
+	
+	// Check path length (reasonable limit)
+	if len(path) > 1000 {
+		return fmt.Errorf("path too long: %d characters", len(path))
+	}
+	
+	return nil
+}
+
+// normalizePath normalizes a path by cleaning it up
+func (pvfs *PrivateVFS) normalizePath(path string) string {
+	// Check if original path was a directory (had trailing slash)
+	wasDirectory := strings.HasSuffix(path, "/")
+	
+	// Remove duplicate slashes and clean path
+	path = filepath.Clean(path)
+	
+	// Ensure absolute path
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	
+	// Restore trailing slash for directories
+	if wasDirectory && !strings.HasSuffix(path, "/") {
+		path += "/"
+	}
+	
+	return path
+}
+
+// detectContentTypePrivate attempts to detect content type from path and content for private VFS
+func detectContentTypePrivate(path string, content []byte) string {
+	ext := strings.ToLower(filepath.Ext(path))
+	
+	switch ext {
+	case ".json":
+		return "application/json"
+	case ".txt", ".md":
+		return "text/plain"
+	case ".html", ".htm":
+		return "text/html"
+	case ".js":
+		return "application/javascript"
+	case ".css":
+		return "text/css"
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".pdf":
+		return "application/pdf"
+	default:
+		// Try to detect based on content
+		if len(content) > 0 {
+			// Simple heuristics
+			if content[0] == '{' || content[0] == '[' {
+				return "application/json"
+			}
+			// Default to binary
+			return "application/octet-stream"
+		}
+		return "application/octet-stream"
+	}
+}

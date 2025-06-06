@@ -22,6 +22,12 @@ Non-negotiable technical decisions and constraints that must be respected during
 ### 📊 [Current Status](./CURRENT_STATUS.md)
 Living document tracking project progress, decisions made, and next steps.
 
+### ⏱️ [Timeline and Milestones](../TIMELINE_AND_MILESTONES.md)
+Detailed 180-day timeline with component time estimates and dependencies.
+
+### 📅 [Development Schedule](../DEVELOPMENT_SCHEDULE.md)
+Visual timeline, sprint schedule, and parallel development tracks.
+
 ## Reading Order
 
 For new developers:

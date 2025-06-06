@@ -1,0 +1,65 @@
+# Development Dockerfile for Blackhole Network
+FROM golang:1.21-alpine
+
+# Install development dependencies
+RUN apk add --no-cache \
+    git \
+    make \
+    gcc \
+    musl-dev \
+    bash \
+    curl \
+    wget \
+    ca-certificates \
+    # Debugging tools
+    strace \
+    tcpdump \
+    net-tools \
+    # Development tools
+    vim \
+    jq
+
+# Install Delve debugger
+RUN go install github.com/go-delve/delve/cmd/dlv@latest
+
+# Install Air for hot reload
+RUN go install github.com/cosmtrek/air@latest
+
+# Install additional Go tools
+RUN go install golang.org/x/tools/gopls@latest && \
+    go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest && \
+    go install github.com/swaggo/swag/cmd/swag@latest
+
+# Set working directory
+WORKDIR /app
+
+# Copy go mod files
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build with debug symbols
+RUN go build -gcflags="all=-N -l" -o blackhole ./cmd/blackhole
+
+# Create non-root user
+RUN addgroup -g 1000 blackhole && \
+    adduser -D -u 1000 -G blackhole blackhole && \
+    chown -R blackhole:blackhole /app
+
+# Create directories
+RUN mkdir -p /data /config /logs && \
+    chown -R blackhole:blackhole /data /config /logs
+
+# Switch to non-root user
+USER blackhole
+
+# Expose ports
+EXPOSE 8080 4001 5001 9090 2345
+
+# Volume mounts
+VOLUME ["/data", "/config", "/logs"]
+
+# Default to running with Air for hot reload
+CMD ["air", "-c", ".air.toml"]

@@ -79,7 +79,7 @@ Blackhole Network is a decentralized infrastructure platform that democratizes a
 **Value**: Censorship resistance, high availability, low cost
 
 ### 2. Edge Computing
-**Actor**: IoT Developer  
+**Actor**: IoT Developer
 **Goal**: Process data close to source without cloud round-trips
 **Value**: Low latency, data sovereignty, reduced bandwidth costs
 
@@ -259,7 +259,7 @@ Blackhole Network is a decentralized infrastructure platform that democratizes a
 By the end of year one, Blackhole Network should:
 
 - Have 1,000+ active nodes globally
-- Process 1M+ resource transactions monthly  
+- Process 1M+ resource transactions monthly
 - Host 10+ production applications
 - Maintain 99.9% network uptime
 - Have growing developer community

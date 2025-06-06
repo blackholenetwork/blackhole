@@ -1,0 +1,428 @@
+package storage
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	badger "github.com/dgraph-io/badger/v4"
+	"github.com/rs/zerolog"
+)
+
+// VirtualFilesystem provides filesystem semantics on top of content-addressed storage
+type VirtualFilesystem struct {
+	mu      sync.RWMutex
+	logger  zerolog.Logger
+	config  *VFSConfig
+	
+	// Core storage
+	storage Service          // Our existing storage service
+	cache   *badger.DB       // Local cache for paths and frequently accessed content
+	
+	// Registry management
+	registryPath string      // Path to store registries
+	
+	// State
+	started bool
+}
+
+// VFSConfig holds configuration for the virtual filesystem
+type VFSConfig struct {
+	CacheDir        string        `yaml:"cache_dir" mapstructure:"cache_dir"`
+	CacheTimeout    time.Duration `yaml:"cache_timeout" mapstructure:"cache_timeout"`
+	MaxCacheSize    int64         `yaml:"max_cache_size" mapstructure:"max_cache_size"`
+	RegistryPath    string        `yaml:"registry_path" mapstructure:"registry_path"`
+	EnableMetrics   bool          `yaml:"enable_metrics" mapstructure:"enable_metrics"`
+	
+	// Directory creation behavior
+	DirectoryOptions DirectoryCreationOptions `yaml:"directory_options" mapstructure:"directory_options"`
+}
+
+// DefaultVFSConfig returns default VFS configuration
+func DefaultVFSConfig() *VFSConfig {
+	return &VFSConfig{
+		CacheDir:     "./data/vfs_cache",
+		CacheTimeout: 10 * time.Minute,
+		MaxCacheSize: 100 * 1024 * 1024, // 100MB
+		RegistryPath: "/system/path_registry.json",
+		EnableMetrics: true,
+		DirectoryOptions: DefaultDirectoryOptions(), // User-friendly auto-creation by default
+	}
+}
+
+// VFSFileInfo represents information about a file in the VFS
+type VFSFileInfo struct {
+	Path        string            `json:"path"`
+	ContentHash string            `json:"content_hash"`
+	Size        int64             `json:"size"`
+	ContentType string            `json:"content_type"`
+	CreatedAt   time.Time         `json:"created_at"`
+	ModifiedAt  time.Time         `json:"modified_at"`
+	CreatedBy   string            `json:"created_by"`
+	Metadata    map[string]string `json:"metadata"`
+	IsDirectory bool              `json:"is_directory"`
+}
+
+// PathRegistry stores mappings from paths to content hashes
+type PathRegistry struct {
+	Mappings map[string]VFSFileInfo `json:"mappings"`
+	Updated  time.Time              `json:"updated"`
+	Version  int64                  `json:"version"`
+}
+
+// DirectoryListing represents the contents of a directory
+type DirectoryListing struct {
+	Path    string                 `json:"path"`
+	Entries map[string]VFSFileInfo `json:"entries"`
+	Updated time.Time              `json:"updated"`
+}
+
+// NewVirtualFilesystem creates a new VFS instance
+func NewVirtualFilesystem(storage Service, config *VFSConfig, logger zerolog.Logger) (*VirtualFilesystem, error) {
+	if config == nil {
+		config = DefaultVFSConfig()
+	}
+	
+	vfs := &VirtualFilesystem{
+		logger:       logger.With().Str("component", "vfs").Logger(),
+		config:       config,
+		storage:      storage,
+		registryPath: config.RegistryPath,
+	}
+	
+	return vfs, nil
+}
+
+// Start initializes the VFS
+func (vfs *VirtualFilesystem) Start(ctx context.Context) error {
+	vfs.mu.Lock()
+	defer vfs.mu.Unlock()
+	
+	if vfs.started {
+		return fmt.Errorf("VFS already started")
+	}
+	
+	// Create cache directory
+	if err := os.MkdirAll(vfs.config.CacheDir, 0755); err != nil {
+		return fmt.Errorf("failed to create cache directory: %w", err)
+	}
+	
+	// Open BadgerDB for caching
+	opts := badger.DefaultOptions(vfs.config.CacheDir).
+		WithSyncWrites(false). // Cache can be lossy
+		WithLogger(newVFSBadgerLogger(vfs.logger))
+		
+	cache, err := badger.Open(opts)
+	if err != nil {
+		return fmt.Errorf("failed to open VFS cache: %w", err)
+	}
+	vfs.cache = cache
+	
+	// Initialize path registry if it doesn't exist
+	if err := vfs.initializePathRegistry(ctx); err != nil {
+		return fmt.Errorf("failed to initialize path registry: %w", err)
+	}
+	
+	vfs.started = true
+	vfs.logger.Info().Msg("Virtual filesystem started")
+	
+	return nil
+}
+
+// IsStarted returns whether the VFS is currently started
+func (vfs *VirtualFilesystem) IsStarted() bool {
+	vfs.mu.RLock()
+	defer vfs.mu.RUnlock()
+	return vfs.started
+}
+
+// Stop shuts down the VFS
+func (vfs *VirtualFilesystem) Stop(ctx context.Context) error {
+	vfs.mu.Lock()
+	defer vfs.mu.Unlock()
+	
+	if !vfs.started {
+		return nil
+	}
+	
+	if vfs.cache != nil {
+		if err := vfs.cache.Close(); err != nil {
+			vfs.logger.Warn().Err(err).Msg("Error closing VFS cache")
+		}
+	}
+	
+	vfs.started = false
+	vfs.logger.Info().Msg("Virtual filesystem stopped")
+	
+	return nil
+}
+
+// WriteFile stores content at the specified path
+func (vfs *VirtualFilesystem) WriteFile(ctx context.Context, path string, data []byte, metadata map[string]string) error {
+	if !vfs.started {
+		return fmt.Errorf("VFS not started")
+	}
+	
+	// Validate path
+	if err := vfs.validatePath(path); err != nil {
+		return fmt.Errorf("invalid path: %w", err)
+	}
+	
+	// Store content in underlying storage
+	reader := strings.NewReader(string(data))
+	contentCID, err := vfs.storage.Store(ctx, reader)
+	if err != nil {
+		return fmt.Errorf("failed to store content: %w", err)
+	}
+	
+	// Create file info
+	fileInfo := VFSFileInfo{
+		Path:        path,
+		ContentHash: string(contentCID),
+		Size:        int64(len(data)),
+		ContentType: detectContentType(path, data),
+		CreatedAt:   time.Now(),
+		ModifiedAt:  time.Now(),
+		Metadata:    metadata,
+		IsDirectory: false,
+	}
+	
+	// Update path registry
+	if err := vfs.updatePathRegistry(ctx, path, fileInfo); err != nil {
+		return fmt.Errorf("failed to update path registry: %w", err)
+	}
+	
+	// Update directory listings
+	if err := vfs.updateDirectoryListings(ctx, path, fileInfo); err != nil {
+		return fmt.Errorf("failed to update directory listings: %w", err)
+	}
+	
+	// Cache locally
+	vfs.cacheFileInfo(path, fileInfo)
+	vfs.cacheContent(string(contentCID), data)
+	
+	vfs.logger.Info().
+		Str("path", path).
+		Str("content_hash", string(contentCID)).
+		Int("size", len(data)).
+		Msg("File written to VFS")
+	
+	return nil
+}
+
+// ReadFile retrieves content from the specified path
+func (vfs *VirtualFilesystem) ReadFile(ctx context.Context, path string) ([]byte, error) {
+	if !vfs.started {
+		return nil, fmt.Errorf("VFS not started")
+	}
+	
+	// Check local cache first
+	if data, found := vfs.getCachedContent(path); found {
+		return data, nil
+	}
+	
+	// Get file info from path registry
+	fileInfo, err := vfs.getFileInfo(ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("file not found: %w", err)
+	}
+	
+	if fileInfo.IsDirectory {
+		return nil, fmt.Errorf("path is a directory: %s", path)
+	}
+	
+	// Check cache by content hash
+	if data, found := vfs.getCachedContentByHash(fileInfo.ContentHash); found {
+		return data, nil
+	}
+	
+	// Retrieve from storage
+	reader, err := vfs.storage.Retrieve(ctx, ContentCID(fileInfo.ContentHash))
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve content: %w", err)
+	}
+	defer reader.Close()
+	
+	// Read all data
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read content: %w", err)
+	}
+	
+	// Cache for future use
+	vfs.cacheContent(fileInfo.ContentHash, data)
+	
+	vfs.logger.Debug().
+		Str("path", path).
+		Str("content_hash", fileInfo.ContentHash).
+		Int("size", len(data)).
+		Msg("File read from VFS")
+	
+	return data, nil
+}
+
+// ListDir returns the contents of a directory
+func (vfs *VirtualFilesystem) ListDir(ctx context.Context, path string) ([]VFSFileInfo, error) {
+	if !vfs.started {
+		return nil, fmt.Errorf("VFS not started")
+	}
+	
+	// Normalize directory path
+	dirPath := vfs.normalizePath(path)
+	if !strings.HasSuffix(dirPath, "/") {
+		dirPath += "/"
+	}
+	
+	// Check cache first
+	if listing, found := vfs.getCachedDirectoryListing(dirPath); found {
+		return vfs.convertListingToFileInfos(listing), nil
+	}
+	
+	// Get all files from path registry and filter by directory
+	registry, err := vfs.loadPathRegistry(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load path registry: %w", err)
+	}
+	
+	var entries []VFSFileInfo
+	for filePath, fileInfo := range registry.Mappings {
+		if strings.HasPrefix(filePath, dirPath) {
+			// Check if this is a direct child (not nested)
+			relativePath := strings.TrimPrefix(filePath, dirPath)
+			if !strings.Contains(relativePath, "/") || 
+			   (strings.Contains(relativePath, "/") && strings.HasSuffix(relativePath, "/")) {
+				entries = append(entries, fileInfo)
+			}
+		}
+	}
+	
+	// Cache the result
+	listing := DirectoryListing{
+		Path:    dirPath,
+		Entries: make(map[string]VFSFileInfo),
+		Updated: time.Now(),
+	}
+	for _, entry := range entries {
+		name := filepath.Base(entry.Path)
+		listing.Entries[name] = entry
+	}
+	vfs.cacheDirectoryListing(dirPath, listing)
+	
+	return entries, nil
+}
+
+// Exists checks if a path exists
+func (vfs *VirtualFilesystem) Exists(ctx context.Context, path string) bool {
+	_, err := vfs.getFileInfo(ctx, path)
+	return err == nil
+}
+
+// Stat returns file information for a path
+func (vfs *VirtualFilesystem) Stat(ctx context.Context, path string) (*VFSFileInfo, error) {
+	return vfs.getFileInfo(ctx, path)
+}
+
+// Delete removes a file or directory
+func (vfs *VirtualFilesystem) Delete(ctx context.Context, path string) error {
+	if !vfs.started {
+		return fmt.Errorf("VFS not started")
+	}
+	
+	fileInfo, err := vfs.getFileInfo(ctx, path)
+	if err != nil {
+		return fmt.Errorf("file not found: %w", err)
+	}
+	
+	// Remove from path registry
+	if err := vfs.removeFromPathRegistry(ctx, path); err != nil {
+		return fmt.Errorf("failed to remove from path registry: %w", err)
+	}
+	
+	// Update directory listings
+	if err := vfs.removeFromDirectoryListings(ctx, path); err != nil {
+		return fmt.Errorf("failed to update directory listings: %w", err)
+	}
+	
+	// Remove from cache
+	vfs.removeCachedContent(path)
+	vfs.removeCachedContent(fileInfo.ContentHash)
+	
+	// Note: We don't delete from underlying storage as content might be referenced elsewhere
+	
+	vfs.logger.Info().
+		Str("path", path).
+		Str("content_hash", fileInfo.ContentHash).
+		Msg("File deleted from VFS")
+	
+	return nil
+}
+
+// Helper methods will be implemented in the next file...
+
+// validatePath ensures the path is valid
+func (vfs *VirtualFilesystem) validatePath(path string) error {
+	if path == "" {
+		return fmt.Errorf("path cannot be empty")
+	}
+	if !strings.HasPrefix(path, "/") {
+		return fmt.Errorf("path must start with /")
+	}
+	if strings.Contains(path, "..") {
+		return fmt.Errorf("path cannot contain ..")
+	}
+	return nil
+}
+
+// normalizePath cleans up a path
+func (vfs *VirtualFilesystem) normalizePath(path string) string {
+	return filepath.Clean(path)
+}
+
+// detectContentType determines content type from path and data
+func detectContentType(path string, data []byte) string {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".json":
+		return "application/json"
+	case ".yaml", ".yml":
+		return "application/yaml"
+	case ".txt":
+		return "text/plain"
+	case ".md":
+		return "text/markdown"
+	default:
+		return "application/octet-stream"
+	}
+}
+
+// VFS BadgerDB logger adapter
+type vfsBadgerLogger struct {
+	logger zerolog.Logger
+}
+
+func newVFSBadgerLogger(logger zerolog.Logger) *vfsBadgerLogger {
+	return &vfsBadgerLogger{
+		logger: logger.With().Str("component", "vfs_badger").Logger(),
+	}
+}
+
+func (l *vfsBadgerLogger) Errorf(f string, v ...interface{}) {
+	l.logger.Error().Msgf(f, v...)
+}
+
+func (l *vfsBadgerLogger) Warningf(f string, v ...interface{}) {
+	l.logger.Warn().Msgf(f, v...)
+}
+
+func (l *vfsBadgerLogger) Infof(f string, v ...interface{}) {
+	l.logger.Info().Msgf(f, v...)
+}
+
+func (l *vfsBadgerLogger) Debugf(f string, v ...interface{}) {
+	l.logger.Debug().Msgf(f, v...)
+}

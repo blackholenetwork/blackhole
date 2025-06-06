@@ -1,0 +1,119 @@
+package storage
+
+import (
+	"crypto/sha256"
+	"encoding/binary"
+	"sync"
+)
+
+const (
+	// Virtual bucket system constants from architecture
+	TotalBuckets       = 65536 // 2^16 buckets
+	PositionsPerBucket = 65536 // 2^16 positions per bucket
+	TotalPositions     = TotalBuckets * PositionsPerBucket // 4,294,967,296 total positions
+)
+
+// SimpleBucketSystem provides the core virtual bucket functionality
+type SimpleBucketSystem struct {
+	mutex sync.RWMutex
+}
+
+// StorageLocation represents possible storage locations for a chunk
+type StorageLocation struct {
+	Primary   Position `json:"primary"`
+	Secondary Position `json:"secondary"`
+	Tertiary  Position `json:"tertiary"`
+}
+
+// Position represents a specific storage position
+type Position struct {
+	Bucket   BucketID       `json:"bucket"`
+	Position PositionID     `json:"position"`
+	Global   GlobalPosition `json:"global"`
+}
+
+// BucketID represents a virtual bucket identifier (0-65535)
+type BucketID uint16
+
+// PositionID represents a position within a bucket (0-65535)
+type PositionID uint16
+
+// GlobalPosition represents a global position across all buckets
+type GlobalPosition uint64
+
+// BucketSystemStats provides basic statistics
+type BucketSystemStats struct {
+	TotalBuckets         int     `json:"total_buckets"`
+	PositionsPerBucket   int     `json:"positions_per_bucket"`
+	TotalPositions       int     `json:"total_positions"`
+	ClaimedPositions     int     `json:"claimed_positions"`
+	PositionUtilization  float64 `json:"position_utilization"`
+	ActiveBuckets        int     `json:"active_buckets"`
+	TotalNodes           int     `json:"total_nodes"`
+	NodeClaimedPositions int     `json:"node_claimed_positions"`
+	NodeUtilization      float64 `json:"node_utilization"`
+	NodeReputation       float64 `json:"node_reputation"`
+}
+
+// NewSimpleBucketSystem creates a new simple bucket system
+func NewSimpleBucketSystem() *SimpleBucketSystem {
+	return &SimpleBucketSystem{}
+}
+
+// GetStorageLocations returns deterministic storage locations for a chunk
+// This implements the core requirement from the architecture: primary/secondary/tertiary locations
+func (sbs *SimpleBucketSystem) GetStorageLocations(chunkID ChunkCID) StorageLocation {
+	// Convert chunkID to string for hashing
+	chunkStr := string(chunkID)
+	
+	return StorageLocation{
+		Primary:   sbs.hashToPosition(chunkStr + "primary"),
+		Secondary: sbs.hashToPosition(chunkStr + "secondary"),
+		Tertiary:  sbs.hashToPosition(chunkStr + "tertiary"),
+	}
+}
+
+// hashToPosition converts a string to a deterministic position
+func (sbs *SimpleBucketSystem) hashToPosition(input string) Position {
+	hash := sha256.Sum256([]byte(input))
+	
+	// Use first 8 bytes for global position
+	globalPos := binary.BigEndian.Uint64(hash[:8]) % TotalPositions
+	
+	// Calculate bucket and position within bucket
+	bucket := BucketID(globalPos / PositionsPerBucket)
+	position := PositionID(globalPos % PositionsPerBucket)
+	
+	return Position{
+		Bucket:   bucket,
+		Position: position,
+		Global:   GlobalPosition(globalPos),
+	}
+}
+
+// GetBucketForChunk returns the primary bucket for a chunk
+func (sbs *SimpleBucketSystem) GetBucketForChunk(chunkID ChunkCID) BucketID {
+	locations := sbs.GetStorageLocations(chunkID)
+	return locations.Primary.Bucket
+}
+
+// GetBucketSystemStats returns basic statistics
+func (sbs *SimpleBucketSystem) GetBucketSystemStats() BucketSystemStats {
+	return BucketSystemStats{
+		TotalBuckets:       TotalBuckets,
+		PositionsPerBucket: PositionsPerBucket,
+		TotalPositions:     TotalPositions,
+		ClaimedPositions:   0, // Will be implemented later
+		PositionUtilization: 0.0,
+		ActiveBuckets:      0,
+		TotalNodes:         0,
+		NodeClaimedPositions: 0,
+		NodeUtilization:    0.0,
+		NodeReputation:     0.0,
+	}
+}
+
+// Placeholder for future advanced features
+type NodeInfo struct {
+	ID string `json:"id"`
+}

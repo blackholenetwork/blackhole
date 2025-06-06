@@ -1,0 +1,528 @@
+package incentive
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/rs/zerolog"
+)
+
+// RealTimeAppDeveloperDistributor handles per-second distribution of app developer rewards
+type RealTimeAppDeveloperDistributor struct {
+	mu                    sync.RWMutex
+	logger                zerolog.Logger
+	config                *Config
+	
+	// App developer pool management
+	appDeveloperPool      float64  // Accumulated 2.5% app developer funds to distribute
+	lastDistributionTime  time.Time
+	
+	// Current app usage tracking (per second)
+	currentAppUsage       map[string]*AppUsageRealTime
+	
+	// Per-second distribution results
+	distributionHistory   []*AppDeveloperDistribution
+	maxHistorySize        int
+	
+	// Developer reward accumulation
+	developerRewards      map[string]float64 // developerID -> accumulated rewards
+	
+	// Control
+	started               bool
+	stopChan              chan struct{}
+	wg                    sync.WaitGroup
+}
+
+// AppUsageRealTime tracks real-time app usage per second
+type AppUsageRealTime struct {
+	DeveloperID           string    `json:"developer_id"`
+	AppID                 string    `json:"app_id"`
+	AppName               string    `json:"app_name"`
+	LastUpdateTime        time.Time `json:"last_update_time"`
+	
+	// Usage time tracking (seconds per second - concurrent users)
+	ActiveUserTimePerSecond float64 `json:"active_user_time_per_second"` // Total user-seconds this second
+	
+	// App quality and engagement factors
+	UserRetentionRate     float64 `json:"user_retention_rate"`    // 0-1 based on user retention
+	AppRating             float64 `json:"app_rating"`             // 0-5 user rating
+	QualityMultiplier     float64 `json:"quality_multiplier"`     // Calculated from retention + rating
+	
+	// Total usage value per second
+	TotalUsageValue       float64 `json:"total_usage_value"`
+	
+	// Activity tracking
+	IsActive              bool      `json:"is_active"`
+	LastActivityTime      time.Time `json:"last_activity_time"`
+}
+
+// AppDeveloperDistribution represents a single second's app developer distribution result
+type AppDeveloperDistribution struct {
+	Timestamp             time.Time            `json:"timestamp"`
+	AppDeveloperAmount    float64              `json:"app_developer_amount"`
+	TotalUsageValue       float64              `json:"total_usage_value"`
+	DeveloperRewards      map[string]float64   `json:"developer_rewards"`
+	ActiveDevelopers      []string             `json:"active_developers"`
+	UsageBreakdown        *AppUsageBreakdown   `json:"usage_breakdown"`
+}
+
+// AppUsageBreakdown provides detailed app usage statistics
+type AppUsageBreakdown struct {
+	TotalActiveUsers      float64 `json:"total_active_users"`
+	TotalAppCount         int     `json:"total_app_count"`
+	AverageRating         float64 `json:"average_rating"`
+	AverageRetention      float64 `json:"average_retention"`
+	TopAppsByUsage        []TopAppInfo `json:"top_apps_by_usage"`
+}
+
+// TopAppInfo represents top app information
+type TopAppInfo struct {
+	AppID       string  `json:"app_id"`
+	AppName     string  `json:"app_name"`
+	DeveloperID string  `json:"developer_id"`
+	UsageTime   float64 `json:"usage_time"`
+	UserCount   int     `json:"user_count"`
+}
+
+// NewRealTimeAppDeveloperDistributor creates a new real-time app developer distributor
+func NewRealTimeAppDeveloperDistributor(config *Config, logger zerolog.Logger) *RealTimeAppDeveloperDistributor {
+	return &RealTimeAppDeveloperDistributor{
+		logger:              logger.With().Str("component", "realtime_app_developer_distributor").Logger(),
+		config:              config,
+		currentAppUsage:     make(map[string]*AppUsageRealTime),
+		distributionHistory: make([]*AppDeveloperDistribution, 0),
+		maxHistorySize:      3600, // Keep 1 hour of history
+		developerRewards:    make(map[string]float64),
+		stopChan:            make(chan struct{}),
+	}
+}
+
+// Start begins the real-time app developer distribution
+func (rtadd *RealTimeAppDeveloperDistributor) Start(ctx context.Context) error {
+	rtadd.mu.Lock()
+	defer rtadd.mu.Unlock()
+	
+	if rtadd.started {
+		return fmt.Errorf("real-time app developer distributor already started")
+	}
+	
+	rtadd.logger.Info().Msg("Starting real-time app developer distributor")
+	
+	// Start per-second distribution worker
+	rtadd.wg.Add(1)
+	go rtadd.distributionWorker(ctx)
+	
+	// Start app usage cleanup worker
+	rtadd.wg.Add(1)
+	go rtadd.cleanupWorker(ctx)
+	
+	rtadd.started = true
+	rtadd.logger.Info().Msg("Real-time app developer distributor started")
+	
+	return nil
+}
+
+// Stop stops the real-time app developer distributor
+func (rtadd *RealTimeAppDeveloperDistributor) Stop(ctx context.Context) error {
+	rtadd.mu.Lock()
+	defer rtadd.mu.Unlock()
+	
+	if !rtadd.started {
+		return nil
+	}
+	
+	rtadd.logger.Info().Msg("Stopping real-time app developer distributor")
+	
+	close(rtadd.stopChan)
+	rtadd.wg.Wait()
+	
+	rtadd.started = false
+	rtadd.logger.Info().Msg("Real-time app developer distributor stopped")
+	
+	return nil
+}
+
+// AddAppDeveloperFunds adds funds to the app developer pool for distribution
+func (rtadd *RealTimeAppDeveloperDistributor) AddAppDeveloperFunds(amount float64) {
+	rtadd.mu.Lock()
+	defer rtadd.mu.Unlock()
+	
+	rtadd.appDeveloperPool += amount
+	
+	rtadd.logger.Debug().
+		Float64("amount", amount).
+		Float64("total_pool", rtadd.appDeveloperPool).
+		Msg("App developer funds added")
+}
+
+// RecordAppUsage records real-time app usage
+func (rtadd *RealTimeAppDeveloperDistributor) RecordAppUsage(
+	developerID, appID, appName string,
+	activeUserTime float64,
+	userRetentionRate, appRating float64,
+) {
+	rtadd.mu.Lock()
+	defer rtadd.mu.Unlock()
+	
+	now := time.Now()
+	
+	// Create unique key for developer-app combination
+	key := fmt.Sprintf("%s:%s", developerID, appID)
+	
+	// Get or create app usage record
+	usage, exists := rtadd.currentAppUsage[key]
+	if !exists {
+		usage = &AppUsageRealTime{
+			DeveloperID: developerID,
+			AppID:       appID,
+			AppName:     appName,
+		}
+		rtadd.currentAppUsage[key] = usage
+	}
+	
+	// Update usage rates (per second)
+	usage.LastUpdateTime = now
+	usage.ActiveUserTimePerSecond = activeUserTime
+	usage.UserRetentionRate = userRetentionRate
+	usage.AppRating = appRating
+	usage.IsActive = true
+	usage.LastActivityTime = now
+	
+	// Calculate quality multiplier (0.5-2.0 range)
+	usage.QualityMultiplier = rtadd.calculateQualityMultiplier(userRetentionRate, appRating)
+	
+	// Calculate total usage value with quality multiplier
+	usage.TotalUsageValue = usage.ActiveUserTimePerSecond * usage.QualityMultiplier
+	
+	rtadd.logger.Debug().
+		Str("developer_id", developerID).
+		Str("app_id", appID).
+		Str("app_name", appName).
+		Float64("active_user_time", activeUserTime).
+		Float64("retention_rate", userRetentionRate).
+		Float64("app_rating", appRating).
+		Float64("quality_multiplier", usage.QualityMultiplier).
+		Float64("total_usage_value", usage.TotalUsageValue).
+		Msg("App usage recorded")
+}
+
+// calculateQualityMultiplier calculates quality multiplier based on retention and rating
+func (rtadd *RealTimeAppDeveloperDistributor) calculateQualityMultiplier(retentionRate, appRating float64) float64 {
+	// Normalize app rating from 0-5 to 0-1
+	normalizedRating := appRating / 5.0
+	
+	// Combine retention rate (0-1) and normalized rating (0-1)
+	qualityScore := (retentionRate * 0.6) + (normalizedRating * 0.4) // Weight retention more heavily
+	
+	// Convert to multiplier range 0.5-2.0
+	multiplier := 0.5 + (qualityScore * 1.5)
+	
+	// Ensure bounds
+	if multiplier < 0.5 {
+		multiplier = 0.5
+	}
+	if multiplier > 2.0 {
+		multiplier = 2.0
+	}
+	
+	return multiplier
+}
+
+// distributionWorker runs the per-second distribution process
+func (rtadd *RealTimeAppDeveloperDistributor) distributionWorker(ctx context.Context) {
+	defer rtadd.wg.Done()
+	
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-rtadd.stopChan:
+			return
+		case <-ticker.C:
+			rtadd.distributeAppDeveloperFunds()
+		}
+	}
+}
+
+// distributeAppDeveloperFunds distributes app developer funds based on current usage
+func (rtadd *RealTimeAppDeveloperDistributor) distributeAppDeveloperFunds() {
+	rtadd.mu.Lock()
+	defer rtadd.mu.Unlock()
+	
+	now := time.Now()
+	
+	if rtadd.appDeveloperPool <= 0 {
+		return // No funds to distribute
+	}
+	
+	// Calculate total usage value and aggregate by developer
+	developerUsageValues := make(map[string]float64)
+	totalUsageValue := 0.0
+	activeDevelopers := make(map[string]bool)
+	var usageBreakdown AppUsageBreakdown
+	topApps := []TopAppInfo{}
+	
+	for _, usage := range rtadd.currentAppUsage {
+		if usage.IsActive && time.Since(usage.LastActivityTime) < 5*time.Second {
+			// Aggregate usage value by developer
+			developerUsageValues[usage.DeveloperID] += usage.TotalUsageValue
+			totalUsageValue += usage.TotalUsageValue
+			activeDevelopers[usage.DeveloperID] = true
+			
+			// Accumulate breakdown stats
+			usageBreakdown.TotalActiveUsers += usage.ActiveUserTimePerSecond
+			usageBreakdown.TotalAppCount++
+			
+			// Track top apps
+			topApps = append(topApps, TopAppInfo{
+				AppID:       usage.AppID,
+				AppName:     usage.AppName,
+				DeveloperID: usage.DeveloperID,
+				UsageTime:   usage.ActiveUserTimePerSecond,
+				UserCount:   int(usage.ActiveUserTimePerSecond), // Approximate
+			})
+		}
+	}
+	
+	if totalUsageValue <= 0 {
+		// No active app usage - funds remain in pool
+		rtadd.logger.Debug().
+			Float64("app_developer_pool", rtadd.appDeveloperPool).
+			Msg("No active app usage - keeping funds in pool")
+		return
+	}
+	
+	// Calculate averages
+	if usageBreakdown.TotalAppCount > 0 {
+		var totalRating, totalRetention float64
+		activeAppCount := 0
+		
+		for _, usage := range rtadd.currentAppUsage {
+			if usage.IsActive && time.Since(usage.LastActivityTime) < 5*time.Second {
+				totalRating += usage.AppRating
+				totalRetention += usage.UserRetentionRate
+				activeAppCount++
+			}
+		}
+		
+		if activeAppCount > 0 {
+			usageBreakdown.AverageRating = totalRating / float64(activeAppCount)
+			usageBreakdown.AverageRetention = totalRetention / float64(activeAppCount)
+		}
+	}
+	
+	// Sort top apps by usage (simple sort for top 5)
+	if len(topApps) > 5 {
+		// Simple sort to get top 5 (could use proper sorting if needed)
+		usageBreakdown.TopAppsByUsage = topApps[:5]
+	} else {
+		usageBreakdown.TopAppsByUsage = topApps
+	}
+	
+	// Calculate distribution based on usage value ratios
+	distribution := &AppDeveloperDistribution{
+		Timestamp:          now,
+		AppDeveloperAmount: rtadd.appDeveloperPool,
+		TotalUsageValue:    totalUsageValue,
+		DeveloperRewards:   make(map[string]float64),
+		ActiveDevelopers:   make([]string, 0, len(activeDevelopers)),
+		UsageBreakdown:     &usageBreakdown,
+	}
+	
+	// Convert active developers map to slice
+	for developerID := range activeDevelopers {
+		distribution.ActiveDevelopers = append(distribution.ActiveDevelopers, developerID)
+	}
+	
+	// Distribute based on usage value ratios
+	for developerID, usageValue := range developerUsageValues {
+		// Calculate developer's share of the app developer pool
+		shareRatio := usageValue / totalUsageValue
+		developerReward := rtadd.appDeveloperPool * shareRatio
+		
+		distribution.DeveloperRewards[developerID] = developerReward
+		
+		// Accumulate developer rewards
+		rtadd.developerRewards[developerID] += developerReward
+		
+		rtadd.logger.Debug().
+			Str("developer_id", developerID).
+			Float64("usage_value", usageValue).
+			Float64("share_ratio", shareRatio).
+			Float64("reward", developerReward).
+			Msg("App developer reward calculated")
+	}
+	
+	// Add to distribution history
+	rtadd.distributionHistory = append(rtadd.distributionHistory, distribution)
+	if len(rtadd.distributionHistory) > rtadd.maxHistorySize {
+		rtadd.distributionHistory = rtadd.distributionHistory[1:]
+	}
+	
+	// Clear the app developer pool
+	rtadd.appDeveloperPool = 0
+	rtadd.lastDistributionTime = now
+	
+	rtadd.logger.Debug().
+		Int("active_developers", len(activeDevelopers)).
+		Float64("total_usage_value", totalUsageValue).
+		Float64("distributed_amount", distribution.AppDeveloperAmount).
+		Msg("App developer funds distributed")
+}
+
+// cleanupWorker removes inactive apps from tracking
+func (rtadd *RealTimeAppDeveloperDistributor) cleanupWorker(ctx context.Context) {
+	defer rtadd.wg.Done()
+	
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-rtadd.stopChan:
+			return
+		case <-ticker.C:
+			rtadd.cleanupInactiveApps()
+		}
+	}
+}
+
+// cleanupInactiveApps removes apps that haven't been active recently
+func (rtadd *RealTimeAppDeveloperDistributor) cleanupInactiveApps() {
+	rtadd.mu.Lock()
+	defer rtadd.mu.Unlock()
+	
+	inactiveThreshold := 60 * time.Second // 1 minute of inactivity
+	
+	for _, usage := range rtadd.currentAppUsage {
+		if time.Since(usage.LastActivityTime) > inactiveThreshold {
+			usage.IsActive = false
+			
+			rtadd.logger.Debug().
+				Str("developer_id", usage.DeveloperID).
+				Str("app_id", usage.AppID).
+				Time("last_activity", usage.LastActivityTime).
+				Msg("App marked as inactive")
+		}
+	}
+}
+
+// GetCurrentAppDeveloperPool returns the current app developer pool amount
+func (rtadd *RealTimeAppDeveloperDistributor) GetCurrentAppDeveloperPool() float64 {
+	rtadd.mu.RLock()
+	defer rtadd.mu.RUnlock()
+	
+	return rtadd.appDeveloperPool
+}
+
+// GetActiveApps returns current active apps and their usage
+func (rtadd *RealTimeAppDeveloperDistributor) GetActiveApps() map[string]*AppUsageRealTime {
+	rtadd.mu.RLock()
+	defer rtadd.mu.RUnlock()
+	
+	result := make(map[string]*AppUsageRealTime)
+	
+	for key, usage := range rtadd.currentAppUsage {
+		if usage.IsActive && time.Since(usage.LastActivityTime) < 30*time.Second {
+			usageCopy := *usage
+			result[key] = &usageCopy
+		}
+	}
+	
+	return result
+}
+
+// GetDeveloperRewards returns accumulated rewards for all developers
+func (rtadd *RealTimeAppDeveloperDistributor) GetDeveloperRewards() map[string]float64 {
+	rtadd.mu.RLock()
+	defer rtadd.mu.RUnlock()
+	
+	result := make(map[string]float64)
+	for developerID, reward := range rtadd.developerRewards {
+		result[developerID] = reward
+	}
+	
+	return result
+}
+
+// GetDistributionHistory returns recent distribution history
+func (rtadd *RealTimeAppDeveloperDistributor) GetDistributionHistory(limit int) []*AppDeveloperDistribution {
+	rtadd.mu.RLock()
+	defer rtadd.mu.RUnlock()
+	
+	if limit <= 0 || limit > len(rtadd.distributionHistory) {
+		limit = len(rtadd.distributionHistory)
+	}
+	
+	start := len(rtadd.distributionHistory) - limit
+	result := make([]*AppDeveloperDistribution, limit)
+	
+	for i := 0; i < limit; i++ {
+		distribution := rtadd.distributionHistory[start+i]
+		distCopy := *distribution
+		distCopy.DeveloperRewards = make(map[string]float64)
+		for k, v := range distribution.DeveloperRewards {
+			distCopy.DeveloperRewards[k] = v
+		}
+		result[i] = &distCopy
+	}
+	
+	return result
+}
+
+// GetStats returns real-time app developer distribution statistics
+func (rtadd *RealTimeAppDeveloperDistributor) GetStats() *RealTimeAppDeveloperStats {
+	rtadd.mu.RLock()
+	defer rtadd.mu.RUnlock()
+	
+	activeDevelopers := make(map[string]bool)
+	totalUsageValue := 0.0
+	totalActiveUsers := 0.0
+	
+	for _, usage := range rtadd.currentAppUsage {
+		if usage.IsActive && time.Since(usage.LastActivityTime) < 30*time.Second {
+			activeDevelopers[usage.DeveloperID] = true
+			totalUsageValue += usage.TotalUsageValue
+			totalActiveUsers += usage.ActiveUserTimePerSecond
+		}
+	}
+	
+	var totalDistributedToday float64
+	today := time.Now().Truncate(24 * time.Hour)
+	
+	for _, distribution := range rtadd.distributionHistory {
+		if distribution.Timestamp.After(today) {
+			totalDistributedToday += distribution.AppDeveloperAmount
+		}
+	}
+	
+	return &RealTimeAppDeveloperStats{
+		ActiveDevelopers:         len(activeDevelopers),
+		TotalActiveApps:          len(rtadd.currentAppUsage),
+		TotalUsageValue:          totalUsageValue,
+		TotalActiveUsers:         totalActiveUsers,
+		CurrentAppDeveloperPool:  rtadd.appDeveloperPool,
+		TotalDistributedToday:    totalDistributedToday,
+		LastDistribution:         rtadd.lastDistributionTime,
+		DistributionCount:        len(rtadd.distributionHistory),
+	}
+}
+
+// RealTimeAppDeveloperStats represents statistics for real-time app developer distribution
+type RealTimeAppDeveloperStats struct {
+	ActiveDevelopers        int       `json:"active_developers"`
+	TotalActiveApps         int       `json:"total_active_apps"`
+	TotalUsageValue         float64   `json:"total_usage_value"`
+	TotalActiveUsers        float64   `json:"total_active_users"`
+	CurrentAppDeveloperPool float64   `json:"current_app_developer_pool"`
+	TotalDistributedToday   float64   `json:"total_distributed_today"`
+	LastDistribution        time.Time `json:"last_distribution"`
+	DistributionCount       int       `json:"distribution_count"`
+}

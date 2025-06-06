@@ -1,0 +1,812 @@
+package storage
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"sort"
+	"time"
+)
+
+// Helper methods for CIDEnhancedStorageService
+
+// chunkContentToCIDs converts content into content-based chunks
+func (ces *CIDEnhancedStorageService) chunkContentToCIDs(content []byte) []*ContentBasedChunk {
+	var chunks []*ContentBasedChunk
+	
+	chunkSize := ces.cidSystem.chunkSize
+	for i := 0; i < len(content); i += chunkSize {
+		end := i + chunkSize
+		if end > len(content) {
+			end = len(content)
+		}
+		
+		chunkData := content[i:end]
+		chunkCID := ces.cidSystem.GenerateChunkCID(chunkData)
+		
+		chunk := &ContentBasedChunk{
+			CID:      chunkCID,
+			Data:     chunkData,
+			IsParity: false,
+		}
+		
+		chunks = append(chunks, chunk)
+	}
+	
+	return chunks
+}
+
+// storeChunkWithPositionClaiming stores a chunk and handles position claiming
+func (ces *CIDEnhancedStorageService) storeChunkWithPositionClaiming(chunk *ContentBasedChunk) error {
+	// Validate chunk
+	if !ces.cidSystem.ValidateChunk(chunk) {
+		return fmt.Errorf("chunk CID validation failed: %s", chunk.CID)
+	}
+	
+	// Get deterministic storage locations
+	locations := ces.cidSystem.DeriveStorageLocations(chunk.CID)
+	
+	// Handle position claiming for chunk storage
+	if err := ces.handleChunkPositionClaiming(chunk.CID, locations); err != nil {
+		ces.logger.Warn().Err(err).Str("chunk_cid", string(chunk.CID)).Msg("Position claiming failed")
+	}
+	
+	// Store the chunk directly (no conversion needed)
+	if err := ces.chunkStore.Store(chunk); err != nil {
+		return fmt.Errorf("failed to store chunk in chunk store: %w", err)
+	}
+	
+	// Record chunk access for health monitoring
+	ces.trackChunkAccess(chunk.CID)
+	
+	return nil
+}
+
+// handleChunkPositionClaiming handles position claiming for chunk storage
+func (ces *CIDEnhancedStorageService) handleChunkPositionClaiming(chunkCID ChunkCID, locations StorageLocation) error {
+	positions := []GlobalPosition{locations.Primary.Global, locations.Secondary.Global, locations.Tertiary.Global}
+	
+	for _, position := range positions {
+		// Check if position is claimed
+		if ownerID, claimed := ces.nodeManager.GetNodeForPosition(position); claimed {
+			// Position already claimed
+			if ownerID == ces.localNodeID {
+				// We own this position - perfect
+				ces.logger.Debug().
+					Str("chunk_cid", string(chunkCID)).
+					Uint64("position", uint64(position)).
+					Msg("Chunk maps to our owned position")
+				return nil
+			} else {
+				// Another node owns this position - could negotiate
+				ces.logger.Debug().
+					Str("chunk_cid", string(chunkCID)).
+					Uint64("position", uint64(position)).
+					Str("owner", string(ownerID)).
+					Msg("Chunk maps to position owned by another node")
+			}
+		} else {
+			// Position unclaimed - try to claim it
+			if ces.nodeManager.CanClaimMorePositions(ces.localNodeID) {
+				if err := ces.nodeManager.ClaimSpecificPosition(ces.localNodeID, position); err != nil {
+					ces.logger.Debug().Err(err).
+						Str("chunk_cid", string(chunkCID)).
+						Uint64("position", uint64(position)).
+						Msg("Failed to claim position for chunk")
+				} else {
+					ces.logger.Debug().
+						Str("chunk_cid", string(chunkCID)).
+						Uint64("position", uint64(position)).
+						Msg("Successfully claimed position for chunk")
+					return nil
+				}
+			}
+		}
+	}
+	
+	return nil // Not an error if we can't claim - chunk still gets stored locally
+}
+
+// generateAndStoreParityChunks generates and stores parity chunks using 10+3 erasure coding
+func (ces *CIDEnhancedStorageService) generateAndStoreParityChunks(dataChunks []*ContentBasedChunk, contentCID ContentCID, fileProps FileProperties) error {
+	blockSize := ces.cidSystem.blockSize
+	
+	for blockIdx := 0; blockIdx < fileProps.BlockCount; blockIdx++ {
+		start := blockIdx * blockSize
+		end := start + blockSize
+		if end > len(dataChunks) {
+			end = len(dataChunks)
+		}
+		
+		// Prepare data for erasure coding
+		blockData := make([][]byte, blockSize)
+		for i := 0; i < blockSize; i++ {
+			if start+i < len(dataChunks) {
+				blockData[i] = dataChunks[start+i].Data
+			} else {
+				blockData[i] = nil // Padding for incomplete blocks
+			}
+		}
+		
+		// Generate parity using erasure coding
+		coder, err := ces.erasureCoder.GetCoder(ces.config.Erasure.BaselineParityShards)
+		if err != nil {
+			return fmt.Errorf("failed to get erasure coder: %w", err)
+		}
+		
+		parityData, err := coder.Encode(blockData)
+		if err != nil {
+			return fmt.Errorf("failed to encode block %d: %w", blockIdx, err)
+		}
+		
+		// Create and store parity chunks
+		for i, parity := range parityData {
+			if parity != nil {
+				parityCID := ces.cidSystem.GenerateChunkCID(parity)
+				parityChunk := &ContentBasedChunk{
+					CID:      parityCID,
+					Data:     parity,
+					IsParity: true,
+				}
+				
+				if err := ces.storeChunkWithPositionClaiming(parityChunk); err != nil {
+					ces.logger.Warn().Err(err).
+						Str("parity_cid", string(parityCID)).
+						Int("block", blockIdx).
+						Int("parity_index", i).
+						Msg("Failed to store parity chunk")
+				}
+			}
+		}
+	}
+	
+	return nil
+}
+
+// reconstructContentFromCID reconstructs content from CID and streams it
+func (ces *CIDEnhancedStorageService) reconstructContentFromCID(cid ContentCID, writer io.Writer) error {
+	// Get chunk CIDs for this content
+	ctx := context.Background()
+	chunkCIDs, err := ces.getChunkCIDsForContent(ctx, cid)
+	if err != nil {
+		return fmt.Errorf("failed to get chunks for content CID %s: %w", cid, err)
+	}
+	if len(chunkCIDs) == 0 {
+		return fmt.Errorf("no chunks found for content CID: %s", cid)
+	}
+	
+	// Retrieve chunks in order
+	var chunks []*ContentBasedChunk
+	for _, chunkCID := range chunkCIDs {
+		chunk, err := ces.RetrieveChunk(nil, chunkCID)
+		if err != nil {
+			return fmt.Errorf("failed to retrieve chunk %s: %w", chunkCID, err)
+		}
+		chunks = append(chunks, chunk)
+	}
+	
+	// Write chunks in order to reconstruct file
+	for _, chunk := range chunks {
+		if _, err := writer.Write(chunk.Data); err != nil {
+			return fmt.Errorf("failed to write chunk data: %w", err)
+		}
+	}
+	
+	return nil
+}
+
+// getChunkCIDsForContent returns chunk CIDs for a content CID with enhanced discovery
+func (ces *CIDEnhancedStorageService) getChunkCIDsForContent(ctx context.Context, cid ContentCID) ([]ChunkCID, error) {
+	// Check cache first
+	ces.cacheMutex.RLock()
+	if chunkCIDs, exists := ces.cidChunkCache[cid]; exists {
+		ces.cacheMutex.RUnlock()
+		return chunkCIDs, nil
+	}
+	ces.cacheMutex.RUnlock()
+	
+	ces.logger.Debug().
+		Str("content_cid", string(cid)).
+		Msg("Cache miss - discovering chunks for content")
+	
+	var discoveredChunks []ChunkCID
+	
+	// Method 1: Scan local chunk store for chunks with matching parent content CID
+	localChunks, err := ces.discoverLocalChunks(ctx, cid)
+	if err != nil {
+		ces.logger.Warn().Err(err).Msg("Failed to discover local chunks")
+	} else {
+		discoveredChunks = append(discoveredChunks, localChunks...)
+	}
+	
+	// Method 2: Query network for chunks (if we have less than required for reconstruction)
+	if len(discoveredChunks) < ces.config.Erasure.BaselineDataShards {
+		networkChunks, err := ces.discoverNetworkChunks(ctx, cid)
+		if err != nil {
+			ces.logger.Debug().Err(err).Msg("Failed to discover network chunks")
+		} else {
+			// Merge and deduplicate
+			discoveredChunks = ces.mergeChunkCIDs(discoveredChunks, networkChunks)
+		}
+	}
+	
+	// Method 3: Derive expected chunk CIDs if we have metadata about the content
+	if len(discoveredChunks) == 0 {
+		derivedChunks, err := ces.deriveExpectedChunks(ctx, cid)
+		if err != nil {
+			ces.logger.Debug().Err(err).Msg("Failed to derive expected chunks")
+		} else {
+			discoveredChunks = derivedChunks
+		}
+	}
+	
+	// Cache the results if we found any chunks
+	if len(discoveredChunks) > 0 {
+		ces.cacheMutex.Lock()
+		ces.cidChunkCache[cid] = discoveredChunks
+		ces.cacheMutex.Unlock()
+		
+		ces.logger.Info().
+			Str("content_cid", string(cid)).
+			Int("discovered_chunks", len(discoveredChunks)).
+			Msg("Successfully discovered chunks for content")
+	}
+	
+	return discoveredChunks, nil
+}
+
+// discoverLocalChunks scans local storage for chunks belonging to a content CID
+func (ces *CIDEnhancedStorageService) discoverLocalChunks(ctx context.Context, cid ContentCID) ([]ChunkCID, error) {
+	var localChunks []ChunkCID
+	
+	// List all chunks in local storage
+	allChunks, err := ces.chunkStore.List()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list local chunks: %w", err)
+	}
+	
+	// Filter chunks that belong to this content
+	for _, chunkCID := range allChunks {
+		_, err := ces.chunkStore.Retrieve(chunkCID)
+		if err != nil {
+			continue
+		}
+		
+		// For now, we'll add all chunks since we don't have parent tracking
+		// In practice, we'd need metadata to associate chunks with content
+		localChunks = append(localChunks, chunkCID)
+	}
+	
+	return localChunks, nil
+}
+
+// discoverNetworkChunks queries the network for chunks of a content CID
+func (ces *CIDEnhancedStorageService) discoverNetworkChunks(ctx context.Context, cid ContentCID) ([]ChunkCID, error) {
+	var networkChunks []ChunkCID
+	
+	// Use the deterministic placement to find where chunks should be stored
+	// For each potential chunk, calculate where it should be and query those nodes
+	
+	// Generate potential chunk CIDs based on content structure
+	// This is a simplified approach - in practice we'd use DHT or other discovery mechanisms
+	potentialChunks := ces.generatePotentialChunkCIDs(cid)
+	
+	for _, chunkCID := range potentialChunks {
+		// Find nodes that should have this chunk
+		nodes, err := ces.FindChunkNodes(chunkCID)
+		if err != nil {
+			continue
+		}
+		
+		// Query each node to see if they have the chunk
+		for _, node := range nodes {
+			if ces.queryNodeForChunk(ctx, node, chunkCID) {
+				networkChunks = append(networkChunks, chunkCID)
+				break // Found it, move to next chunk
+			}
+		}
+	}
+	
+	return networkChunks, nil
+}
+
+// deriveExpectedChunks attempts to derive chunk CIDs from content structure
+func (ces *CIDEnhancedStorageService) deriveExpectedChunks(ctx context.Context, cid ContentCID) ([]ChunkCID, error) {
+	// This would involve recreating the chunking process to predict chunk CIDs
+	// For now, return empty - this is a complex operation that would require
+	// either the original content or sophisticated metadata
+	return []ChunkCID{}, nil
+}
+
+// generatePotentialChunkCIDs creates potential chunk CIDs based on content patterns
+func (ces *CIDEnhancedStorageService) generatePotentialChunkCIDs(cid ContentCID) []ChunkCID {
+	// This is a placeholder for sophisticated chunk CID generation
+	// In practice, this would use patterns or metadata to predict likely chunk CIDs
+	return []ChunkCID{}
+}
+
+// queryNodeForChunk checks if a specific node has a chunk
+func (ces *CIDEnhancedStorageService) queryNodeForChunk(ctx context.Context, node *NodeInfo, chunkCID ChunkCID) bool {
+	// This would make an actual network request to the node
+	// For now, return false as this requires network protocol implementation
+	return false
+}
+
+// mergeChunkCIDs combines and deduplicates chunk CID slices
+func (ces *CIDEnhancedStorageService) mergeChunkCIDs(slice1, slice2 []ChunkCID) []ChunkCID {
+	seen := make(map[ChunkCID]bool)
+	var result []ChunkCID
+	
+	// Add all from first slice
+	for _, cid := range slice1 {
+		if !seen[cid] {
+			seen[cid] = true
+			result = append(result, cid)
+		}
+	}
+	
+	// Add unique ones from second slice
+	for _, cid := range slice2 {
+		if !seen[cid] {
+			seen[cid] = true
+			result = append(result, cid)
+		}
+	}
+	
+	return result
+}
+
+// trackContentAccess tracks access to content for operational optimization
+func (ces *CIDEnhancedStorageService) trackContentAccess(cid ContentCID) {
+	ces.accessMutex.Lock()
+	defer ces.accessMutex.Unlock()
+	
+	ces.accessTracker.lastAccess[cid] = time.Now()
+	ces.accessTracker.accessCount[cid]++
+}
+
+// trackChunkAccess tracks access to chunks for health monitoring
+func (ces *CIDEnhancedStorageService) trackChunkAccess(chunkCID ChunkCID) {
+	ces.accessMutex.Lock()
+	defer ces.accessMutex.Unlock()
+	
+	ces.accessTracker.chunkAccess[chunkCID] = time.Now()
+}
+
+// Implement remaining Service interface methods
+
+// StoreChunk stores a single content-based chunk
+func (ces *CIDEnhancedStorageService) StoreChunk(ctx context.Context, chunk *ContentBasedChunk) error {
+	return ces.storeChunkWithPositionClaiming(chunk)
+}
+
+// RetrieveChunk retrieves a single chunk by CID
+func (ces *CIDEnhancedStorageService) RetrieveChunk(ctx context.Context, chunkCID ChunkCID) (*ContentBasedChunk, error) {
+	// Track access
+	ces.trackChunkAccess(chunkCID)
+	
+	// Retrieve from chunk store
+	chunk, err := ces.chunkStore.Retrieve(chunkCID)
+	if err != nil {
+		return nil, fmt.Errorf("chunk not found: %s", chunkCID)
+	}
+	
+	// Validate chunk
+	if !ces.cidSystem.ValidateChunk(chunk) {
+		return nil, fmt.Errorf("chunk validation failed: %s", chunkCID)
+	}
+	
+	return chunk, nil
+}
+
+// HasChunk checks if a chunk exists by CID
+func (ces *CIDEnhancedStorageService) HasChunk(ctx context.Context, chunkCID ChunkCID) bool {
+	return ces.chunkStore.Has(chunkCID)
+}
+
+// ListChunks lists all stored chunk CIDs
+func (ces *CIDEnhancedStorageService) ListChunks(ctx context.Context) ([]ChunkCID, error) {
+	return ces.chunkStore.List()
+}
+
+// EncodeBlock encodes a block of chunks
+func (ces *CIDEnhancedStorageService) EncodeBlock(ctx context.Context, chunks [][]byte) (*EncodedBlock, error) {
+	coder, err := ces.erasureCoder.GetCoder(ces.config.Erasure.BaselineParityShards)
+	if err != nil {
+		return nil, err
+	}
+	
+	parityData, err := coder.Encode(chunks)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Generate CIDs for data and parity chunks
+	dataChunkCIDs := make([]ChunkCID, len(chunks))
+	for i, data := range chunks {
+		if data != nil {
+			dataChunkCIDs[i] = ces.cidSystem.GenerateChunkCID(data)
+		}
+	}
+	
+	parityChunkCIDs := make([]ChunkCID, len(parityData))
+	for i, parity := range parityData {
+		if parity != nil {
+			parityChunkCIDs[i] = ces.cidSystem.GenerateChunkCID(parity)
+		}
+	}
+	
+	block := &EncodedBlock{
+		DataChunks:   dataChunkCIDs,
+		ParityChunks: parityChunkCIDs,
+		DataShards:   len(chunks),
+		ParityShards: len(parityData),
+	}
+	
+	return block, nil
+}
+
+// DecodeBlock decodes a block from available shards
+func (ces *CIDEnhancedStorageService) DecodeBlock(ctx context.Context, block *EncodedBlock) ([][]byte, error) {
+	ces.logger.Info().
+		Str("content_cid", string(block.ContentCID)).
+		Int("block_index", block.BlockIndex).
+		Int("data_shards", block.DataShards).
+		Int("parity_shards", block.ParityShards).
+		Msg("Decoding block from available shards")
+
+	// Collect all available chunk data (data + parity)
+	var shardIndexes []int
+	shardMap := make(map[int][]byte)
+
+	// Try to retrieve data chunks first
+	for i, chunkCID := range block.DataChunks {
+		chunk, err := ces.RetrieveChunk(ctx, chunkCID)
+		if err != nil {
+			ces.logger.Debug().
+				Err(err).
+				Str("chunk_cid", string(chunkCID)).
+				Int("shard_index", i).
+				Msg("Data chunk not available locally")
+			continue
+		}
+		shardMap[i] = chunk.Data
+		shardIndexes = append(shardIndexes, i)
+	}
+
+	// Try to retrieve parity chunks if needed
+	for i, chunkCID := range block.ParityChunks {
+		if len(shardIndexes) >= block.DataShards {
+			// We have enough shards to decode
+			break
+		}
+		
+		chunk, err := ces.RetrieveChunk(ctx, chunkCID)
+		if err != nil {
+			ces.logger.Debug().
+				Err(err).
+				Str("chunk_cid", string(chunkCID)).
+				Int("shard_index", block.DataShards+i).
+				Msg("Parity chunk not available locally")
+			continue
+		}
+		
+		parityIndex := block.DataShards + i
+		shardMap[parityIndex] = chunk.Data
+		shardIndexes = append(shardIndexes, parityIndex)
+	}
+
+	// Check if we have enough shards to decode
+	if len(shardIndexes) < block.DataShards {
+		return nil, fmt.Errorf("insufficient shards for decoding: have %d, need %d", 
+			len(shardIndexes), block.DataShards)
+	}
+
+	// Prepare shards in the format expected by erasure coder
+	totalShards := block.DataShards + block.ParityShards
+	allShards := make([][]byte, totalShards)
+	
+	for index, data := range shardMap {
+		if index < totalShards {
+			allShards[index] = data
+		}
+	}
+
+	// Create erasure coder for this specific block configuration
+	coder, err := ces.erasureCoder.GetCoder(block.ParityShards)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get erasure coder: %w", err)
+	}
+
+	// Prepare shards presence array
+	shardsPresent := make([]bool, totalShards)
+	for index := range shardMap {
+		if index < totalShards {
+			shardsPresent[index] = true
+		}
+	}
+
+	// Use erasure coding to reconstruct missing data
+	dataShards, err := coder.Decode(allShards, shardsPresent)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode shards: %w", err)
+	}
+
+	ces.logger.Info().
+		Str("content_cid", string(block.ContentCID)).
+		Int("block_index", block.BlockIndex).
+		Int("decoded_shards", len(dataShards)).
+		Msg("Successfully decoded block")
+
+	return dataShards, nil
+}
+
+// GenerateParity generates additional parity chunks for content
+func (ces *CIDEnhancedStorageService) GenerateParity(ctx context.Context, cid ContentCID, count int) ([]ChunkCID, error) {
+	ces.logger.Info().
+		Str("content_cid", string(cid)).
+		Int("parity_count", count).
+		Msg("Generating additional parity chunks")
+
+	// Get existing content info
+	_, err := ces.GetContentInfo(ctx, cid)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get content info: %w", err)
+	}
+
+	// Retrieve original data chunks for this content
+	dataChunks, err := ces.getDataChunksForContent(ctx, cid)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve data chunks: %w", err)
+	}
+
+	if len(dataChunks) == 0 {
+		return nil, fmt.Errorf("no data chunks found for content %s", cid)
+	}
+
+	// Convert chunk data to byte slices for erasure coding
+	var dataShards [][]byte
+	for _, chunk := range dataChunks {
+		dataShards = append(dataShards, chunk.Data)
+	}
+
+	// Create erasure coder for generating additional parity
+	coder, err := ces.erasureCoder.GetCoder(count)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get erasure coder: %w", err)
+	}
+
+	// Generate new parity shards using erasure coding
+	parityShards, err := coder.Encode(dataShards)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate parity shards: %w", err)
+	}
+
+	// Store the new parity chunks and get their CIDs
+	var newParityCIDs []ChunkCID
+	for i, parityData := range parityShards {
+		if parityData == nil {
+			continue
+		}
+
+		// Create parity chunk with simplified structure
+		parityChunk := &ContentBasedChunk{
+			CID:      ces.cidSystem.GenerateChunkCID(parityData),
+			Data:     parityData,
+			IsParity: true,
+		}
+
+		// Store the parity chunk
+		err = ces.StoreChunk(ctx, parityChunk)
+		if err != nil {
+			ces.logger.Warn().
+				Err(err).
+				Str("parity_cid", string(parityChunk.CID)).
+				Msg("Failed to store parity chunk")
+			continue
+		}
+
+		newParityCIDs = append(newParityCIDs, parityChunk.CID)
+		
+		ces.logger.Debug().
+			Str("parity_cid", string(parityChunk.CID)).
+			Int("parity_index", i).
+			Msg("Generated and stored parity chunk")
+	}
+
+	ces.logger.Info().
+		Str("content_cid", string(cid)).
+		Int("generated_count", len(newParityCIDs)).
+		Msg("Successfully generated additional parity chunks")
+
+	return newParityCIDs, nil
+}
+
+// getDataChunksForContent retrieves all data chunks for a given content CID
+func (ces *CIDEnhancedStorageService) getDataChunksForContent(ctx context.Context, cid ContentCID) ([]*ContentBasedChunk, error) {
+	// Get chunk CIDs for this content
+	chunkCIDs, err := ces.getChunkCIDsForContent(ctx, cid)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get chunk CIDs: %w", err)
+	}
+
+	var dataChunks []*ContentBasedChunk
+	for _, chunkCID := range chunkCIDs {
+		chunk, err := ces.RetrieveChunk(ctx, chunkCID)
+		if err != nil {
+			ces.logger.Warn().
+				Err(err).
+				Str("chunk_cid", string(chunkCID)).
+				Str("content_cid", string(cid)).
+				Msg("Failed to retrieve chunk for content")
+			continue
+		}
+
+		// Only include data chunks, not parity chunks
+		if !chunk.IsParity {
+			dataChunks = append(dataChunks, chunk)
+		}
+	}
+
+	// Sort chunks by their CID to maintain deterministic order
+	sort.Slice(dataChunks, func(i, j int) bool {
+		return string(dataChunks[i].CID) < string(dataChunks[j].CID)
+	})
+
+	return dataChunks, nil
+}
+
+// GetParityLevel returns current parity level for content
+func (ces *CIDEnhancedStorageService) GetParityLevel(ctx context.Context, cid ContentCID) (ParityInfo, error) {
+	// Get all chunks for this content
+	chunkCIDs, err := ces.getChunkCIDsForContent(ctx, cid)
+	if err != nil {
+		return ParityInfo{}, fmt.Errorf("failed to get chunks for content: %w", err)
+	}
+
+	var dataChunkCount, parityChunkCount int
+	regionCount := make(map[string]int)
+
+	// Count data vs parity chunks and track regional distribution
+	for _, chunkCID := range chunkCIDs {
+		chunk, err := ces.RetrieveChunk(ctx, chunkCID)
+		if err != nil {
+			ces.logger.Debug().
+				Err(err).
+				Str("chunk_cid", string(chunkCID)).
+				Msg("Failed to retrieve chunk for parity analysis")
+			continue
+		}
+
+		if chunk.IsParity {
+			parityChunkCount++
+		} else {
+			dataChunkCount++
+		}
+
+		// Track regional distribution (simplified - using node location if available)
+		nodes, err := ces.FindChunkNodes(chunkCID)
+		if err == nil && len(nodes) > 0 {
+			// Use a default region since NodeInfo doesn't have Region field
+			region := "unknown"
+			regionCount[region]++
+		}
+	}
+
+	// Determine current and target levels based on actual chunk counts
+	currentLevel := fmt.Sprintf("%d+%d", dataChunkCount, parityChunkCount)
+	
+	// Calculate target level based on demand (simplified logic)
+	targetParityCount := ces.config.Erasure.BaselineParityShards
+	if dataChunkCount > 0 {
+		// Could implement more sophisticated demand-based targeting here
+		targetLevel := fmt.Sprintf("%d+%d", dataChunkCount, targetParityCount)
+		
+		info := ParityInfo{
+			ContentCID:     cid,
+			DataChunks:     dataChunkCount,
+			ParityChunks:   parityChunkCount,
+			CurrentLevel:   currentLevel,
+			TargetLevel:    targetLevel,
+			Distribution:   regionCount,
+		}
+		
+		return info, nil
+	}
+
+	// Fallback to configuration defaults if no chunks found
+	info := ParityInfo{
+		ContentCID:   cid,
+		DataChunks:   ces.config.Erasure.BaselineDataShards,
+		ParityChunks: ces.config.Erasure.BaselineParityShards,
+		CurrentLevel: fmt.Sprintf("%d+%d", ces.config.Erasure.BaselineDataShards, ces.config.Erasure.BaselineParityShards),
+		TargetLevel:  fmt.Sprintf("%d+%d", ces.config.Erasure.BaselineDataShards, ces.config.Erasure.BaselineParityShards),
+		Distribution: make(map[string]int),
+	}
+	
+	return info, nil
+}
+
+// GetStorageStats returns storage statistics
+func (ces *CIDEnhancedStorageService) GetStorageStats() StorageStats {
+	chunkCount, totalSize := ces.chunkStore.GetStats()
+	return StorageStats{
+		TotalSpace:     ces.config.MaxCapacity,
+		UsedSpace:      uint64(totalSize),
+		AvailableSpace: ces.config.MaxCapacity - uint64(totalSize),
+		ChunkCount:     int(chunkCount),
+		FileCount:      len(ces.cidChunkCache), // Number of content CIDs
+		ParityChunks:   0, // TODO: Track parity vs data chunks
+		DataChunks:     int(chunkCount), // For now, assume all are data chunks
+	}
+}
+
+// GetAvailableSpace returns available storage space
+func (ces *CIDEnhancedStorageService) GetAvailableSpace() uint64 {
+	stats := ces.GetStorageStats()
+	if ces.config.MaxCapacity > stats.UsedSpace {
+		return ces.config.MaxCapacity - stats.UsedSpace
+	}
+	return 0
+}
+
+// SetStorageLimit sets the storage capacity limit
+func (ces *CIDEnhancedStorageService) SetStorageLimit(limit uint64) error {
+	ces.config.MaxCapacity = limit
+	return nil
+}
+
+// RecordAccess records access to content or chunk
+func (ces *CIDEnhancedStorageService) RecordAccess(ctx context.Context, cid ContentCID, chunkCID ChunkCID) {
+	ces.trackContentAccess(cid)
+	if chunkCID != "" {
+		ces.trackChunkAccess(chunkCID)
+	}
+}
+
+// GetDemandMetrics returns demand metrics for content
+func (ces *CIDEnhancedStorageService) GetDemandMetrics(ctx context.Context, cid ContentCID) DemandMetrics {
+	ces.accessMutex.RLock()
+	defer ces.accessMutex.RUnlock()
+	
+	accessCount := ces.accessTracker.accessCount[cid]
+	lastAccess := ces.accessTracker.lastAccess[cid]
+	
+	// Calculate access rate (simplified)
+	var accessRate float64
+	if !lastAccess.IsZero() {
+		timeSinceLastAccess := time.Since(lastAccess)
+		if timeSinceLastAccess > 0 {
+			accessRate = float64(accessCount) / timeSinceLastAccess.Minutes()
+		}
+	}
+	
+	return DemandMetrics{
+		AccessRate:     accessRate,
+		TrendDirection: "stable", // Simplified
+		LastUpdated:    time.Now().Unix(),
+	}
+}
+
+// ClaimMorePositions claims additional positions for the local node
+func (ces *CIDEnhancedStorageService) ClaimMorePositions(ctx context.Context, count int, strategy string) ([]Position, error) {
+	result, err := ces.nodeManager.ClaimPositions(ces.localNodeID)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Convert global positions to Position structs
+	var positions []Position
+	for _, globalPos := range result.ClaimedPositions {
+		bucket := BucketID(globalPos / PositionsPerBucket)
+		position := PositionID(globalPos % PositionsPerBucket)
+		
+		positions = append(positions, Position{
+			Bucket:   bucket,
+			Position: position,
+			Global:   globalPos,
+		})
+	}
+	
+	return positions, nil
+}

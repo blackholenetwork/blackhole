@@ -1,0 +1,584 @@
+package incentive
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"path/filepath"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/blackholenetwork/blackhole/pkg/interfaces"
+	"github.com/rs/zerolog"
+)
+
+// EconomicPersistenceLayer provides persistent storage for economic events and audit trails
+type EconomicPersistenceLayer struct {
+	vfs       interfaces.VFS
+	logger    zerolog.Logger
+	nodeID    string
+	mu        sync.RWMutex
+	
+	// Storage paths for different data types
+	billingEventsPath    string  // vfs://economic/billing_events/
+	auditTrailsPath     string  // vfs://economic/audit_trails/
+	cycleAggregatesPath string  // vfs://economic/cycle_aggregates/
+	providersPath       string  // vfs://economic/providers/
+	subscriptionsPath   string  // vfs://economic/subscriptions/
+	reportsPath         string  // vfs://economic/reports/
+	
+	// Caching for performance
+	eventCache          map[string]*BillingEvent
+	auditCache          map[string]*AuditTrailEntry
+	cacheMu             sync.RWMutex
+	cacheEnabled        bool
+	maxCacheSize        int
+	
+	// Regulatory compliance settings
+	retentionPeriod     time.Duration
+	auditLevel          AuditLevel
+	encryptionEnabled   bool
+	compressionEnabled  bool
+}
+
+// BillingEvent represents a complete billing event for audit and persistence
+type BillingEvent struct {
+	// Primary identifiers
+	EventID          string    `json:"event_id"`
+	TransactionID    string    `json:"transaction_id"`
+	BillingCycleID   string    `json:"billing_cycle_id"`
+	
+	// Resource information
+	ResourceType     string    `json:"resource_type"`     // storage, compute, bandwidth
+	Operation        string    `json:"operation"`         // put, get, execute, stream
+	Amount           float64   `json:"amount"`            // quantity consumed
+	Unit             string    `json:"unit"`              // GB, hours, bytes
+	Duration         int64     `json:"duration_ms"`       // operation duration in ms
+	
+	// Economic attribution
+	UserID           string    `json:"user_id"`           // who gets billed
+	ProviderID       string    `json:"provider_id"`       // who provided resource
+	NodeID           string    `json:"node_id"`           // which node processed
+	ServiceName      string    `json:"service_name"`      // which service
+	
+	// Billing calculation
+	IsChargeable     bool      `json:"is_chargeable"`     // payment logic result
+	OperationType    string    `json:"operation_type"`    // user_request, system_task, protocol
+	UnitCost         float64   `json:"unit_cost"`         // cost per unit
+	TotalCost        float64   `json:"total_cost"`        // amount * unit_cost
+	Currency         string    `json:"currency"`          // USD, EUR, etc.
+	
+	// Verification and proof
+	VerificationProof string   `json:"verification_proof"` // cryptographic proof
+	ResourceHash      string   `json:"resource_hash"`      // hash of consumed resource
+	OperationHash     string   `json:"operation_hash"`     // hash of operation details
+	
+	// Timestamps (critical for audit)
+	RequestedAt      time.Time `json:"requested_at"`      // when user requested
+	StartedAt        time.Time `json:"started_at"`        // when operation started
+	CompletedAt      time.Time `json:"completed_at"`      // when operation completed
+	BilledAt         time.Time `json:"billed_at"`         // when billing was processed
+	RecordedAt       time.Time `json:"recorded_at"`       // when record was created
+	
+	// Audit and compliance
+	AuditTrailID     string            `json:"audit_trail_id"`     // link to audit trail
+	RegulatoryFlags  []string          `json:"regulatory_flags"`   // compliance markers
+	Metadata         map[string]string `json:"metadata"`           // additional context
+	
+	// Data integrity
+	EventHash        string    `json:"event_hash"`        // hash of entire event
+	PreviousEventHash string   `json:"previous_event_hash"` // blockchain-style linking
+	SequenceNumber   int64     `json:"sequence_number"`   // sequential ordering
+}
+
+// AuditTrailEntry represents a regulatory audit trail entry
+type AuditTrailEntry struct {
+	// Primary identifiers
+	AuditID          string    `json:"audit_id"`
+	EventType        string    `json:"event_type"`        // billing_event, system_change, user_action
+	Entity           string    `json:"entity"`            // what was affected
+	EntityID         string    `json:"entity_id"`         // identifier of affected entity
+	
+	// Change tracking
+	Action           string    `json:"action"`            // CREATE, UPDATE, DELETE, ACCESS
+	ChangeDetails    string    `json:"change_details"`    // description of change
+	OldValue         string    `json:"old_value"`         // previous value (if applicable)
+	NewValue         string    `json:"new_value"`         // new value (if applicable)
+	
+	// Actor information
+	ActorType        string    `json:"actor_type"`        // user, system, service, admin
+	ActorID          string    `json:"actor_id"`          // who/what made the change
+	ActorIP          string    `json:"actor_ip"`          // IP address (if applicable)
+	ActorLocation    string    `json:"actor_location"`    // geographic location
+	
+	// System context
+	SystemVersion    string    `json:"system_version"`    // software version
+	NodeID           string    `json:"node_id"`           // which node recorded this
+	ServiceName      string    `json:"service_name"`      // which service
+	RequestID        string    `json:"request_id"`        // original request ID
+	
+	// Regulatory compliance
+	ComplianceLevel  string    `json:"compliance_level"`  // HIGH, MEDIUM, LOW
+	DataClassification string  `json:"data_classification"` // PUBLIC, INTERNAL, CONFIDENTIAL
+	RetentionPeriod  int64     `json:"retention_period"`  // days to retain
+	
+	// Verification
+	DataHash         string    `json:"data_hash"`         // hash of audit data
+	SignatureProof   string    `json:"signature_proof"`   // cryptographic signature
+	
+	// Timestamps
+	EventTimestamp   time.Time `json:"event_timestamp"`   // when the audited event occurred
+	RecordedAt       time.Time `json:"recorded_at"`       // when audit entry was created
+	
+	// Additional context
+	Metadata         map[string]interface{} `json:"metadata"` // flexible additional data
+}
+
+// CycleAggregateRecord represents persistent billing cycle data
+type CycleAggregateRecord struct {
+	CycleID          string                    `json:"cycle_id"`
+	StartDate        time.Time                 `json:"start_date"`
+	EndDate          time.Time                 `json:"end_date"`
+	Status           string                    `json:"status"`
+	
+	// Aggregate totals by provider and resource type
+	ProviderTotals   map[string]*ProviderCycleTotals `json:"provider_totals"`
+	
+	// Pool distribution
+	TotalPoolAmount  float64                   `json:"total_pool_amount"`
+	DistributedAmount float64                  `json:"distributed_amount"`
+	FreeTierSubsidy  float64                   `json:"free_tier_subsidy"`
+	
+	// Verification
+	AggregateHash    string                    `json:"aggregate_hash"`
+	EventCount       int64                     `json:"event_count"`
+	
+	// Timestamps
+	CreatedAt        time.Time                 `json:"created_at"`
+	CompletedAt      *time.Time                `json:"completed_at,omitempty"`
+	LastUpdated      time.Time                 `json:"last_updated"`
+}
+
+// ProviderCycleTotals represents a provider's totals for a billing cycle
+type ProviderCycleTotals struct {
+	ProviderID       string                    `json:"provider_id"`
+	StorageGBHours   float64                   `json:"storage_gb_hours"`
+	BandwidthGB      float64                   `json:"bandwidth_gb"`
+	ComputeCPUHours  float64                   `json:"compute_cpu_hours"`
+	ComputeGPUHours  float64                   `json:"compute_gpu_hours"`
+	MemoryGBHours    float64                   `json:"memory_gb_hours"`
+	ContentPoints    float64                   `json:"content_points"`
+	NetworkOpsUnits  float64                   `json:"network_ops_units"`
+	
+	// Calculated rewards
+	TotalReward      float64                   `json:"total_reward"`
+	RewardBreakdown  map[string]float64        `json:"reward_breakdown"`
+	
+	// Event counts for verification
+	EventCounts      map[string]int64          `json:"event_counts"`
+	VerificationHash string                    `json:"verification_hash"`
+}
+
+// AuditLevel defines the level of audit detail
+type AuditLevel string
+
+const (
+	AuditLevelMinimal     AuditLevel = "minimal"     // Only critical events
+	AuditLevelStandard    AuditLevel = "standard"    // Standard regulatory compliance
+	AuditLevelDetailed    AuditLevel = "detailed"    // Detailed audit for high compliance
+	AuditLevelForensic    AuditLevel = "forensic"    // Maximum detail for forensic analysis
+)
+
+// NewEconomicPersistenceLayer creates a new persistence layer
+func NewEconomicPersistenceLayer(vfs interfaces.VFS, nodeID string, logger zerolog.Logger) *EconomicPersistenceLayer {
+	persistence := &EconomicPersistenceLayer{
+		vfs:                 vfs,
+		logger:              logger.With().Str("component", "economic_persistence").Logger(),
+		nodeID:              nodeID,
+		billingEventsPath:   "vfs://economic/billing_events/",
+		auditTrailsPath:     "vfs://economic/audit_trails/",
+		cycleAggregatesPath: "vfs://economic/cycle_aggregates/",
+		providersPath:       "vfs://economic/providers/",
+		subscriptionsPath:   "vfs://economic/subscriptions/",
+		reportsPath:         "vfs://economic/reports/",
+		eventCache:          make(map[string]*BillingEvent),
+		auditCache:          make(map[string]*AuditTrailEntry),
+		cacheEnabled:        true,
+		maxCacheSize:        10000,
+		retentionPeriod:     7 * 365 * 24 * time.Hour, // 7 years for regulatory compliance
+		auditLevel:          AuditLevelStandard,
+		encryptionEnabled:   true,
+		compressionEnabled:  true,
+	}
+	
+	// Initialize VFS directories
+	persistence.initializeDirectories()
+	
+	return persistence
+}
+
+// initializeDirectories creates the required VFS directories for economic data
+func (p *EconomicPersistenceLayer) initializeDirectories() {
+	directories := []string{
+		p.billingEventsPath,
+		p.auditTrailsPath,
+		p.cycleAggregatesPath,
+		p.providersPath,
+		p.subscriptionsPath,
+		p.reportsPath,
+		// Billing events organization
+		p.billingEventsPath + "by_date/",
+		p.billingEventsPath + "by_user/",
+		p.billingEventsPath + "by_provider/",
+		p.billingEventsPath + "by_resource_type/",
+		p.billingEventsPath + "by_cycle/",
+		// Audit trails organization
+		p.auditTrailsPath + "by_date/",
+		p.auditTrailsPath + "by_entity/",
+		p.auditTrailsPath + "by_actor/",
+		p.auditTrailsPath + "by_compliance_level/",
+		// Reports organization
+		p.reportsPath + "daily/",
+		p.reportsPath + "monthly/",
+		p.reportsPath + "regulatory/",
+		p.reportsPath + "provider_statements/",
+		p.reportsPath + "user_bills/",
+	}
+	
+	for _, dir := range directories {
+		metadata := map[string]string{
+			"created_by":     "economic_persistence",
+			"created_at":     time.Now().Format(time.RFC3339),
+			"node_id":        p.nodeID,
+			"type":           "directory",
+			"compliance":     "regulatory",
+			"retention_days": strconv.FormatInt(int64(p.retentionPeriod.Hours()/24), 10),
+		}
+		
+		// Create directory by writing a placeholder file
+		placeholderPath := filepath.Join(dir, ".economic_directory")
+		placeholderContent := fmt.Sprintf("# Economic data directory - Node: %s - Created: %s", 
+			p.nodeID, time.Now().Format(time.RFC3339))
+		
+		if err := p.vfs.WriteFile(context.Background(), placeholderPath, []byte(placeholderContent), metadata); err != nil {
+			p.logger.Warn().
+				Err(err).
+				Str("directory", dir).
+				Msg("Failed to create economic storage directory")
+		}
+	}
+	
+	p.logger.Info().
+		Int("directories", len(directories)).
+		Str("retention_period", p.retentionPeriod.String()).
+		Msg("Economic persistence directories initialized")
+}
+
+// StoreBillingEvent stores a billing event with full audit trail
+func (p *EconomicPersistenceLayer) StoreBillingEvent(ctx context.Context, event *BillingEvent) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	
+	// Generate event hash for integrity
+	if event.EventHash == "" {
+		event.EventHash = p.generateEventHash(event)
+	}
+	
+	// Add to sequence chain
+	if event.SequenceNumber == 0 {
+		event.SequenceNumber = p.getNextSequenceNumber()
+	}
+	
+	// Set timestamps
+	if event.RecordedAt.IsZero() {
+		event.RecordedAt = time.Now()
+	}
+	if event.BilledAt.IsZero() {
+		event.BilledAt = time.Now()
+	}
+	
+	// Generate unique event ID if not provided
+	if event.EventID == "" {
+		event.EventID = p.generateEventID(event)
+	}
+	
+	// Create audit trail entry
+	auditEntry := &AuditTrailEntry{
+		AuditID:          p.generateAuditID("billing_event", event.EventID),
+		EventType:        "billing_event",
+		Entity:           "billing_event",
+		EntityID:         event.EventID,
+		Action:           "CREATE",
+		ChangeDetails:    fmt.Sprintf("Billing event created: %s %s %.4f %s for user %s", 
+			event.ResourceType, event.Operation, event.Amount, event.Unit, event.UserID),
+		ActorType:        "system",
+		ActorID:          p.nodeID,
+		SystemVersion:    "1.0.0", // TODO: Get from build info
+		NodeID:           p.nodeID,
+		ServiceName:      event.ServiceName,
+		RequestID:        event.TransactionID,
+		ComplianceLevel:  "HIGH",
+		DataClassification: "CONFIDENTIAL",
+		RetentionPeriod:  int64(p.retentionPeriod.Hours() / 24),
+		EventTimestamp:   event.CompletedAt,
+		RecordedAt:       time.Now(),
+		Metadata: map[string]interface{}{
+			"billing_amount": event.TotalCost,
+			"resource_type":  event.ResourceType,
+			"provider_id":    event.ProviderID,
+			"user_id":        event.UserID,
+		},
+	}
+	auditEntry.DataHash = p.generateAuditHash(auditEntry)
+	event.AuditTrailID = auditEntry.AuditID
+	
+	// Serialize billing event
+	eventData, err := json.MarshalIndent(event, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal billing event: %w", err)
+	}
+	
+	// Apply encryption if enabled
+	if p.encryptionEnabled {
+		// TODO: Implement encryption
+		// eventData = encrypt(eventData)
+	}
+	
+	// Prepare metadata
+	metadata := map[string]string{
+		"event_id":       event.EventID,
+		"user_id":        event.UserID,
+		"provider_id":    event.ProviderID,
+		"resource_type":  event.ResourceType,
+		"operation":      event.Operation,
+		"total_cost":     fmt.Sprintf("%.6f", event.TotalCost),
+		"currency":       event.Currency,
+		"is_chargeable":  strconv.FormatBool(event.IsChargeable),
+		"cycle_id":       event.BillingCycleID,
+		"event_hash":     event.EventHash,
+		"sequence_num":   strconv.FormatInt(event.SequenceNumber, 10),
+		"completed_at":   event.CompletedAt.Format(time.RFC3339),
+		"recorded_at":    event.RecordedAt.Format(time.RFC3339),
+		"compliance":     "regulatory",
+		"audit_trail_id": auditEntry.AuditID,
+		"node_id":        p.nodeID,
+	}
+	
+	// Storage paths for indexing
+	datePath := event.CompletedAt.Format("2006/01/02")
+	hourPath := event.CompletedAt.Format("2006/01/02/15")
+	
+	// Primary storage path
+	primaryPath := filepath.Join(p.billingEventsPath, "by_date", datePath, fmt.Sprintf("%s.json", event.EventID))
+	
+	// Index paths for efficient querying
+	indexPaths := []string{
+		// By user for billing statements
+		filepath.Join(p.billingEventsPath, "by_user", event.UserID, datePath, fmt.Sprintf("%s.json", event.EventID)),
+		// By provider for reward calculations
+		filepath.Join(p.billingEventsPath, "by_provider", event.ProviderID, datePath, fmt.Sprintf("%s.json", event.EventID)),
+		// By resource type for analytics
+		filepath.Join(p.billingEventsPath, "by_resource_type", event.ResourceType, datePath, fmt.Sprintf("%s.json", event.EventID)),
+		// By billing cycle for cycle reports
+		filepath.Join(p.billingEventsPath, "by_cycle", event.BillingCycleID, fmt.Sprintf("%s.json", event.EventID)),
+		// By hour for time-series analysis
+		filepath.Join(p.billingEventsPath, "by_hour", hourPath, fmt.Sprintf("%s.json", event.EventID)),
+	}
+	
+	// Store in primary location
+	if err := p.vfs.WriteFile(ctx, primaryPath, eventData, metadata); err != nil {
+		return fmt.Errorf("failed to store billing event: %w", err)
+	}
+	
+	// Store in index locations
+	for _, indexPath := range indexPaths {
+		if err := p.vfs.WriteFile(ctx, indexPath, eventData, metadata); err != nil {
+			p.logger.Warn().
+				Err(err).
+				Str("index_path", indexPath).
+				Str("event_id", event.EventID).
+				Msg("Failed to store billing event in index path")
+		}
+	}
+	
+	// Store audit trail
+	if err := p.StoreAuditTrailEntry(ctx, auditEntry); err != nil {
+		p.logger.Error().
+			Err(err).
+			Str("event_id", event.EventID).
+			Msg("Failed to store audit trail for billing event")
+	}
+	
+	// Cache the event if caching is enabled
+	if p.cacheEnabled {
+		p.cacheMu.Lock()
+		if len(p.eventCache) < p.maxCacheSize {
+			p.eventCache[event.EventID] = event
+		}
+		p.cacheMu.Unlock()
+	}
+	
+	p.logger.Info().
+		Str("event_id", event.EventID).
+		Str("user_id", event.UserID).
+		Str("provider_id", event.ProviderID).
+		Str("resource_type", event.ResourceType).
+		Float64("total_cost", event.TotalCost).
+		Int64("sequence_number", event.SequenceNumber).
+		Msg("Billing event stored with audit trail")
+	
+	return nil
+}
+
+// StoreAuditTrailEntry stores an audit trail entry for regulatory compliance
+func (p *EconomicPersistenceLayer) StoreAuditTrailEntry(ctx context.Context, entry *AuditTrailEntry) error {
+	// Generate audit ID if not provided
+	if entry.AuditID == "" {
+		entry.AuditID = p.generateAuditID(entry.EventType, entry.EntityID)
+	}
+	
+	// Set timestamp
+	if entry.RecordedAt.IsZero() {
+		entry.RecordedAt = time.Now()
+	}
+	
+	// Generate data hash for integrity
+	if entry.DataHash == "" {
+		entry.DataHash = p.generateAuditHash(entry)
+	}
+	
+	// Serialize audit entry
+	auditData, err := json.MarshalIndent(entry, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal audit trail entry: %w", err)
+	}
+	
+	// Prepare metadata
+	metadata := map[string]string{
+		"audit_id":           entry.AuditID,
+		"event_type":         entry.EventType,
+		"entity":             entry.Entity,
+		"entity_id":          entry.EntityID,
+		"action":             entry.Action,
+		"actor_type":         entry.ActorType,
+		"actor_id":           entry.ActorID,
+		"compliance_level":   entry.ComplianceLevel,
+		"data_classification": entry.DataClassification,
+		"retention_period":   strconv.FormatInt(entry.RetentionPeriod, 10),
+		"data_hash":          entry.DataHash,
+		"event_timestamp":    entry.EventTimestamp.Format(time.RFC3339),
+		"recorded_at":        entry.RecordedAt.Format(time.RFC3339),
+		"node_id":            p.nodeID,
+	}
+	
+	// Storage paths
+	datePath := entry.RecordedAt.Format("2006/01/02")
+	
+	// Primary storage path
+	primaryPath := filepath.Join(p.auditTrailsPath, "by_date", datePath, fmt.Sprintf("%s.json", entry.AuditID))
+	
+	// Index paths
+	indexPaths := []string{
+		// By entity for entity-specific audits
+		filepath.Join(p.auditTrailsPath, "by_entity", entry.Entity, datePath, fmt.Sprintf("%s.json", entry.AuditID)),
+		// By actor for actor tracking
+		filepath.Join(p.auditTrailsPath, "by_actor", entry.ActorID, datePath, fmt.Sprintf("%s.json", entry.AuditID)),
+		// By compliance level for regulatory reporting
+		filepath.Join(p.auditTrailsPath, "by_compliance_level", entry.ComplianceLevel, datePath, fmt.Sprintf("%s.json", entry.AuditID)),
+	}
+	
+	// Store in primary location
+	if err := p.vfs.WriteFile(ctx, primaryPath, auditData, metadata); err != nil {
+		return fmt.Errorf("failed to store audit trail entry: %w", err)
+	}
+	
+	// Store in index locations
+	for _, indexPath := range indexPaths {
+		if err := p.vfs.WriteFile(ctx, indexPath, auditData, metadata); err != nil {
+			p.logger.Warn().
+				Err(err).
+				Str("index_path", indexPath).
+				Str("audit_id", entry.AuditID).
+				Msg("Failed to store audit trail in index path")
+		}
+	}
+	
+	// Cache the entry if caching is enabled
+	if p.cacheEnabled {
+		p.cacheMu.Lock()
+		if len(p.auditCache) < p.maxCacheSize {
+			p.auditCache[entry.AuditID] = entry
+		}
+		p.cacheMu.Unlock()
+	}
+	
+	return nil
+}
+
+// Helper methods
+
+// generateEventID creates a unique event ID
+func (p *EconomicPersistenceLayer) generateEventID(event *BillingEvent) string {
+	return fmt.Sprintf("bill_%s_%s_%d", 
+		event.ResourceType, 
+		event.UserID[:8], // First 8 chars of user ID
+		event.CompletedAt.UnixNano())
+}
+
+// generateAuditID creates a unique audit ID
+func (p *EconomicPersistenceLayer) generateAuditID(eventType, entityID string) string {
+	return fmt.Sprintf("audit_%s_%s_%d", 
+		eventType, 
+		entityID[:8], // First 8 chars of entity ID
+		time.Now().UnixNano())
+}
+
+// generateEventHash creates a hash of the billing event for integrity
+func (p *EconomicPersistenceLayer) generateEventHash(event *BillingEvent) string {
+	// Create a deterministic string representation
+	hashData := fmt.Sprintf("%s|%s|%s|%s|%f|%s|%s|%s|%t|%f|%d",
+		event.ResourceType,
+		event.Operation,
+		event.UserID,
+		event.ProviderID,
+		event.Amount,
+		event.Unit,
+		event.Currency,
+		event.CompletedAt.Format(time.RFC3339Nano),
+		event.IsChargeable,
+		event.TotalCost,
+		event.SequenceNumber,
+	)
+	
+	hash := sha256.Sum256([]byte(hashData))
+	return hex.EncodeToString(hash[:])
+}
+
+// generateAuditHash creates a hash of the audit entry for integrity
+func (p *EconomicPersistenceLayer) generateAuditHash(entry *AuditTrailEntry) string {
+	hashData := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s",
+		entry.EventType,
+		entry.Entity,
+		entry.EntityID,
+		entry.Action,
+		entry.ActorID,
+		entry.ChangeDetails,
+		entry.EventTimestamp.Format(time.RFC3339Nano),
+		entry.RecordedAt.Format(time.RFC3339Nano),
+	)
+	
+	hash := sha256.Sum256([]byte(hashData))
+	return hex.EncodeToString(hash[:])
+}
+
+// getNextSequenceNumber gets the next sequence number for event ordering
+func (p *EconomicPersistenceLayer) getNextSequenceNumber() int64 {
+	// In a production system, this would be stored persistently
+	// For now, use timestamp-based sequence
+	return time.Now().UnixNano()
+}
+
+// Query methods for retrieving stored data will be implemented in the next part...

@@ -1,0 +1,279 @@
+package contract
+
+import (
+	"time"
+)
+
+// Config represents the contract service configuration
+type Config struct {
+	// Service settings
+	Enabled                bool          `mapstructure:"enabled" json:"enabled"`
+	DatabasePath           string        `mapstructure:"database_path" json:"database_path"`
+	
+	// Subscription settings
+	DefaultBillingCycle    time.Duration `mapstructure:"default_billing_cycle" json:"default_billing_cycle"`
+	GracePeriod           time.Duration `mapstructure:"grace_period" json:"grace_period"`
+	PaymentRetryAttempts  int           `mapstructure:"payment_retry_attempts" json:"payment_retry_attempts"`
+	PaymentRetryInterval  time.Duration `mapstructure:"payment_retry_interval" json:"payment_retry_interval"`
+	
+	// Subscription tiers and pricing
+	TierPricing           TierPricingConfig `mapstructure:"tier_pricing" json:"tier_pricing"`
+	
+	// Payment processing
+	PaymentProcessor      PaymentProcessorConfig `mapstructure:"payment_processor" json:"payment_processor"`
+	
+	// Notification settings
+	NotificationSettings  NotificationConfig `mapstructure:"notifications" json:"notifications"`
+	
+	// Security settings
+	Security              SecurityConfig `mapstructure:"security" json:"security"`
+}
+
+// TierPricingConfig defines subscription tier pricing
+type TierPricingConfig struct {
+	Free     SubscriptionTierConfig `mapstructure:"free" json:"free"`
+	Normal   SubscriptionTierConfig `mapstructure:"normal" json:"normal"`
+	Advance  SubscriptionTierConfig `mapstructure:"advance" json:"advance"`
+	Ultimate SubscriptionTierConfig `mapstructure:"ultimate" json:"ultimate"`
+	
+	// Custom tier settings
+	AllowCustomTiers     bool    `mapstructure:"allow_custom_tiers" json:"allow_custom_tiers"`
+	MinCustomAmount      float64 `mapstructure:"min_custom_amount" json:"min_custom_amount"`
+	MaxCustomAmount      float64 `mapstructure:"max_custom_amount" json:"max_custom_amount"`
+}
+
+// SubscriptionTierConfig defines settings for a subscription tier
+type SubscriptionTierConfig struct {
+	MonthlyPrice         float64          `mapstructure:"monthly_price" json:"monthly_price"`
+	Features             []string         `mapstructure:"features" json:"features"`
+	ResourceLimits       ResourceLimits   `mapstructure:"resource_limits" json:"resource_limits"`
+	APIRateLimits        APIRateLimits    `mapstructure:"api_rate_limits" json:"api_rate_limits"`
+	SupportLevel         string           `mapstructure:"support_level" json:"support_level"`
+}
+
+// ResourceLimits defines resource limits for a subscription tier
+type ResourceLimits struct {
+	StorageGB            float64 `mapstructure:"storage_gb" json:"storage_gb"`
+	BandwidthGBPerMonth  float64 `mapstructure:"bandwidth_gb_per_month" json:"bandwidth_gb_per_month"`
+	ComputeHoursPerMonth float64 `mapstructure:"compute_hours_per_month" json:"compute_hours_per_month"`
+	MaxConcurrentJobs    int     `mapstructure:"max_concurrent_jobs" json:"max_concurrent_jobs"`
+}
+
+// APIRateLimits defines API usage limits for a subscription tier
+type APIRateLimits struct {
+	RequestsPerMinute    int `mapstructure:"requests_per_minute" json:"requests_per_minute"`
+	RequestsPerHour      int `mapstructure:"requests_per_hour" json:"requests_per_hour"`
+	RequestsPerDay       int `mapstructure:"requests_per_day" json:"requests_per_day"`
+	RequestsPerMonth     int `mapstructure:"requests_per_month" json:"requests_per_month"`
+}
+
+// PaymentProcessorConfig defines payment processing settings
+type PaymentProcessorConfig struct {
+	Provider             string            `mapstructure:"provider" json:"provider"` // "stripe", "paypal", "mock"
+	APIKey               string            `mapstructure:"api_key" json:"api_key"`
+	WebhookSecret        string            `mapstructure:"webhook_secret" json:"webhook_secret"`
+	Currency             string            `mapstructure:"currency" json:"currency"` // "USD", "EUR", etc.
+	TaxRate              float64           `mapstructure:"tax_rate" json:"tax_rate"`
+	Settings             map[string]string `mapstructure:"settings" json:"settings"`
+}
+
+// NotificationConfig defines notification settings
+type NotificationConfig struct {
+	Enabled                    bool          `mapstructure:"enabled" json:"enabled"`
+	PaymentSuccessNotification bool          `mapstructure:"payment_success" json:"payment_success"`
+	PaymentFailureNotification bool          `mapstructure:"payment_failure" json:"payment_failure"`
+	ExpirationWarningDays      []int         `mapstructure:"expiration_warning_days" json:"expiration_warning_days"` // e.g., [7, 3, 1]
+	RenewalReminderDays        []int         `mapstructure:"renewal_reminder_days" json:"renewal_reminder_days"`
+	EmailSettings              EmailConfig   `mapstructure:"email" json:"email"`
+}
+
+// EmailConfig defines email notification settings
+type EmailConfig struct {
+	Enabled    bool   `mapstructure:"enabled" json:"enabled"`
+	SMTPHost   string `mapstructure:"smtp_host" json:"smtp_host"`
+	SMTPPort   int    `mapstructure:"smtp_port" json:"smtp_port"`
+	Username   string `mapstructure:"username" json:"username"`
+	Password   string `mapstructure:"password" json:"password"`
+	FromEmail  string `mapstructure:"from_email" json:"from_email"`
+	FromName   string `mapstructure:"from_name" json:"from_name"`
+}
+
+// SecurityConfig defines security settings
+type SecurityConfig struct {
+	RequireEmailVerification   bool          `mapstructure:"require_email_verification" json:"require_email_verification"`
+	RequirePaymentVerification bool          `mapstructure:"require_payment_verification" json:"require_payment_verification"`
+	AllowTrialPeriods         bool          `mapstructure:"allow_trial_periods" json:"allow_trial_periods"`
+	TrialDuration             time.Duration `mapstructure:"trial_duration" json:"trial_duration"`
+	MaxSubscriptionsPerUser   int           `mapstructure:"max_subscriptions_per_user" json:"max_subscriptions_per_user"`
+}
+
+// DefaultConfig returns the default contract service configuration
+func DefaultConfig() *Config {
+	return &Config{
+		Enabled:                true,
+		DatabasePath:           "./data/contracts.db",
+		DefaultBillingCycle:    30 * 24 * time.Hour, // 30 days
+		GracePeriod:           3 * 24 * time.Hour,   // 3 days grace period
+		PaymentRetryAttempts:  3,
+		PaymentRetryInterval:  24 * time.Hour, // Retry every 24 hours
+		
+		TierPricing: TierPricingConfig{
+			Free: SubscriptionTierConfig{
+				MonthlyPrice:   0.0,
+				Features:       []string{"basic_access", "limited_storage"},
+				SupportLevel:   "community",
+				ResourceLimits: ResourceLimits{
+					StorageGB:            1.0,   // 1GB
+					BandwidthGBPerMonth:  10.0,  // 10GB/month
+					ComputeHoursPerMonth: 1.0,   // 1 hour/month
+					MaxConcurrentJobs:    1,
+				},
+				APIRateLimits: APIRateLimits{
+					RequestsPerMinute: 10,
+					RequestsPerHour:   100,
+					RequestsPerDay:    1000,
+					RequestsPerMonth:  10000,
+				},
+			},
+			Normal: SubscriptionTierConfig{
+				MonthlyPrice:   10.0,
+				Features:       []string{"standard_access", "email_support", "basic_analytics"},
+				SupportLevel:   "email",
+				ResourceLimits: ResourceLimits{
+					StorageGB:            100.0,  // 100GB
+					BandwidthGBPerMonth:  1000.0, // 1TB/month
+					ComputeHoursPerMonth: 50.0,   // 50 hours/month
+					MaxConcurrentJobs:    5,
+				},
+				APIRateLimits: APIRateLimits{
+					RequestsPerMinute: 100,
+					RequestsPerHour:   1000,
+					RequestsPerDay:    10000,
+					RequestsPerMonth:  100000,
+				},
+			},
+			Advance: SubscriptionTierConfig{
+				MonthlyPrice:   25.0,
+				Features:       []string{"premium_access", "priority_support", "advanced_analytics", "api_access"},
+				SupportLevel:   "priority",
+				ResourceLimits: ResourceLimits{
+					StorageGB:            500.0,  // 500GB
+					BandwidthGBPerMonth:  5000.0, // 5TB/month
+					ComputeHoursPerMonth: 200.0,  // 200 hours/month
+					MaxConcurrentJobs:    20,
+				},
+				APIRateLimits: APIRateLimits{
+					RequestsPerMinute: 500,
+					RequestsPerHour:   5000,
+					RequestsPerDay:    50000,
+					RequestsPerMonth:  500000,
+				},
+			},
+			Ultimate: SubscriptionTierConfig{
+				MonthlyPrice:   50.0,
+				Features:       []string{"unlimited_access", "dedicated_support", "custom_integrations", "white_label"},
+				SupportLevel:   "dedicated",
+				ResourceLimits: ResourceLimits{
+					StorageGB:            -1,     // Unlimited
+					BandwidthGBPerMonth:  -1,     // Unlimited
+					ComputeHoursPerMonth: -1,     // Unlimited
+					MaxConcurrentJobs:    -1,     // Unlimited
+				},
+				APIRateLimits: APIRateLimits{
+					RequestsPerMinute: -1, // Unlimited
+					RequestsPerHour:   -1, // Unlimited
+					RequestsPerDay:    -1, // Unlimited
+					RequestsPerMonth:  -1, // Unlimited
+				},
+			},
+			AllowCustomTiers: true,
+			MinCustomAmount:  1.0,
+			MaxCustomAmount:  1000.0,
+		},
+		
+		PaymentProcessor: PaymentProcessorConfig{
+			Provider:      "mock", // Default to mock for development
+			Currency:      "USD",
+			TaxRate:       0.0, // No tax by default
+			Settings:      make(map[string]string),
+		},
+		
+		NotificationSettings: NotificationConfig{
+			Enabled:                    true,
+			PaymentSuccessNotification: true,
+			PaymentFailureNotification: true,
+			ExpirationWarningDays:      []int{7, 3, 1},
+			RenewalReminderDays:        []int{14, 7, 1},
+			EmailSettings: EmailConfig{
+				Enabled:   false, // Disabled by default
+				SMTPPort:  587,
+				FromName:  "Blackhole Network",
+			},
+		},
+		
+		Security: SecurityConfig{
+			RequireEmailVerification:   true,
+			RequirePaymentVerification: true,
+			AllowTrialPeriods:         true,
+			TrialDuration:             7 * 24 * time.Hour, // 7 days trial
+			MaxSubscriptionsPerUser:   1, // One active subscription per user
+		},
+	}
+}
+
+// Validate validates the configuration
+func (c *Config) Validate() error {
+	if c.DefaultBillingCycle < 24*time.Hour {
+		return &ConfigError{
+			Field:   "default_billing_cycle",
+			Message: "billing cycle must be at least 24 hours",
+		}
+	}
+	
+	if c.PaymentRetryAttempts < 0 {
+		return &ConfigError{
+			Field:   "payment_retry_attempts",
+			Message: "payment retry attempts must be non-negative",
+		}
+	}
+	
+	if c.TierPricing.MinCustomAmount < 0 {
+		return &ConfigError{
+			Field:   "tier_pricing.min_custom_amount",
+			Message: "minimum custom amount must be non-negative",
+		}
+	}
+	
+	if c.TierPricing.MaxCustomAmount < c.TierPricing.MinCustomAmount {
+		return &ConfigError{
+			Field:   "tier_pricing.max_custom_amount",
+			Message: "maximum custom amount must be >= minimum custom amount",
+		}
+	}
+	
+	if c.PaymentProcessor.Currency == "" {
+		return &ConfigError{
+			Field:   "payment_processor.currency",
+			Message: "currency must be specified",
+		}
+	}
+	
+	if c.PaymentProcessor.TaxRate < 0 || c.PaymentProcessor.TaxRate > 1 {
+		return &ConfigError{
+			Field:   "payment_processor.tax_rate",
+			Message: "tax rate must be between 0.0 and 1.0",
+		}
+	}
+	
+	return nil
+}
+
+// ConfigError represents a configuration validation error
+type ConfigError struct {
+	Field   string
+	Message string
+}
+
+func (e *ConfigError) Error() string {
+	return "config error in field '" + e.Field + "': " + e.Message
+}

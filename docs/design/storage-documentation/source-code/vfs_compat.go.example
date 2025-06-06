@@ -1,0 +1,165 @@
+package storage
+
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+// Compatibility layer - PrivateVFS implements VirtualFilesystemInterface by delegating to namespace-aware methods
+
+// WriteFile implements VirtualFilesystemInterface by delegating to WriteFileToNamespace
+func (pvfs *PrivateVFS) WriteFile(ctx context.Context, path string, data []byte, metadata map[string]string) error {
+	return pvfs.WriteFileToNamespace(ctx, path, data, metadata)
+}
+
+// ReadFile implements VirtualFilesystemInterface by delegating to ReadFileFromNamespace  
+func (pvfs *PrivateVFS) ReadFile(ctx context.Context, path string) ([]byte, error) {
+	return pvfs.ReadFileFromNamespace(ctx, path)
+}
+
+// ListDir implements VirtualFilesystemInterface by delegating to ListDirectoryInNamespace
+func (pvfs *PrivateVFS) ListDir(ctx context.Context, path string) ([]VFSFileInfo, error) {
+	return pvfs.ListDirectoryInNamespace(ctx, path)
+}
+
+// Delete implements VirtualFilesystemInterface - removes file from namespace
+func (pvfs *PrivateVFS) Delete(ctx context.Context, path string) error {
+	// Check write permissions
+	if err := pvfs.checkWritePermission(ctx, path); err != nil {
+		return fmt.Errorf("permission denied: %w", err)
+	}
+	
+	// Get parent directory and filename
+	parentDir := filepath.Dir(path) + "/"
+	filename := filepath.Base(path)
+	
+	// Load directory metadata
+	dirMetadata, err := pvfs.loadDirectoryMetadata(ctx, parentDir)
+	if err != nil {
+		return fmt.Errorf("directory not found: %w", err)
+	}
+	
+	// Check if file exists
+	entryInfo, exists := dirMetadata.Entries[filename]
+	if !exists {
+		return fmt.Errorf("file not found: %s", path)
+	}
+	
+	// Actually delete the content from storage
+	if entryInfo.ContentHash != "" {
+		if err := pvfs.storage.Delete(ctx, ContentCID(entryInfo.ContentHash)); err != nil {
+			pvfs.logger.Warn().Err(err).Str("content_hash", entryInfo.ContentHash).Msg("Failed to delete content from storage")
+			// Continue with metadata deletion even if content deletion fails
+		}
+	}
+	
+	// Remove entry from directory metadata
+	delete(dirMetadata.Entries, filename)
+	dirMetadata.Updated = time.Now()
+	
+	// Store updated directory metadata
+	if err := pvfs.storeDirectoryMetadata(ctx, parentDir, dirMetadata); err != nil {
+		return fmt.Errorf("failed to update directory metadata: %w", err)
+	}
+	
+	pvfs.logger.Info().
+		Str("path", path).
+		Str("content_hash", entryInfo.ContentHash).
+		Msg("File and content deleted from private VFS")
+	
+	return nil
+}
+
+// Exists implements VirtualFilesystemInterface - checks if path exists in any accessible namespace
+func (pvfs *PrivateVFS) Exists(ctx context.Context, path string) bool {
+	// Try to get file info - if successful, it exists
+	_, err := pvfs.Stat(ctx, path)
+	return err == nil
+}
+
+// Stat implements VirtualFilesystemInterface - returns file info from namespace
+func (pvfs *PrivateVFS) Stat(ctx context.Context, path string) (*VFSFileInfo, error) {
+	// Check read permissions first
+	if err := pvfs.checkReadPermission(ctx, path); err != nil {
+		return nil, fmt.Errorf("permission denied: %w", err)
+	}
+	
+	// Handle directory paths
+	if strings.HasSuffix(path, "/") {
+		// It's a directory - check if directory metadata exists
+		dirMetadata, err := pvfs.loadDirectoryMetadata(ctx, path)
+		if err != nil {
+			return nil, fmt.Errorf("directory not found: %w", err)
+		}
+		
+		return &VFSFileInfo{
+			Path:        path,
+			Size:        0,
+			IsDirectory: true,
+			ContentType: "",
+			CreatedAt:   dirMetadata.Updated, // Use updated as created for now
+			ModifiedAt:  dirMetadata.Updated,
+			CreatedBy:   dirMetadata.CreatedBy,
+		}, nil
+	}
+	
+	// It's a file - get info from parent directory metadata
+	parentDir := filepath.Dir(path) + "/"
+	filename := filepath.Base(path)
+	
+	dirMetadata, err := pvfs.loadDirectoryMetadata(ctx, parentDir)
+	if err != nil {
+		return nil, fmt.Errorf("directory not found: %w", err)
+	}
+	
+	entryInfo, exists := dirMetadata.Entries[filename]
+	if !exists {
+		return nil, fmt.Errorf("file not found: %s", path)
+	}
+	
+	return &VFSFileInfo{
+		Path:        path,
+		ContentHash: entryInfo.ContentHash,
+		Size:        entryInfo.Size,
+		ContentType: entryInfo.ContentType,
+		CreatedAt:   entryInfo.Modified, // Use modified as created for now
+		ModifiedAt:  entryInfo.Modified,
+		CreatedBy:   entryInfo.CreatedBy,
+		IsDirectory: entryInfo.Type == "directory",
+	}, nil
+}
+
+// Start implements VirtualFilesystemInterface - starts the private VFS
+func (pvfs *PrivateVFS) Start(ctx context.Context) error {
+	// Check if the base VFS is already started (for shared VFS instances)
+	if !pvfs.VirtualFilesystem.IsStarted() {
+		// Start the base VFS first if not already started
+		if err := pvfs.VirtualFilesystem.Start(ctx); err != nil {
+			return fmt.Errorf("failed to start base VFS: %w", err)
+		}
+	}
+	
+	pvfs.logger.Info().
+		Str("user_did", pvfs.userDID).
+		Str("user_base", pvfs.userBase).
+		Msg("Private VFS started")
+	
+	return nil
+}
+
+// Stop implements VirtualFilesystemInterface - stops the private VFS
+func (pvfs *PrivateVFS) Stop(ctx context.Context) error {
+	// Stop the base VFS
+	if err := pvfs.VirtualFilesystem.Stop(ctx); err != nil {
+		return fmt.Errorf("failed to stop base VFS: %w", err)
+	}
+	
+	pvfs.logger.Info().
+		Str("user_did", pvfs.userDID).
+		Msg("Private VFS stopped")
+	
+	return nil
+}

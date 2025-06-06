@@ -1,0 +1,385 @@
+package incentive
+
+import (
+	"context"
+	"sync"
+	"time"
+
+	"github.com/rs/zerolog"
+)
+
+// RevenueStreamCalculator manages real-time subscription revenue calculation
+type RevenueStreamCalculator struct {
+	mu     sync.RWMutex
+	logger zerolog.Logger
+	config *Config
+	
+	// Active subscriptions with their prorated rates
+	activeSubscriptions map[string]*ActiveSubscription
+	
+	// Cached calculations
+	currentRevenueRate   float64   // Total $/second from all subscriptions
+	lastCalculation      time.Time
+	
+	// Processing control
+	started    bool
+	stopChan   chan struct{}
+	wg         sync.WaitGroup
+}
+
+// ActiveSubscription represents a subscription with real-time rate calculation
+type ActiveSubscription struct {
+	UserID              string             `json:"user_id"`
+	Tier                SubscriptionTier   `json:"tier"`
+	MonthlyAmount       float64            `json:"monthly_amount"`
+	StartDate           time.Time          `json:"start_date"`
+	EndDate             time.Time          `json:"end_date"`
+	
+	// Prorated calculations
+	DailyRate           float64            `json:"daily_rate"`     // $/day
+	HourlyRate          float64            `json:"hourly_rate"`    // $/hour
+	MinuteRate          float64            `json:"minute_rate"`    // $/minute
+	SecondRate          float64            `json:"second_rate"`    // $/second
+	
+	// Status
+	IsActive            bool               `json:"is_active"`
+	LastUpdated         time.Time          `json:"last_updated"`
+}
+
+// NewRevenueStreamCalculator creates a new revenue stream calculator
+func NewRevenueStreamCalculator(config *Config, logger zerolog.Logger) *RevenueStreamCalculator {
+	return &RevenueStreamCalculator{
+		logger:              logger.With().Str("component", "revenue_stream").Logger(),
+		config:              config,
+		activeSubscriptions: make(map[string]*ActiveSubscription),
+		stopChan:            make(chan struct{}),
+	}
+}
+
+// Start begins revenue stream calculation
+func (rsc *RevenueStreamCalculator) Start(ctx context.Context) error {
+	rsc.mu.Lock()
+	defer rsc.mu.Unlock()
+	
+	if rsc.started {
+		return nil
+	}
+	
+	rsc.logger.Info().Msg("Starting revenue stream calculator")
+	
+	// Start background recalculation worker
+	rsc.wg.Add(1)
+	go rsc.recalculationWorker(ctx)
+	
+	rsc.started = true
+	return nil
+}
+
+// Stop halts revenue stream calculation
+func (rsc *RevenueStreamCalculator) Stop(ctx context.Context) error {
+	rsc.mu.Lock()
+	defer rsc.mu.Unlock()
+	
+	if !rsc.started {
+		return nil
+	}
+	
+	rsc.logger.Info().Msg("Stopping revenue stream calculator")
+	
+	close(rsc.stopChan)
+	rsc.wg.Wait()
+	
+	rsc.started = false
+	return nil
+}
+
+// AddSubscription adds or updates a subscription for real-time calculation
+func (rsc *RevenueStreamCalculator) AddSubscription(userID string, tier SubscriptionTier, monthlyAmount float64, duration time.Duration) error {
+	rsc.mu.Lock()
+	defer rsc.mu.Unlock()
+	
+	now := time.Now()
+	endDate := now.Add(duration)
+	
+	subscription := &ActiveSubscription{
+		UserID:        userID,
+		Tier:          tier,
+		MonthlyAmount: monthlyAmount,
+		StartDate:     now,
+		EndDate:       endDate,
+		IsActive:      true,
+		LastUpdated:   now,
+	}
+	
+	// Calculate prorated rates
+	rsc.calculateProratedRates(subscription)
+	
+	rsc.activeSubscriptions[userID] = subscription
+	rsc.recalculateRevenueRate()
+	
+	rsc.logger.Info().
+		Str("user_id", userID).
+		Str("tier", string(tier)).
+		Float64("monthly_amount", monthlyAmount).
+		Float64("second_rate", subscription.SecondRate).
+		Msg("Added subscription to revenue stream")
+	
+	return nil
+}
+
+// AddCustomSubscription adds a custom subscription with flexible pricing
+func (rsc *RevenueStreamCalculator) AddCustomSubscription(userID, customTierName string, monthlyAmount float64, duration time.Duration, features []string) error {
+	rsc.mu.Lock()
+	defer rsc.mu.Unlock()
+	
+	now := time.Now()
+	endDate := now.Add(duration)
+	
+	subscription := &ActiveSubscription{
+		UserID:        userID,
+		Tier:          SubscriptionTier(customTierName), // Use custom tier name
+		MonthlyAmount: monthlyAmount,
+		StartDate:     now,
+		EndDate:       endDate,
+		IsActive:      true,
+		LastUpdated:   now,
+	}
+	
+	// Calculate prorated rates
+	rsc.calculateProratedRates(subscription)
+	
+	rsc.activeSubscriptions[userID] = subscription
+	rsc.recalculateRevenueRate()
+	
+	rsc.logger.Info().
+		Str("user_id", userID).
+		Str("custom_tier", customTierName).
+		Float64("monthly_amount", monthlyAmount).
+		Float64("second_rate", subscription.SecondRate).
+		Strs("features", features).
+		Msg("Added custom subscription to revenue stream")
+	
+	return nil
+}
+
+// UpdateSubscriptionAmount updates the monthly amount for an existing subscription
+func (rsc *RevenueStreamCalculator) UpdateSubscriptionAmount(userID string, newMonthlyAmount float64) error {
+	rsc.mu.Lock()
+	defer rsc.mu.Unlock()
+	
+	subscription, exists := rsc.activeSubscriptions[userID]
+	if !exists {
+		return nil // Subscription not found
+	}
+	
+	oldAmount := subscription.MonthlyAmount
+	subscription.MonthlyAmount = newMonthlyAmount
+	subscription.LastUpdated = time.Now()
+	
+	// Recalculate prorated rates
+	rsc.calculateProratedRates(subscription)
+	rsc.recalculateRevenueRate()
+	
+	rsc.logger.Info().
+		Str("user_id", userID).
+		Float64("old_amount", oldAmount).
+		Float64("new_amount", newMonthlyAmount).
+		Float64("new_second_rate", subscription.SecondRate).
+		Msg("Updated subscription amount")
+	
+	return nil
+}
+
+// RemoveSubscription removes a subscription from real-time calculation
+func (rsc *RevenueStreamCalculator) RemoveSubscription(userID string) error {
+	rsc.mu.Lock()
+	defer rsc.mu.Unlock()
+	
+	if subscription, exists := rsc.activeSubscriptions[userID]; exists {
+		subscription.IsActive = false
+		delete(rsc.activeSubscriptions, userID)
+		rsc.recalculateRevenueRate()
+		
+		rsc.logger.Info().
+			Str("user_id", userID).
+			Msg("Removed subscription from revenue stream")
+	}
+	
+	return nil
+}
+
+// GetCurrentRevenueRate returns the current total revenue rate in $/second
+func (rsc *RevenueStreamCalculator) GetCurrentRevenueRate() float64 {
+	rsc.mu.RLock()
+	defer rsc.mu.RUnlock()
+	
+	return rsc.currentRevenueRate
+}
+
+// GetActiveSubscriptions returns current active subscriptions
+func (rsc *RevenueStreamCalculator) GetActiveSubscriptions() map[string]*ActiveSubscription {
+	rsc.mu.RLock()
+	defer rsc.mu.RUnlock()
+	
+	// Return a copy to avoid concurrent access
+	result := make(map[string]*ActiveSubscription)
+	for userID, sub := range rsc.activeSubscriptions {
+		if sub.IsActive {
+			result[userID] = &ActiveSubscription{
+				UserID:        sub.UserID,
+				Tier:          sub.Tier,
+				MonthlyAmount: sub.MonthlyAmount,
+				StartDate:     sub.StartDate,
+				EndDate:       sub.EndDate,
+				DailyRate:     sub.DailyRate,
+				HourlyRate:    sub.HourlyRate,
+				MinuteRate:    sub.MinuteRate,
+				SecondRate:    sub.SecondRate,
+				IsActive:      sub.IsActive,
+				LastUpdated:   sub.LastUpdated,
+			}
+		}
+	}
+	
+	return result
+}
+
+// calculateProratedRates calculates all prorated rates for a subscription
+func (rsc *RevenueStreamCalculator) calculateProratedRates(subscription *ActiveSubscription) {
+	monthlyAmount := subscription.MonthlyAmount
+	
+	// Standard prorated calculation: $30/month
+	// Assume 30 days per month for consistency
+	daysPerMonth := 30.0
+	hoursPerDay := 24.0
+	minutesPerHour := 60.0
+	secondsPerMinute := 60.0
+	
+	subscription.DailyRate = monthlyAmount / daysPerMonth
+	subscription.HourlyRate = subscription.DailyRate / hoursPerDay
+	subscription.MinuteRate = subscription.HourlyRate / minutesPerHour
+	subscription.SecondRate = subscription.MinuteRate / secondsPerMinute
+}
+
+// recalculateRevenueRate recalculates the total revenue rate from all active subscriptions
+func (rsc *RevenueStreamCalculator) recalculateRevenueRate() {
+	totalRate := 0.0
+	activeCount := 0
+	
+	now := time.Now()
+	
+	for userID, subscription := range rsc.activeSubscriptions {
+		// Check if subscription is still valid
+		if now.After(subscription.EndDate) {
+			subscription.IsActive = false
+			delete(rsc.activeSubscriptions, userID)
+			continue
+		}
+		
+		if subscription.IsActive {
+			totalRate += subscription.SecondRate
+			activeCount++
+		}
+	}
+	
+	rsc.currentRevenueRate = totalRate
+	rsc.lastCalculation = now
+	
+	rsc.logger.Debug().
+		Float64("total_revenue_rate", totalRate).
+		Int("active_subscriptions", activeCount).
+		Msg("Recalculated revenue rate")
+}
+
+// recalculationWorker periodically recalculates revenue rates to handle expired subscriptions
+func (rsc *RevenueStreamCalculator) recalculationWorker(ctx context.Context) {
+	defer rsc.wg.Done()
+	
+	// Recalculate every minute to check for expired subscriptions
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-rsc.stopChan:
+			return
+		case <-ticker.C:
+			rsc.mu.Lock()
+			rsc.recalculateRevenueRate()
+			rsc.mu.Unlock()
+		}
+	}
+}
+
+// GetRevenueBreakdown returns detailed breakdown of revenue by tier
+func (rsc *RevenueStreamCalculator) GetRevenueBreakdown() map[SubscriptionTier]RevenueBreakdown {
+	rsc.mu.RLock()
+	defer rsc.mu.RUnlock()
+	
+	breakdown := make(map[SubscriptionTier]RevenueBreakdown)
+	
+	for _, subscription := range rsc.activeSubscriptions {
+		if !subscription.IsActive {
+			continue
+		}
+		
+		if existing, exists := breakdown[subscription.Tier]; exists {
+			existing.Count++
+			existing.TotalMonthlyAmount += subscription.MonthlyAmount
+			existing.TotalSecondRate += subscription.SecondRate
+			breakdown[subscription.Tier] = existing
+		} else {
+			breakdown[subscription.Tier] = RevenueBreakdown{
+				Tier:               subscription.Tier,
+				Count:              1,
+				TotalMonthlyAmount: subscription.MonthlyAmount,
+				TotalSecondRate:    subscription.SecondRate,
+			}
+		}
+	}
+	
+	return breakdown
+}
+
+// RevenueBreakdown represents revenue statistics by subscription tier
+type RevenueBreakdown struct {
+	Tier               SubscriptionTier `json:"tier"`
+	Count              int              `json:"count"`
+	TotalMonthlyAmount float64          `json:"total_monthly_amount"`
+	TotalSecondRate    float64          `json:"total_second_rate"`
+}
+
+// GetStats returns revenue stream statistics
+func (rsc *RevenueStreamCalculator) GetStats() *RevenueStreamStats {
+	rsc.mu.RLock()
+	defer rsc.mu.RUnlock()
+	
+	activeCount := 0
+	totalMonthly := 0.0
+	
+	for _, subscription := range rsc.activeSubscriptions {
+		if subscription.IsActive {
+			activeCount++
+			totalMonthly += subscription.MonthlyAmount
+		}
+	}
+	
+	return &RevenueStreamStats{
+		ActiveSubscriptions:  activeCount,
+		TotalMonthlyRevenue:  totalMonthly,
+		CurrentRevenueRate:   rsc.currentRevenueRate,
+		LastCalculation:      rsc.lastCalculation,
+		RevenueBreakdown:     rsc.GetRevenueBreakdown(),
+	}
+}
+
+// RevenueStreamStats provides statistics about the revenue stream
+type RevenueStreamStats struct {
+	ActiveSubscriptions  int                              `json:"active_subscriptions"`
+	TotalMonthlyRevenue  float64                          `json:"total_monthly_revenue"`
+	CurrentRevenueRate   float64                          `json:"current_revenue_rate"`
+	LastCalculation      time.Time                        `json:"last_calculation"`
+	RevenueBreakdown     map[SubscriptionTier]RevenueBreakdown `json:"revenue_breakdown"`
+}

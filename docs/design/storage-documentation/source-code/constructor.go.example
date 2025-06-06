@@ -1,0 +1,27 @@
+package storage
+
+import (
+	"fmt"
+	"github.com/blackholenetwork/blackhole/pkg/core"
+	"github.com/rs/zerolog"
+)
+
+// NewStorageServiceWithConfig creates a storage service based on configuration
+// Now defaults to CID-based enhanced storage service
+func NewStorageServiceWithConfig(config *Config, logger zerolog.Logger, metrics core.MetricsCollector) (Service, error) {
+	logger.Info().Msg("Creating CID-based enhanced storage service with virtual bucket system")
+	
+	// Create CID-based enhanced service with virtual bucket system
+	cidService, err := NewCIDEnhancedStorageService(config, logger, metrics)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create CID enhanced storage service: %w", err)
+	}
+	
+	return cidService, nil
+}
+
+// NewStorageServiceCID creates a CID-based enhanced storage service
+func NewStorageServiceCID(config *Config, logger zerolog.Logger, metrics core.MetricsCollector) (*CIDEnhancedStorageService, error) {
+	return NewCIDEnhancedStorageService(config, logger, metrics)
+}
+

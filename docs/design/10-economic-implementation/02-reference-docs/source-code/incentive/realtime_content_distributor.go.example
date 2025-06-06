@@ -1,0 +1,479 @@
+package incentive
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/rs/zerolog"
+)
+
+// RealTimeContentDistributor handles per-second distribution of content creator rewards
+type RealTimeContentDistributor struct {
+	mu                    sync.RWMutex
+	logger                zerolog.Logger
+	config                *Config
+	
+	// Content pool management
+	contentPool           float64  // Accumulated 70% content funds to distribute
+	lastDistributionTime  time.Time
+	
+	// Current content engagement tracking (per second)
+	currentContentEngagement map[string]*ContentEngagementRealTime
+	
+	// Per-second distribution results
+	distributionHistory   []*ContentDistribution
+	maxHistorySize        int
+	
+	// Creator reward accumulation
+	creatorRewards        map[string]float64 // creatorID -> accumulated rewards
+	
+	// Control
+	started               bool
+	stopChan              chan struct{}
+	wg                    sync.WaitGroup
+}
+
+// ContentEngagementRealTime tracks real-time content engagement per second
+type ContentEngagementRealTime struct {
+	CreatorID             string    `json:"creator_id"`
+	LastUpdateTime        time.Time `json:"last_update_time"`
+	
+	// Engagement time tracking (seconds per second - concurrent viewers/listeners/readers)
+	VideoWatchTimePerSecond    float64 `json:"video_watch_time_per_second"`    // Total seconds watched this second
+	AudioListenTimePerSecond   float64 `json:"audio_listen_time_per_second"`   // Total seconds listened this second
+	DocumentReadTimePerSecond  float64 `json:"document_read_time_per_second"`  // Total seconds read this second
+	PhotoViewTimePerSecond     float64 `json:"photo_view_time_per_second"`     // Total seconds viewed this second
+	
+	// Content quality weighting
+	QualityMultiplier     float64 `json:"quality_multiplier"`     // 0.5-2.0 based on content quality
+	
+	// Total engagement value per second
+	TotalEngagementValue  float64 `json:"total_engagement_value"`
+	
+	// Activity tracking
+	IsActive              bool      `json:"is_active"`
+	LastActivityTime      time.Time `json:"last_activity_time"`
+}
+
+// ContentDistribution represents a single second's content distribution result
+type ContentDistribution struct {
+	Timestamp             time.Time            `json:"timestamp"`
+	ContentPoolAmount     float64              `json:"content_pool_amount"`
+	TotalEngagementValue  float64              `json:"total_engagement_value"`
+	CreatorRewards        map[string]float64   `json:"creator_rewards"`
+	ActiveCreators        []string             `json:"active_creators"`
+	EngagementBreakdown   *EngagementBreakdown `json:"engagement_breakdown"`
+}
+
+// EngagementBreakdown provides detailed engagement statistics
+type EngagementBreakdown struct {
+	TotalVideoTime    float64 `json:"total_video_time"`
+	TotalAudioTime    float64 `json:"total_audio_time"`
+	TotalDocumentTime float64 `json:"total_document_time"`
+	TotalPhotoTime    float64 `json:"total_photo_time"`
+	AverageQuality    float64 `json:"average_quality"`
+}
+
+// NewRealTimeContentDistributor creates a new real-time content distributor
+func NewRealTimeContentDistributor(config *Config, logger zerolog.Logger) *RealTimeContentDistributor {
+	return &RealTimeContentDistributor{
+		logger:                   logger.With().Str("component", "realtime_content_distributor").Logger(),
+		config:                   config,
+		currentContentEngagement: make(map[string]*ContentEngagementRealTime),
+		distributionHistory:      make([]*ContentDistribution, 0),
+		maxHistorySize:           3600, // Keep 1 hour of history
+		creatorRewards:           make(map[string]float64),
+		stopChan:                 make(chan struct{}),
+	}
+}
+
+// Start begins the real-time content distribution
+func (rtcd *RealTimeContentDistributor) Start(ctx context.Context) error {
+	rtcd.mu.Lock()
+	defer rtcd.mu.Unlock()
+	
+	if rtcd.started {
+		return fmt.Errorf("real-time content distributor already started")
+	}
+	
+	rtcd.logger.Info().Msg("Starting real-time content distributor")
+	
+	// Start per-second distribution worker
+	rtcd.wg.Add(1)
+	go rtcd.distributionWorker(ctx)
+	
+	// Start engagement cleanup worker
+	rtcd.wg.Add(1)
+	go rtcd.cleanupWorker(ctx)
+	
+	rtcd.started = true
+	rtcd.logger.Info().Msg("Real-time content distributor started")
+	
+	return nil
+}
+
+// Stop stops the real-time content distributor
+func (rtcd *RealTimeContentDistributor) Stop(ctx context.Context) error {
+	rtcd.mu.Lock()
+	defer rtcd.mu.Unlock()
+	
+	if !rtcd.started {
+		return nil
+	}
+	
+	rtcd.logger.Info().Msg("Stopping real-time content distributor")
+	
+	close(rtcd.stopChan)
+	rtcd.wg.Wait()
+	
+	rtcd.started = false
+	rtcd.logger.Info().Msg("Real-time content distributor stopped")
+	
+	return nil
+}
+
+// AddContentFunds adds funds to the content pool for distribution
+func (rtcd *RealTimeContentDistributor) AddContentFunds(amount float64) {
+	rtcd.mu.Lock()
+	defer rtcd.mu.Unlock()
+	
+	rtcd.contentPool += amount
+	
+	rtcd.logger.Debug().
+		Float64("amount", amount).
+		Float64("total_pool", rtcd.contentPool).
+		Msg("Content funds added")
+}
+
+// RecordContentEngagement records real-time content engagement
+func (rtcd *RealTimeContentDistributor) RecordContentEngagement(
+	creatorID string,
+	videoWatchTime, audioListenTime, documentReadTime, photoViewTime float64,
+	qualityMultiplier float64,
+) {
+	rtcd.mu.Lock()
+	defer rtcd.mu.Unlock()
+	
+	now := time.Now()
+	
+	// Get or create engagement record
+	engagement, exists := rtcd.currentContentEngagement[creatorID]
+	if !exists {
+		engagement = &ContentEngagementRealTime{
+			CreatorID: creatorID,
+		}
+		rtcd.currentContentEngagement[creatorID] = engagement
+	}
+	
+	// Update engagement rates (per second)
+	engagement.LastUpdateTime = now
+	engagement.VideoWatchTimePerSecond = videoWatchTime
+	engagement.AudioListenTimePerSecond = audioListenTime
+	engagement.DocumentReadTimePerSecond = documentReadTime
+	engagement.PhotoViewTimePerSecond = photoViewTime
+	engagement.QualityMultiplier = qualityMultiplier
+	engagement.IsActive = true
+	engagement.LastActivityTime = now
+	
+	// Calculate total engagement value with content type weights and quality multiplier
+	engagement.TotalEngagementValue = rtcd.calculateEngagementValue(engagement)
+	
+	rtcd.logger.Debug().
+		Str("creator_id", creatorID).
+		Float64("video_time", videoWatchTime).
+		Float64("audio_time", audioListenTime).
+		Float64("document_time", documentReadTime).
+		Float64("photo_time", photoViewTime).
+		Float64("quality_multiplier", qualityMultiplier).
+		Float64("total_engagement_value", engagement.TotalEngagementValue).
+		Msg("Content engagement recorded")
+}
+
+// calculateEngagementValue calculates weighted engagement value based on content type and quality
+func (rtcd *RealTimeContentDistributor) calculateEngagementValue(engagement *ContentEngagementRealTime) float64 {
+	// Content type weights (configurable via config if needed)
+	videoWeight := 1.0      // Base weight for video
+	audioWeight := 0.8      // Audio slightly less valuable than video
+	documentWeight := 0.6   // Documents less engaging than media
+	photoWeight := 0.4      // Photos least engaging (quick views)
+	
+	baseValue := (engagement.VideoWatchTimePerSecond * videoWeight) +
+		(engagement.AudioListenTimePerSecond * audioWeight) +
+		(engagement.DocumentReadTimePerSecond * documentWeight) +
+		(engagement.PhotoViewTimePerSecond * photoWeight)
+	
+	// Apply quality multiplier (0.5-2.0 range)
+	return baseValue * engagement.QualityMultiplier
+}
+
+// distributionWorker runs the per-second distribution process
+func (rtcd *RealTimeContentDistributor) distributionWorker(ctx context.Context) {
+	defer rtcd.wg.Done()
+	
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-rtcd.stopChan:
+			return
+		case <-ticker.C:
+			rtcd.distributeContentFunds()
+		}
+	}
+}
+
+// distributeContentFunds distributes content funds based on current engagement
+func (rtcd *RealTimeContentDistributor) distributeContentFunds() {
+	rtcd.mu.Lock()
+	defer rtcd.mu.Unlock()
+	
+	now := time.Now()
+	
+	if rtcd.contentPool <= 0 {
+		return // No funds to distribute
+	}
+	
+	// Calculate total engagement value from all active creators
+	totalEngagementValue := 0.0
+	activeCreators := []string{}
+	var engagementBreakdown EngagementBreakdown
+	
+	for creatorID, engagement := range rtcd.currentContentEngagement {
+		if engagement.IsActive && time.Since(engagement.LastActivityTime) < 5*time.Second {
+			totalEngagementValue += engagement.TotalEngagementValue
+			activeCreators = append(activeCreators, creatorID)
+			
+			// Accumulate breakdown stats
+			engagementBreakdown.TotalVideoTime += engagement.VideoWatchTimePerSecond
+			engagementBreakdown.TotalAudioTime += engagement.AudioListenTimePerSecond
+			engagementBreakdown.TotalDocumentTime += engagement.DocumentReadTimePerSecond
+			engagementBreakdown.TotalPhotoTime += engagement.PhotoViewTimePerSecond
+		}
+	}
+	
+	if totalEngagementValue <= 0 {
+		// No active content engagement - funds remain in pool
+		rtcd.logger.Debug().
+			Float64("content_pool", rtcd.contentPool).
+			Msg("No active content engagement - keeping funds in pool")
+		return
+	}
+	
+	// Calculate average quality
+	if len(activeCreators) > 0 {
+		var totalQuality float64
+		for _, creatorID := range activeCreators {
+			totalQuality += rtcd.currentContentEngagement[creatorID].QualityMultiplier
+		}
+		engagementBreakdown.AverageQuality = totalQuality / float64(len(activeCreators))
+	}
+	
+	// Calculate distribution based on engagement value ratios
+	distribution := &ContentDistribution{
+		Timestamp:            now,
+		ContentPoolAmount:    rtcd.contentPool,
+		TotalEngagementValue: totalEngagementValue,
+		CreatorRewards:       make(map[string]float64),
+		ActiveCreators:       activeCreators,
+		EngagementBreakdown:  &engagementBreakdown,
+	}
+	
+	for _, creatorID := range activeCreators {
+		engagement := rtcd.currentContentEngagement[creatorID]
+		
+		// Calculate creator's share of the content pool
+		shareRatio := engagement.TotalEngagementValue / totalEngagementValue
+		creatorReward := rtcd.contentPool * shareRatio
+		
+		distribution.CreatorRewards[creatorID] = creatorReward
+		
+		// Accumulate creator rewards
+		rtcd.creatorRewards[creatorID] += creatorReward
+		
+		rtcd.logger.Debug().
+			Str("creator_id", creatorID).
+			Float64("engagement_value", engagement.TotalEngagementValue).
+			Float64("share_ratio", shareRatio).
+			Float64("reward", creatorReward).
+			Msg("Content creator reward calculated")
+	}
+	
+	// Add to distribution history
+	rtcd.distributionHistory = append(rtcd.distributionHistory, distribution)
+	if len(rtcd.distributionHistory) > rtcd.maxHistorySize {
+		rtcd.distributionHistory = rtcd.distributionHistory[1:]
+	}
+	
+	// Clear the content pool
+	rtcd.contentPool = 0
+	rtcd.lastDistributionTime = now
+	
+	rtcd.logger.Debug().
+		Int("active_creators", len(activeCreators)).
+		Float64("total_engagement_value", totalEngagementValue).
+		Float64("distributed_amount", distribution.ContentPoolAmount).
+		Msg("Content funds distributed")
+}
+
+// cleanupWorker removes inactive creators from tracking
+func (rtcd *RealTimeContentDistributor) cleanupWorker(ctx context.Context) {
+	defer rtcd.wg.Done()
+	
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-rtcd.stopChan:
+			return
+		case <-ticker.C:
+			rtcd.cleanupInactiveCreators()
+		}
+	}
+}
+
+// cleanupInactiveCreators removes creators who haven't been active recently
+func (rtcd *RealTimeContentDistributor) cleanupInactiveCreators() {
+	rtcd.mu.Lock()
+	defer rtcd.mu.Unlock()
+	
+	inactiveThreshold := 60 * time.Second // 1 minute of inactivity
+	
+	for creatorID, engagement := range rtcd.currentContentEngagement {
+		if time.Since(engagement.LastActivityTime) > inactiveThreshold {
+			engagement.IsActive = false
+			
+			rtcd.logger.Debug().
+				Str("creator_id", creatorID).
+				Time("last_activity", engagement.LastActivityTime).
+				Msg("Creator marked as inactive")
+		}
+	}
+}
+
+// GetCurrentContentPool returns the current content pool amount
+func (rtcd *RealTimeContentDistributor) GetCurrentContentPool() float64 {
+	rtcd.mu.RLock()
+	defer rtcd.mu.RUnlock()
+	
+	return rtcd.contentPool
+}
+
+// GetActiveCreators returns current active creators and their engagement
+func (rtcd *RealTimeContentDistributor) GetActiveCreators() map[string]*ContentEngagementRealTime {
+	rtcd.mu.RLock()
+	defer rtcd.mu.RUnlock()
+	
+	result := make(map[string]*ContentEngagementRealTime)
+	
+	for creatorID, engagement := range rtcd.currentContentEngagement {
+		if engagement.IsActive && time.Since(engagement.LastActivityTime) < 30*time.Second {
+			engagementCopy := *engagement
+			result[creatorID] = &engagementCopy
+		}
+	}
+	
+	return result
+}
+
+// GetCreatorRewards returns accumulated rewards for all creators
+func (rtcd *RealTimeContentDistributor) GetCreatorRewards() map[string]float64 {
+	rtcd.mu.RLock()
+	defer rtcd.mu.RUnlock()
+	
+	result := make(map[string]float64)
+	for creatorID, reward := range rtcd.creatorRewards {
+		result[creatorID] = reward
+	}
+	
+	return result
+}
+
+// GetDistributionHistory returns recent distribution history
+func (rtcd *RealTimeContentDistributor) GetDistributionHistory(limit int) []*ContentDistribution {
+	rtcd.mu.RLock()
+	defer rtcd.mu.RUnlock()
+	
+	if limit <= 0 || limit > len(rtcd.distributionHistory) {
+		limit = len(rtcd.distributionHistory)
+	}
+	
+	start := len(rtcd.distributionHistory) - limit
+	result := make([]*ContentDistribution, limit)
+	
+	for i := 0; i < limit; i++ {
+		distribution := rtcd.distributionHistory[start+i]
+		distCopy := *distribution
+		distCopy.CreatorRewards = make(map[string]float64)
+		for k, v := range distribution.CreatorRewards {
+			distCopy.CreatorRewards[k] = v
+		}
+		result[i] = &distCopy
+	}
+	
+	return result
+}
+
+// GetStats returns real-time content distribution statistics
+func (rtcd *RealTimeContentDistributor) GetStats() *RealTimeContentStats {
+	rtcd.mu.RLock()
+	defer rtcd.mu.RUnlock()
+	
+	activeCount := 0
+	totalEngagementValue := 0.0
+	var totalVideoTime, totalAudioTime, totalDocumentTime, totalPhotoTime float64
+	
+	for _, engagement := range rtcd.currentContentEngagement {
+		if engagement.IsActive && time.Since(engagement.LastActivityTime) < 30*time.Second {
+			activeCount++
+			totalEngagementValue += engagement.TotalEngagementValue
+			totalVideoTime += engagement.VideoWatchTimePerSecond
+			totalAudioTime += engagement.AudioListenTimePerSecond
+			totalDocumentTime += engagement.DocumentReadTimePerSecond
+			totalPhotoTime += engagement.PhotoViewTimePerSecond
+		}
+	}
+	
+	var totalDistributedToday float64
+	today := time.Now().Truncate(24 * time.Hour)
+	
+	for _, distribution := range rtcd.distributionHistory {
+		if distribution.Timestamp.After(today) {
+			totalDistributedToday += distribution.ContentPoolAmount
+		}
+	}
+	
+	return &RealTimeContentStats{
+		ActiveCreators:           activeCount,
+		TotalEngagementValue:     totalEngagementValue,
+		CurrentContentPool:       rtcd.contentPool,
+		TotalDistributedToday:    totalDistributedToday,
+		LastDistribution:         rtcd.lastDistributionTime,
+		DistributionCount:        len(rtcd.distributionHistory),
+		TotalVideoTime:           totalVideoTime,
+		TotalAudioTime:           totalAudioTime,
+		TotalDocumentTime:        totalDocumentTime,
+		TotalPhotoTime:           totalPhotoTime,
+	}
+}
+
+// RealTimeContentStats represents statistics for real-time content distribution
+type RealTimeContentStats struct {
+	ActiveCreators        int       `json:"active_creators"`
+	TotalEngagementValue  float64   `json:"total_engagement_value"`
+	CurrentContentPool    float64   `json:"current_content_pool"`
+	TotalDistributedToday float64   `json:"total_distributed_today"`
+	LastDistribution      time.Time `json:"last_distribution"`
+	DistributionCount     int       `json:"distribution_count"`
+	TotalVideoTime        float64   `json:"total_video_time"`
+	TotalAudioTime        float64   `json:"total_audio_time"`
+	TotalDocumentTime     float64   `json:"total_document_time"`
+	TotalPhotoTime        float64   `json:"total_photo_time"`
+}

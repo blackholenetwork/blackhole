@@ -1,0 +1,118 @@
+# Prometheus Configuration for Blackhole Network
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'blackhole-prod'
+    environment: 'production'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+# Load rules once and periodically evaluate them
+rule_files:
+  - "alerts/*.yml"
+
+# Scrape configurations
+scrape_configs:
+  # Blackhole Network metrics
+  - job_name: 'blackhole'
+    static_configs:
+      - targets: ['blackhole:9090']
+        labels:
+          service: 'blackhole'
+          component: 'core'
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+    scrape_timeout: 5s
+
+  # Node exporter for system metrics
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+        labels:
+          service: 'system'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        regex: '([^:]+):.*'
+
+  # P2P network metrics
+  - job_name: 'p2p'
+    static_configs:
+      - targets: ['blackhole:9091']
+        labels:
+          service: 'blackhole'
+          component: 'p2p'
+    metrics_path: '/p2p/metrics'
+
+  # Storage metrics
+  - job_name: 'storage'
+    static_configs:
+      - targets: ['blackhole:9092']
+        labels:
+          service: 'blackhole'
+          component: 'storage'
+    metrics_path: '/storage/metrics'
+
+  # Economic layer metrics
+  - job_name: 'economic'
+    static_configs:
+      - targets: ['blackhole:9093']
+        labels:
+          service: 'blackhole'
+          component: 'economic'
+    metrics_path: '/economic/metrics'
+
+  # Redis metrics
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+        labels:
+          service: 'redis'
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Grafana metrics
+  - job_name: 'grafana'
+    static_configs:
+      - targets: ['grafana:3000']
+
+  # Docker container metrics
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+        labels:
+          service: 'docker'
+    metric_relabel_configs:
+      # Only keep important metrics to reduce cardinality
+      - source_labels: [__name__]
+        regex: 'container_(cpu_usage_seconds_total|memory_usage_bytes|network_receive_bytes_total|network_transmit_bytes_total|fs_usage_bytes)'
+        action: keep
+
+# Service discovery for dynamic targets
+# Uncomment and configure based on your infrastructure
+# scrape_configs:
+#   - job_name: 'blackhole-swarm'
+#     dns_sd_configs:
+#       - names: ['tasks.blackhole']
+#         type: A
+#         port: 9090
+
+# Remote write configuration for long-term storage
+# remote_write:
+#   - url: "http://cortex:9009/api/prom/push"
+#     queue_config:
+#       max_samples_per_send: 10000
+#       batch_send_deadline: 5s
+#     write_relabel_configs:
+#       - source_labels: [__name__]
+#         regex: 'go_.*'
+#         action: drop

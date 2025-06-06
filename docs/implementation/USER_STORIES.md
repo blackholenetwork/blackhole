@@ -3,9 +3,9 @@
 ## Epic 1: Node Operator Stories
 
 ### Story 1.1: First-Time Node Setup
-**As a** computer owner with spare resources  
-**I want to** set up a Blackhole node quickly  
-**So that I** can start earning credits for my unused storage  
+**As a** computer owner with spare resources
+**I want to** set up a Blackhole node quickly
+**So that I** can start earning credits for my unused storage
 
 **Acceptance Criteria:**
 - [ ] Download single binary (<50MB)
@@ -35,9 +35,9 @@ $ ./blackhole-linux-amd64 start
 ---
 
 ### Story 1.2: Storage Provider Monitoring
-**As a** node operator providing storage  
-**I want to** monitor my node's performance and earnings  
-**So that I** can optimize my resource allocation  
+**As a** node operator providing storage
+**I want to** monitor my node's performance and earnings
+**So that I** can optimize my resource allocation
 
 **Acceptance Criteria:**
 - [ ] View real-time storage usage
@@ -57,12 +57,12 @@ Storage:
   Capacity:  50.0 GB
   Used:      34.7 GB (69.4%)
   Files:     1,847
-  
+
 Credits:
   Balance:   47.82
   Earned:    +8.4 (last 24h)
   Rate:      0.35/hour
-  
+
 Network:
   Upload:    127.3 GB (last 24h)
   Download:  43.2 GB (last 24h)
@@ -74,9 +74,9 @@ Network:
 ## Epic 2: Storage User Stories
 
 ### Story 2.1: Store Personal Files
-**As a** individual user  
-**I want to** store my important files securely  
-**So that I** have backup with privacy and redundancy  
+**As a** individual user
+**I want to** store my important files securely
+**So that I** have backup with privacy and redundancy
 
 **Acceptance Criteria:**
 - [ ] Upload file with one command
@@ -109,9 +109,9 @@ $ blackhole get QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG
 ---
 
 ### Story 2.2: Developer API Usage
-**As a** application developer  
-**I want to** integrate Blackhole storage into my app  
-**So that I** can offer decentralized storage to users  
+**As a** application developer
+**I want to** integrate Blackhole storage into my app
+**So that I** can offer decentralized storage to users
 
 **Acceptance Criteria:**
 - [ ] Simple REST API
@@ -131,7 +131,7 @@ import (
 func main() {
     // Initialize client
     client := blackhole.NewClient("http://localhost:8080", "api-key")
-    
+
     // Upload file
     file, _ := os.Open("user-avatar.jpg")
     result, err := client.Store(file, blackhole.Options{
@@ -141,19 +141,19 @@ func main() {
             "type": "avatar",
         },
     })
-    
+
     if err != nil {
         log.Fatal(err)
     }
-    
+
     fmt.Printf("Stored file: %s\n", result.CID)
-    
+
     // Retrieve file
     data, err := client.Get(result.CID)
     if err != nil {
         log.Fatal(err)
     }
-    
+
     os.WriteFile("downloaded-avatar.jpg", data, 0644)
 }
 ```
@@ -163,9 +163,9 @@ func main() {
 ## Epic 3: Network Participant Stories
 
 ### Story 3.1: Join as Bandwidth Provider
-**As a** user with good internet connection  
-**I want to** share my bandwidth for credits  
-**So that I** can monetize my unused capacity  
+**As a** user with good internet connection
+**I want to** share my bandwidth for credits
+**So that I** can monetize my unused capacity
 
 **Acceptance Criteria:**
 - [ ] Opt-in to bandwidth sharing
@@ -179,22 +179,22 @@ func main() {
 # ~/.blackhole/config.yaml
 node:
   role: provider
-  
+
 bandwidth:
   enabled: true
   upload_limit: 50  # Mbps
   download_limit: 100  # Mbps
   monthly_cap: 1000  # GB
-  
+
 # Earnings: ~0.01 credits per GB transferred
 ```
 
 ---
 
 ### Story 3.2: Emergency File Recovery
-**As a** user who lost local files  
-**I want to** recover my files from the network  
-**So that I** don't lose important data  
+**As a** user who lost local files
+**I want to** recover my files from the network
+**So that I** don't lose important data
 
 **Acceptance Criteria:**
 - [ ] List all my stored files
@@ -208,7 +208,7 @@ bandwidth:
 $ blackhole recover --list
 Your files in the network:
 1. QmYwAP... tax-return-2024.pdf     2.3 MB   2024-01-15
-2. QmXkCD... family-photos.zip       145 MB   2024-01-20  
+2. QmXkCD... family-photos.zip       145 MB   2024-01-20
 3. QmPqRs... backup-2024-02.tar      4.7 GB   2024-02-01
 
 $ blackhole recover --all --output ~/recovered/
@@ -223,9 +223,9 @@ $ blackhole recover --all --output ~/recovered/
 ## Epic 4: Economic Participation
 
 ### Story 4.1: Credit Management
-**As a** active network participant  
-**I want to** manage my credit balance  
-**So that I** can optimize earnings and spending  
+**As a** active network participant
+**I want to** manage my credit balance
+**So that I** can optimize earnings and spending
 
 **Acceptance Criteria:**
 - [ ] View detailed transaction history
@@ -262,9 +262,9 @@ Net Change:          +61.86 (+49.4%)
 ## Epic 5: Community Stories
 
 ### Story 5.1: Contribute to Network Health
-**As a** network supporter  
-**I want to** run a reliable node  
-**So that I** help maintain network stability  
+**As a** network supporter
+**I want to** run a reliable node
+**So that I** help maintain network stability
 
 **Acceptance Criteria:**
 - [ ] See network health metrics
@@ -280,13 +280,13 @@ Node Reputation Score: 94/100
 
 Factors:
   Uptime:           99.7% (past 30 days)     +25/25
-  Response Time:    <50ms average            +20/20  
+  Response Time:    <50ms average            +20/20
   Data Integrity:   100% successful          +25/25
   Peer Reviews:     4.8/5.0 (47 reviews)    +19/20
   Network Age:      187 days                 +5/10
 
 Tier: Trusted Provider
-Benefits: 
+Benefits:
   - 10% bonus on earnings
   - Priority in storage placement
   - Eligible for governance participation
@@ -297,7 +297,7 @@ Benefits:
 ## Edge Cases and Error Scenarios
 
 ### Scenario: Network Partition
-**When** the network splits due to connectivity issues  
+**When** the network splits due to connectivity issues
 **Then** nodes should:
 - Continue serving cached content
 - Queue new uploads locally
@@ -305,7 +305,7 @@ Benefits:
 - Not lose credits/data
 
 ### Scenario: Malicious Node
-**When** a node serves corrupted data  
+**When** a node serves corrupted data
 **Then** the system should:
 - Detect via hash mismatch
 - Retrieve from other nodes
@@ -313,7 +313,7 @@ Benefits:
 - Alert affected users
 
 ### Scenario: Credit Shortage
-**When** user runs out of credits during operation  
+**When** user runs out of credits during operation
 **Then** the system should:
 - Complete current operation
 - Prevent new storage
@@ -326,7 +326,7 @@ Benefits:
 
 ### User Satisfaction
 - Setup time: <5 minutes
-- First successful storage: <1 minute  
+- First successful storage: <1 minute
 - File retrieval time: <5 seconds
 - Zero data loss incidents
 - 95% positive feedback

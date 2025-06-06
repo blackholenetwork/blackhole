@@ -32,13 +32,13 @@ type ThroughputRequirements struct {
     // API layer
     APIRequestsPerSecond    int // 1000 RPS per node
     ConcurrentConnections   int // 10,000 concurrent
-    
+
     // Storage layer
     StorageReadMBps         int // 100 MB/s
     StorageWriteMBps        int // 50 MB/s
     ConcurrentFileOps       int // 100 concurrent
-    
-    // Network layer  
+
+    // Network layer
     P2PConnectionsPerNode   int // 50 peers
     NetworkBandwidthMbps    int // 100 Mbps
 }
@@ -72,7 +72,7 @@ var bufferPool = sync.Pool{
 func ProcessData(r io.Reader) error {
     buf := bufferPool.Get().([]byte)
     defer bufferPool.Put(buf)
-    
+
     _, err := r.Read(buf)
     return err
 }
@@ -114,7 +114,7 @@ func IndexFiles(files []File) map[string]File {
 func BuildPath(parts ...string) string {
     var b strings.Builder
     b.Grow(64) // Preallocate
-    
+
     for i, part := range parts {
         if i > 0 {
             b.WriteByte('/')
@@ -128,7 +128,7 @@ func BuildPath(parts ...string) string {
 type FileCache struct {
     mu    sync.RWMutex
     files map[string]*File
-    
+
     // Intern strings to save memory
     paths *StringInterner
 }
@@ -147,7 +147,7 @@ func ProcessManyItems(items []Item) error {
         if end > len(items) {
             end = len(items)
         }
-        
+
         if err := processBatch(items[i:end]); err != nil {
             return err
         }
@@ -163,7 +163,7 @@ func ParallelProcess(items []Item) error {
     numCPU := runtime.NumCPU()
     ch := make(chan Item, numCPU*2)
     errCh := make(chan error, 1)
-    
+
     // Worker pool
     var wg sync.WaitGroup
     for i := 0; i < numCPU; i++ {
@@ -181,15 +181,15 @@ func ParallelProcess(items []Item) error {
             }
         }()
     }
-    
+
     // Feed work
     for _, item := range items {
         ch <- item
     }
     close(ch)
-    
+
     wg.Wait()
-    
+
     select {
     case err := <-errCh:
         return err
@@ -232,7 +232,7 @@ func ReadFile(path string) ([]byte, error) {
         return nil, err
     }
     defer file.Close()
-    
+
     // Use buffered reader
     reader := bufio.NewReaderSize(file, 64*1024) // 64KB buffer
     return io.ReadAll(reader)
@@ -245,10 +245,10 @@ func WriteFile(path string, data []byte) error {
         return err
     }
     defer file.Close()
-    
+
     writer := bufio.NewWriterSize(file, 64*1024)
     defer writer.Flush()
-    
+
     _, err = writer.Write(data)
     return err
 }
@@ -263,16 +263,16 @@ func ProcessLargeFile(path string) error {
         return err
     }
     defer file.Close()
-    
+
     scanner := bufio.NewScanner(file)
     scanner.Buffer(make([]byte, 4096), 1024*1024) // 1MB max line
-    
+
     for scanner.Scan() {
         if err := processLine(scanner.Bytes()); err != nil {
             return err
         }
     }
-    
+
     return scanner.Err()
 }
 ```
@@ -316,7 +316,7 @@ func (c *Client) BatchExecute(ops []Operation) ([]Result, error) {
     if err != nil {
         return nil, err
     }
-    
+
     return resp.Results, nil
 }
 ```
@@ -352,14 +352,14 @@ func (c *CacheHierarchy) Get(key string) ([]byte, error) {
     if data, ok := c.l1.Get(key); ok {
         return data, nil
     }
-    
+
     // Try L2
     if data, ok := c.l2.Get(key); ok {
         // Promote to L1
         c.l1.Set(key, data)
         return data, nil
     }
-    
+
     return nil, ErrNotFound
 }
 ```
@@ -402,12 +402,12 @@ func GetPreparedStmt(db *sql.DB, query string) (*sql.Stmt, error) {
     if stmt, ok := stmtCache[query]; ok {
         return stmt, nil
     }
-    
+
     stmt, err := db.Prepare(query)
     if err != nil {
         return nil, err
     }
-    
+
     stmtCache[query] = stmt
     return stmt, nil
 }
@@ -419,20 +419,20 @@ func BulkInsert(db *sql.DB, records []Record) error {
         return err
     }
     defer tx.Rollback()
-    
+
     stmt, err := tx.Prepare("INSERT INTO records (id, data) VALUES (?, ?)")
     if err != nil {
         return err
     }
     defer stmt.Close()
-    
+
     for _, record := range records {
         _, err := stmt.Exec(record.ID, record.Data)
         if err != nil {
             return err
         }
     }
-    
+
     return tx.Commit()
 }
 ```
@@ -466,14 +466,14 @@ func EnableProfiling() {
 // Benchmark critical functions
 func BenchmarkChunkProcessing(b *testing.B) {
     data := generateTestData(1 * MB)
-    
+
     b.ResetTimer()
     b.ReportAllocs()
-    
+
     for i := 0; i < b.N; i++ {
         _ = processChunk(data)
     }
-    
+
     b.SetBytes(int64(len(data)))
 }
 ```
@@ -484,7 +484,7 @@ func BenchmarkChunkProcessing(b *testing.B) {
 func TrackMemory() {
     var m runtime.MemStats
     runtime.ReadMemStats(&m)
-    
+
     log.Printf("Alloc = %v MB", m.Alloc / 1024 / 1024)
     log.Printf("TotalAlloc = %v MB", m.TotalAlloc / 1024 / 1024)
     log.Printf("Sys = %v MB", m.Sys / 1024 / 1024)
@@ -496,14 +496,14 @@ func TestMemoryUsage(t *testing.T) {
     runtime.GC()
     var before runtime.MemStats
     runtime.ReadMemStats(&before)
-    
+
     // Run test
     allocateMemory()
-    
+
     runtime.GC()
     var after runtime.MemStats
     runtime.ReadMemStats(&after)
-    
+
     leak := after.Alloc - before.Alloc
     if leak > 1*MB {
         t.Errorf("Memory leak detected: %d bytes", leak)
@@ -525,14 +525,14 @@ var (
         },
         []string{"method", "endpoint", "status"},
     )
-    
+
     activeGoroutines = prometheus.NewGauge(
         prometheus.GaugeOpts{
             Name: "active_goroutines",
             Help: "Number of active goroutines",
         },
     )
-    
+
     memoryUsage = prometheus.NewGauge(
         prometheus.GaugeOpts{
             Name: "memory_usage_bytes",
@@ -545,10 +545,10 @@ var (
 func CollectMetrics() {
     ticker := time.NewTicker(10 * time.Second)
     defer ticker.Stop()
-    
+
     for range ticker.C {
         activeGoroutines.Set(float64(runtime.NumGoroutine()))
-        
+
         var m runtime.MemStats
         runtime.ReadMemStats(&m)
         memoryUsage.Set(float64(m.Alloc))
@@ -569,7 +569,7 @@ func (pm *PerformanceMonitor) CheckPerformance(operation string, duration time.D
     if !ok {
         return
     }
-    
+
     if duration > threshold {
         pm.alerting.Send(Alert{
             Severity: "warning",
@@ -624,20 +624,20 @@ func TestPerformanceRegression(t *testing.T) {
         "FileDownload1MB": 1 * time.Second,
         "SearchQuery":     500 * time.Millisecond,
     }
-    
+
     for name, maxDuration := range benchmarks {
         t.Run(name, func(t *testing.T) {
             start := time.Now()
-            
+
             // Run operation
             err := runOperation(name)
-            
+
             duration := time.Since(start)
-            
+
             if err != nil {
                 t.Fatalf("Operation failed: %v", err)
             }
-            
+
             if duration > maxDuration {
                 t.Errorf("Performance regression: %s took %v, max is %v",
                     name, duration, maxDuration)

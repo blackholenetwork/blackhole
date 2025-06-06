@@ -1,0 +1,122 @@
+# Full pre-commit configuration with all tools
+# Use SKIP environment variable to skip specific hooks
+
+repos:
+  # Basic file checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-json
+      - id: check-toml
+      - id: check-xml
+      - id: check-shebang-scripts-are-executable
+      - id: check-executables-have-shebangs
+      - id: detect-private-key
+      - id: fix-byte-order-marker
+      - id: mixed-line-ending
+        args: ['--fix=lf']
+      - id: no-commit-to-branch
+        args: ['--branch', 'main']
+
+  # Go-specific checks
+  - repo: https://github.com/dnephin/pre-commit-golang
+    rev: v0.5.1
+    hooks:
+      - id: go-fmt
+      - id: go-vet
+      - id: go-imports
+        args: ['-local', 'github.com/blackholenetwork/blackhole']
+      - id: go-cyclo
+        args: ['-over', '15']
+      - id: golangci-lint
+        args: ['--config', '.golangci.yml']
+      - id: go-mod-tidy
+      - id: go-unit-tests
+      - id: go-build
+      - id: go-critic
+
+  # Shell script checks
+  - repo: https://github.com/jumanjihouse/pre-commit-hooks
+    rev: 3.0.0
+    hooks:
+      - id: shellcheck
+      - id: shfmt
+        args: ['-w', '-i', '2']
+
+  # Docker linting
+  - repo: https://github.com/hadolint/hadolint
+    rev: v2.13.1-beta
+    hooks:
+      - id: hadolint-docker
+        name: Lint Dockerfiles
+        description: Runs hadolint Docker image to lint Dockerfiles
+        language: docker_image
+        types: ["dockerfile"]
+        entry: ghcr.io/hadolint/hadolint:v2.12.0 hadolint
+
+  # Commit message format
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.8.2
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]
+
+  # Secret scanning (requires: ggshield auth login)
+  - repo: https://github.com/gitguardian/ggshield
+    rev: v1.40.0
+    hooks:
+      - id: ggshield
+        language: python
+        stages: [pre-commit]
+        args: ['secret', 'scan', 'pre-commit']
+
+  # Local hooks
+  - repo: local
+    hooks:
+      - id: go-generate
+        name: Go Generate
+        entry: go generate ./...
+        language: system
+        types: [go]
+        pass_filenames: false
+      
+      - id: go-mod-verify
+        name: Go Mod Verify
+        entry: go mod verify
+        language: system
+        types: [go]
+        pass_filenames: false
+      
+      - id: go-security
+        name: Go Security Check
+        entry: gosec -conf .gosec.toml -quiet ./...
+        language: system
+        types: [go]
+        pass_filenames: false
+      
+      - id: go-licenses
+        name: Check Go Licenses
+        entry: bash -c 'command -v go-licenses >/dev/null && go-licenses check ./... || echo "Skipping: go-licenses not installed"'
+        language: system
+        types: [go]
+        pass_filenames: false
+
+# CI configuration
+ci:
+  autofix_commit_msg: |
+    [pre-commit.ci] auto fixes from pre-commit hooks
+
+    for more information, see https://pre-commit.ci
+  autofix_prs: true
+  autoupdate_branch: ''
+  autoupdate_commit_msg: '[pre-commit.ci] pre-commit autoupdate'
+  autoupdate_schedule: weekly
+  skip: [go-unit-tests, go-build, ggshield]
+  submodules: false

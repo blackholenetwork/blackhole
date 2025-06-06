@@ -92,7 +92,7 @@ Use this checklist before submitting any code to ensure compliance with project 
    ```go
    // ❌ Wrong
    func GetFile(id string) (*File, error)
-   
+
    // ✅ Correct
    func GetFile(ctx context.Context, id string) (*File, error)
    ```
@@ -103,7 +103,7 @@ Use this checklist before submitting any code to ensure compliance with project 
    if err != nil {
        return err
    }
-   
+
    // ✅ Correct
    if err != nil {
        return fmt.Errorf("failed to process file %s: %w", id, err)
@@ -114,7 +114,7 @@ Use this checklist before submitting any code to ensure compliance with project 
    ```go
    // ❌ Wrong
    file, err := os.Open(path)
-   
+
    // ✅ Correct
    file, err := os.Open(path)
    if err != nil {
@@ -129,7 +129,7 @@ Use this checklist before submitting any code to ensure compliance with project 
    func Process(data string) error {
        // Use data directly
    }
-   
+
    // ✅ Correct
    func Process(data string) error {
        if data == "" {
@@ -143,7 +143,7 @@ Use this checklist before submitting any code to ensure compliance with project 
    ```go
    // ❌ Wrong
    func TestProcess(t *testing.T)
-   
+
    // ✅ Correct
    func TestProcess_WithValidInput_ReturnsSuccess(t *testing.T)
    func TestProcess_WithEmptyInput_ReturnsError(t *testing.T)

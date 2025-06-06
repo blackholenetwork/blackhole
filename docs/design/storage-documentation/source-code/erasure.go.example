@@ -1,0 +1,212 @@
+package storage
+
+import (
+	"fmt"
+	
+	"github.com/klauspost/reedsolomon"
+)
+
+// ErasureCoder handles Reed-Solomon erasure coding operations
+type ErasureCoder struct {
+	dataShards   int
+	parityShards int
+	encoder      reedsolomon.Encoder
+}
+
+// NewErasureCoder creates a new erasure coder with specified parameters
+func NewErasureCoder(dataShards, parityShards int) (*ErasureCoder, error) {
+	if dataShards <= 0 || parityShards <= 0 {
+		return nil, fmt.Errorf("invalid shard counts: data=%d, parity=%d", dataShards, parityShards)
+	}
+	
+	encoder, err := reedsolomon.New(dataShards, parityShards)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Reed-Solomon encoder: %w", err)
+	}
+	
+	return &ErasureCoder{
+		dataShards:   dataShards,
+		parityShards: parityShards,
+		encoder:      encoder,
+	}, nil
+}
+
+// Encode encodes data chunks and generates parity chunks
+func (ec *ErasureCoder) Encode(dataChunks [][]byte) ([][]byte, error) {
+	if len(dataChunks) != ec.dataShards {
+		return nil, fmt.Errorf("expected %d data chunks, got %d", ec.dataShards, len(dataChunks))
+	}
+	
+	// Find the maximum chunk size
+	maxSize := 0
+	for _, chunk := range dataChunks {
+		if len(chunk) > maxSize {
+			maxSize = len(chunk)
+		}
+	}
+	
+	// Create shards array with padded data chunks
+	shards := make([][]byte, ec.dataShards+ec.parityShards)
+	for i := 0; i < ec.dataShards; i++ {
+		shards[i] = make([]byte, maxSize)
+		if i < len(dataChunks) && dataChunks[i] != nil {
+			copy(shards[i], dataChunks[i])
+		}
+	}
+	
+	// Initialize parity shards
+	for i := ec.dataShards; i < len(shards); i++ {
+		shards[i] = make([]byte, maxSize)
+	}
+	
+	// Encode to generate parity
+	if err := ec.encoder.Encode(shards); err != nil {
+		return nil, fmt.Errorf("failed to encode shards: %w", err)
+	}
+	
+	// Extract parity chunks
+	parityChunks := make([][]byte, ec.parityShards)
+	for i := 0; i < ec.parityShards; i++ {
+		parityChunks[i] = shards[ec.dataShards+i]
+	}
+	
+	return parityChunks, nil
+}
+
+// Decode reconstructs missing data from available shards
+func (ec *ErasureCoder) Decode(shards [][]byte, shardsPresent []bool) ([][]byte, error) {
+	if len(shards) != ec.dataShards+ec.parityShards {
+		return nil, fmt.Errorf("expected %d total shards, got %d", 
+			ec.dataShards+ec.parityShards, len(shards))
+	}
+	
+	// Count available shards
+	availableCount := 0
+	for _, present := range shardsPresent {
+		if present {
+			availableCount++
+		}
+	}
+	
+	// Need at least dataShards to reconstruct
+	if availableCount < ec.dataShards {
+		return nil, fmt.Errorf("insufficient shards for reconstruction: have %d, need %d", 
+			availableCount, ec.dataShards)
+	}
+	
+	// Verify the integrity of available shards
+	ok, err := ec.encoder.Verify(shards)
+	if err != nil {
+		return nil, fmt.Errorf("failed to verify shards: %w", err)
+	}
+	
+	if !ok {
+		// Try to reconstruct
+		if err := ec.encoder.Reconstruct(shards); err != nil {
+			return nil, fmt.Errorf("failed to reconstruct shards: %w", err)
+		}
+		
+		// Verify again after reconstruction
+		ok, err = ec.encoder.Verify(shards)
+		if err != nil || !ok {
+			return nil, fmt.Errorf("verification failed after reconstruction")
+		}
+	}
+	
+	// Extract data chunks
+	dataChunks := make([][]byte, ec.dataShards)
+	for i := 0; i < ec.dataShards; i++ {
+		dataChunks[i] = shards[i]
+	}
+	
+	return dataChunks, nil
+}
+
+// CanRecover checks if recovery is possible with given shard availability
+func (ec *ErasureCoder) CanRecover(shardsPresent []bool) bool {
+	availableCount := 0
+	for _, present := range shardsPresent {
+		if present {
+			availableCount++
+		}
+	}
+	return availableCount >= ec.dataShards
+}
+
+// GetRedundancyLevel returns the redundancy as a string (e.g., "10+3")
+func (ec *ErasureCoder) GetRedundancyLevel() string {
+	return fmt.Sprintf("%d+%d", ec.dataShards, ec.parityShards)
+}
+
+// GetMaxLossCount returns the maximum number of shards that can be lost
+func (ec *ErasureCoder) GetMaxLossCount() int {
+	return ec.parityShards
+}
+
+// GetStorageOverhead returns the storage overhead as a percentage
+func (ec *ErasureCoder) GetStorageOverhead() float64 {
+	return float64(ec.parityShards) / float64(ec.dataShards) * 100
+}
+
+// AdaptiveErasureCoder manages multiple erasure coders for different redundancy levels
+type AdaptiveErasureCoder struct {
+	baseDataShards int
+	coders         map[int]*ErasureCoder // parityShards -> coder
+}
+
+// NewAdaptiveErasureCoder creates a new adaptive erasure coder
+func NewAdaptiveErasureCoder(baseDataShards int) *AdaptiveErasureCoder {
+	return &AdaptiveErasureCoder{
+		baseDataShards: baseDataShards,
+		coders:         make(map[int]*ErasureCoder),
+	}
+}
+
+// GetCoder returns an erasure coder for the specified parity level
+func (aec *AdaptiveErasureCoder) GetCoder(parityShards int) (*ErasureCoder, error) {
+	if coder, exists := aec.coders[parityShards]; exists {
+		return coder, nil
+	}
+	
+	coder, err := NewErasureCoder(aec.baseDataShards, parityShards)
+	if err != nil {
+		return nil, err
+	}
+	
+	aec.coders[parityShards] = coder
+	return coder, nil
+}
+
+// GenerateAdditionalParity generates additional parity chunks for existing data
+func (aec *AdaptiveErasureCoder) GenerateAdditionalParity(
+	dataChunks [][]byte, 
+	currentParity int, 
+	targetParity int,
+) ([][]byte, error) {
+	if targetParity <= currentParity {
+		return nil, fmt.Errorf("target parity must be greater than current parity")
+	}
+	
+	// Get coder for target parity level
+	coder, err := aec.GetCoder(targetParity)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Generate all parity chunks
+	allParity, err := coder.Encode(dataChunks)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Return only the new parity chunks
+	additionalParity := targetParity - currentParity
+	newParity := allParity[currentParity:targetParity]
+	
+	if len(newParity) != additionalParity {
+		return nil, fmt.Errorf("unexpected parity count: got %d, expected %d", 
+			len(newParity), additionalParity)
+	}
+	
+	return newParity, nil
+}

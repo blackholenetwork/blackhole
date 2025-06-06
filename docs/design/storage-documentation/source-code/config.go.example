@@ -1,0 +1,224 @@
+package storage
+
+import (
+	"fmt"
+	"time"
+)
+
+// Config defines the configuration for the storage service
+type Config struct {
+	// Storage paths
+	DataDir     string `mapstructure:"data_dir"`
+	MaxCapacity uint64 `mapstructure:"max_capacity"` // Maximum storage capacity in bytes
+	
+	// Chunking configuration
+	ChunkSize  int `mapstructure:"chunk_size"`  // Size of each chunk in bytes
+	BlockSize  int `mapstructure:"block_size"`  // Number of chunks per block
+	BufferSize int `mapstructure:"buffer_size"` // Read/write buffer size
+	
+	// Erasure coding configuration
+	Erasure ErasureConfig `mapstructure:"erasure_coding"`
+	
+	// Reactive parity generation
+	Reactive ReactiveConfig `mapstructure:"reactive"`
+	
+	// Demand monitoring
+	DemandWindow      time.Duration `mapstructure:"demand_window"`       // Time window for demand calculation
+	DemandSampleRate  time.Duration `mapstructure:"demand_sample_rate"`  // How often to sample demand
+	
+	// Network integration
+	EnableP2P         bool          `mapstructure:"enable_p2p"`          // Enable P2P chunk distribution
+	
+	// Virtual bucket system
+	EnableVirtualBuckets bool `mapstructure:"enable_virtual_buckets"` // Enable advanced position allocation
+	MaxConcurrentP2P  int           `mapstructure:"max_concurrent_p2p"`  // Max concurrent P2P operations
+	
+	// Performance tuning
+	MaxConcurrentOps  int           `mapstructure:"max_concurrent_ops"`  // Max concurrent operations
+	CacheSize         int           `mapstructure:"cache_size"`          // Number of chunks to cache
+	CompressionLevel  int           `mapstructure:"compression_level"`   // 0-9, 0 = disabled
+	
+	// Flexible deterministic configuration
+	CandidateCount    int           `mapstructure:"candidate_count"`     // Number of placement candidates
+	ReplicationTarget int           `mapstructure:"replication_target"`  // Target replicas for hot data
+	
+	// Cleanup and maintenance
+	CleanupInterval   time.Duration `mapstructure:"cleanup_interval"`    // How often to run cleanup
+	RetentionPeriod   time.Duration `mapstructure:"retention_period"`    // How long to keep unused chunks
+	
+	// Virtual Filesystem configuration
+	VFS *VFSConfig `mapstructure:"vfs"`
+	
+	// Identity configuration for private VFS
+	UserDID       string `mapstructure:"user_did"`        // User's DID for private namespace
+	UserSecret    string `mapstructure:"user_secret"`     // User's secret for private namespace (optional - will be derived)
+	MasterPassword string `mapstructure:"master_password"` // User's master password for secret derivation (optional)
+	
+	// Secret management configuration
+	UseSecretManager bool   `mapstructure:"use_secret_manager"` // Whether to use SecretManager for secret derivation
+	SecretsDataDir   string `mapstructure:"secrets_data_dir"`   // Directory for local secret storage
+}
+
+// DefaultConfig returns the default storage configuration
+func DefaultConfig() *Config {
+	return &Config{
+		DataDir:     "./data/storage",
+		MaxCapacity: 100 * 1024 * 1024 * 1024, // 100GB default
+		
+		// Chunking (IPFS compatible)
+		ChunkSize:  256 * 1024, // 256KB
+		BlockSize:  10,         // 10 chunks = 2.56MB per block
+		BufferSize: 1024 * 1024, // 1MB buffer
+		
+		// Erasure coding defaults
+		Erasure: ErasureConfig{
+			BaselineDataShards:    10,  // k = 10
+			BaselineParityShards:  3,   // m = 3 (30% redundancy)
+			LowDemandParity:       3,   // 10+3
+			MediumDemandParity:    10,  // 10+10
+			HighDemandParity:      50,  // 10+50
+			ViralDemandParity:     100, // 10+100
+			MaxParityShards:       100, // Computational limit
+			MediumDemandThreshold: 10.0,  // 10 requests/minute
+			HighDemandThreshold:   100.0, // 100 requests/minute
+			ViralDemandThreshold:  1000.0, // 1000 requests/minute
+		},
+		
+		// Reactive generation defaults
+		Reactive: ReactiveConfig{
+			MinCheckInterval:       30, // 30 seconds
+			MaxCheckInterval:       90, // 90 seconds
+			MaxContributionPerNode: 5,  // Max 5 parity chunks per decision
+			MinDeficitToGenerate:   2,  // Don't generate if deficit < 2
+			TrendThreshold:         0.5, // 50% increase triggers
+			GeographicThreshold:    100, // 100 requests from new region
+			NodeStressThreshold:    0.8, // 80% capacity
+			MinAvailableChunks:     15,  // Minimum 15 chunks
+		},
+		
+		// Demand monitoring
+		DemandWindow:     5 * time.Minute,
+		DemandSampleRate: 10 * time.Second,
+		
+		// Network settings
+		EnableP2P:        true,
+		MaxConcurrentP2P: 50,
+		
+		// Performance
+		MaxConcurrentOps: 100,
+		CacheSize:        1000, // Cache 1000 chunks
+		CompressionLevel: 0,    // No compression by default
+		
+		// Flexible deterministic
+		CandidateCount:    20, // Try 20 candidate locations
+		ReplicationTarget: 3,  // Target 3 replicas for hot data
+		
+		// Maintenance
+		CleanupInterval: 1 * time.Hour,
+		RetentionPeriod: 30 * 24 * time.Hour, // 30 days
+		
+		// VFS defaults
+		VFS: DefaultVFSConfig(),
+		
+		// Identity defaults (will be set by application)
+		UserDID:          "", // Must be provided by application
+		UserSecret:       "", // Optional - will derive from master password if not provided
+		MasterPassword:   "", // Optional - for secret derivation
+		UseSecretManager: true, // Use SecretManager by default
+		SecretsDataDir:   "", // Will use data_dir/secrets if not specified
+	}
+}
+
+// Validate checks if the configuration is valid
+func (c *Config) Validate() error {
+	if c.DataDir == "" {
+		return fmt.Errorf("data_dir is required")
+	}
+	
+	if c.MaxCapacity == 0 {
+		return fmt.Errorf("max_capacity must be greater than 0")
+	}
+	
+	if c.ChunkSize <= 0 {
+		return fmt.Errorf("chunk_size must be greater than 0")
+	}
+	
+	if c.BlockSize <= 0 {
+		return fmt.Errorf("block_size must be greater than 0")
+	}
+	
+	// Validate erasure coding parameters
+	if c.Erasure.BaselineDataShards <= 0 {
+		return fmt.Errorf("baseline_data_shards must be greater than 0")
+	}
+	
+	if c.Erasure.BaselineParityShards <= 0 {
+		return fmt.Errorf("baseline_parity_shards must be greater than 0")
+	}
+	
+	if c.Erasure.MaxParityShards < c.Erasure.ViralDemandParity {
+		return fmt.Errorf("max_parity_shards must be >= viral_demand_parity")
+	}
+	
+	// Validate reactive parameters
+	if c.Reactive.MinCheckInterval <= 0 {
+		return fmt.Errorf("min_check_interval must be greater than 0")
+	}
+	
+	if c.Reactive.MaxCheckInterval < c.Reactive.MinCheckInterval {
+		return fmt.Errorf("max_check_interval must be >= min_check_interval")
+	}
+	
+	if c.Reactive.TrendThreshold <= 0 || c.Reactive.TrendThreshold >= 1 {
+		return fmt.Errorf("trend_threshold must be between 0 and 1")
+	}
+	
+	// Validate demand thresholds are in ascending order
+	if c.Erasure.MediumDemandThreshold >= c.Erasure.HighDemandThreshold {
+		return fmt.Errorf("medium_demand_threshold must be < high_demand_threshold")
+	}
+	
+	if c.Erasure.HighDemandThreshold >= c.Erasure.ViralDemandThreshold {
+		return fmt.Errorf("high_demand_threshold must be < viral_demand_threshold")
+	}
+	
+	return nil
+}
+
+// GetParityTarget calculates the target parity level based on demand
+func (c *Config) GetParityTarget(accessRate float64) int {
+	if accessRate >= c.Erasure.ViralDemandThreshold {
+		return c.Erasure.ViralDemandParity
+	} else if accessRate >= c.Erasure.HighDemandThreshold {
+		return c.Erasure.HighDemandParity
+	} else if accessRate >= c.Erasure.MediumDemandThreshold {
+		return c.Erasure.MediumDemandParity
+	}
+	return c.Erasure.LowDemandParity
+}
+
+// DevelopmentConfig returns a configuration suitable for development
+func DevelopmentConfig() *Config {
+	cfg := DefaultConfig()
+	cfg.DataDir = "./data/storage-dev"
+	cfg.MaxCapacity = 10 * 1024 * 1024 * 1024 // 10GB for dev
+	
+	// Smaller chunks for testing
+	cfg.ChunkSize = 64 * 1024  // 64KB
+	cfg.BlockSize = 4           // 4 chunks per block
+	
+	// Lower thresholds for testing
+	cfg.Erasure.MediumDemandThreshold = 1.0   // 1 request/minute
+	cfg.Erasure.HighDemandThreshold = 5.0     // 5 requests/minute
+	cfg.Erasure.ViralDemandThreshold = 10.0   // 10 requests/minute
+	
+	// Faster reactive cycles
+	cfg.Reactive.MinCheckInterval = 5  // 5 seconds
+	cfg.Reactive.MaxCheckInterval = 15 // 15 seconds
+	
+	// Faster cleanup
+	cfg.CleanupInterval = 5 * time.Minute
+	cfg.RetentionPeriod = 1 * time.Hour
+	
+	return cfg
+}

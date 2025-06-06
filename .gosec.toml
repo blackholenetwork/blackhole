@@ -1,0 +1,22 @@
+# gosec configuration
+# https://github.com/securego/gosec
+
+# Global settings
+[global]
+# Audit mode - fails the build if there are any issues
+audit = true
+
+# Exclude certain rules globally
+excludes = [
+  "G104", # Unhandled errors - we'll handle these case by case
+  "G304", # File path traversal - these are config/key files
+]
+
+# Rule-specific configurations
+[G301]
+# Directory permissions - 0755 is acceptable for application directories
+mode = "0755"
+
+[G306]
+# File permissions - 0644 is standard for config files
+mode = "0644"

@@ -1,0 +1,437 @@
+package incentive
+
+import (
+	"context"
+	"sync"
+	"time"
+
+	"github.com/rs/zerolog"
+)
+
+// LiveUsageAggregator aggregates real-time resource usage for distribution calculations
+type LiveUsageAggregator struct {
+	mu     sync.RWMutex
+	logger zerolog.Logger
+	config *Config
+	
+	// Live usage tracking
+	providerUsage   map[string]*ProviderUsageSnapshot
+	contentActivity map[string]*ContentActivitySnapshot
+	
+	// Aggregation windows
+	windowDuration time.Duration
+	lastReset      time.Time
+	
+	// Processing control
+	started  bool
+	stopChan chan struct{}
+	wg       sync.WaitGroup
+}
+
+// ProviderUsageSnapshot represents current usage snapshot for a provider
+type ProviderUsageSnapshot struct {
+	ProviderID      string    `json:"provider_id"`
+	WindowStart     time.Time `json:"window_start"`
+	LastUpdate      time.Time `json:"last_update"`
+	
+	// Resource usage (accumulated over window)
+	StorageUsage    float64   `json:"storage_usage"`     // GB-seconds
+	BandwidthUsage  float64   `json:"bandwidth_usage"`   // GB transferred
+	ComputeUsage    float64   `json:"compute_usage"`     // CPU-seconds
+	MemoryUsage     float64   `json:"memory_usage"`      // GB-seconds
+	
+	// Service metrics
+	RequestCount    int64     `json:"request_count"`
+	SuccessRate     float64   `json:"success_rate"`
+	AvgLatency      float64   `json:"avg_latency_ms"`
+	
+	mu              sync.RWMutex
+}
+
+// ContentActivitySnapshot represents current content activity snapshot
+type ContentActivitySnapshot struct {
+	CreatorID       string    `json:"creator_id"`
+	ContentID       string    `json:"content_id"`
+	WindowStart     time.Time `json:"window_start"`
+	LastUpdate      time.Time `json:"last_update"`
+	
+	// Activity metrics (accumulated over window)
+	ViewSeconds     float64   `json:"view_seconds"`      // Total viewing time
+	ViewCount       int64     `json:"view_count"`        // Number of views
+	DataDelivered   int64     `json:"data_delivered"`    // Bytes delivered
+	EngagementScore float64   `json:"engagement_score"`  // Weighted engagement
+	QualityScore    float64   `json:"quality_score"`     // Average quality
+	
+	mu              sync.RWMutex
+}
+
+// LiveUsageSnapshot represents a complete snapshot of current live usage
+type LiveUsageSnapshot struct {
+	Timestamp       time.Time                              `json:"timestamp"`
+	WindowDuration  time.Duration                          `json:"window_duration"`
+	ProviderUsage   map[string]*ProviderUsageSnapshot      `json:"provider_usage"`
+	ContentActivity map[string]*ContentActivitySnapshot    `json:"content_activity"`
+	TotalProviders  int                                    `json:"total_providers"`
+	TotalContent    int                                    `json:"total_content"`
+}
+
+// NewLiveUsageAggregator creates a new live usage aggregator
+func NewLiveUsageAggregator(config *Config, logger zerolog.Logger) *LiveUsageAggregator {
+	return &LiveUsageAggregator{
+		logger:          logger.With().Str("component", "live_usage_aggregator").Logger(),
+		config:          config,
+		providerUsage:   make(map[string]*ProviderUsageSnapshot),
+		contentActivity: make(map[string]*ContentActivitySnapshot),
+		windowDuration:  time.Minute, // Default 1-minute aggregation window
+		lastReset:       time.Now(),
+		stopChan:        make(chan struct{}),
+	}
+}
+
+// Start begins live usage aggregation
+func (lua *LiveUsageAggregator) Start(ctx context.Context) error {
+	lua.mu.Lock()
+	defer lua.mu.Unlock()
+	
+	if lua.started {
+		return nil
+	}
+	
+	lua.logger.Info().
+		Dur("window_duration", lua.windowDuration).
+		Msg("Starting live usage aggregator")
+	
+	// Start window reset worker
+	lua.wg.Add(1)
+	go lua.windowResetWorker(ctx)
+	
+	lua.started = true
+	return nil
+}
+
+// Stop halts live usage aggregation
+func (lua *LiveUsageAggregator) Stop(ctx context.Context) error {
+	lua.mu.Lock()
+	defer lua.mu.Unlock()
+	
+	if !lua.started {
+		return nil
+	}
+	
+	lua.logger.Info().Msg("Stopping live usage aggregator")
+	
+	close(lua.stopChan)
+	lua.wg.Wait()
+	
+	lua.started = false
+	return nil
+}
+
+// RecordUsage records resource usage for a provider
+func (lua *LiveUsageAggregator) RecordUsage(providerID, resourceType string, amount float64, unit string) {
+	lua.mu.Lock()
+	defer lua.mu.Unlock()
+	
+	now := time.Now()
+	
+	// Get or create provider usage snapshot
+	snapshot, exists := lua.providerUsage[providerID]
+	if !exists {
+		snapshot = &ProviderUsageSnapshot{
+			ProviderID:  providerID,
+			WindowStart: now,
+			LastUpdate:  now,
+			SuccessRate: 1.0, // Initialize with perfect success rate
+		}
+		lua.providerUsage[providerID] = snapshot
+	}
+	
+	snapshot.mu.Lock()
+	defer snapshot.mu.Unlock()
+	
+	// Update usage based on resource type
+	switch resourceType {
+	case "storage":
+		// Convert to GB-seconds if needed
+		if unit == "bytes" {
+			amount = amount / (1024 * 1024 * 1024) // Convert bytes to GB
+		}
+		snapshot.StorageUsage += amount
+		
+	case "bandwidth":
+		// Convert to GB if needed
+		if unit == "bytes" {
+			amount = amount / (1024 * 1024 * 1024) // Convert bytes to GB
+		}
+		snapshot.BandwidthUsage += amount
+		
+	case "compute":
+		// Assume amount is in CPU-seconds
+		snapshot.ComputeUsage += amount
+		
+	case "memory":
+		// Convert to GB-seconds if needed
+		if unit == "bytes" {
+			amount = amount / (1024 * 1024 * 1024) // Convert bytes to GB
+		}
+		snapshot.MemoryUsage += amount
+	}
+	
+	snapshot.RequestCount++
+	snapshot.LastUpdate = now
+	
+	lua.logger.Debug().
+		Str("provider_id", providerID).
+		Str("resource_type", resourceType).
+		Float64("amount", amount).
+		Str("unit", unit).
+		Msg("Recorded provider usage")
+}
+
+// RecordContentActivity records content activity for a creator
+func (lua *LiveUsageAggregator) RecordContentActivity(creatorID, contentID string, viewSeconds float64, dataConsumed int64) {
+	lua.mu.Lock()
+	defer lua.mu.Unlock()
+	
+	now := time.Now()
+	activityKey := creatorID + ":" + contentID
+	
+	// Get or create content activity snapshot
+	snapshot, exists := lua.contentActivity[activityKey]
+	if !exists {
+		snapshot = &ContentActivitySnapshot{
+			CreatorID:   creatorID,
+			ContentID:   contentID,
+			WindowStart: now,
+			LastUpdate:  now,
+			QualityScore: 1.0, // Initialize with base quality score
+		}
+		lua.contentActivity[activityKey] = snapshot
+	}
+	
+	snapshot.mu.Lock()
+	defer snapshot.mu.Unlock()
+	
+	// Update activity metrics
+	snapshot.ViewSeconds += viewSeconds
+	snapshot.ViewCount++
+	snapshot.DataDelivered += dataConsumed
+	snapshot.EngagementScore += 1.0 // Base engagement per view
+	snapshot.LastUpdate = now
+	
+	lua.logger.Debug().
+		Str("creator_id", creatorID).
+		Str("content_id", contentID).
+		Float64("view_seconds", viewSeconds).
+		Int64("data_consumed", dataConsumed).
+		Msg("Recorded content activity")
+}
+
+// RecordServiceMetrics records service-level metrics for a provider
+func (lua *LiveUsageAggregator) RecordServiceMetrics(providerID string, success bool, latencyMS float64) {
+	lua.mu.Lock()
+	defer lua.mu.Unlock()
+	
+	snapshot, exists := lua.providerUsage[providerID]
+	if !exists {
+		return // No usage snapshot to update
+	}
+	
+	snapshot.mu.Lock()
+	defer snapshot.mu.Unlock()
+	
+	// Update running average of success rate and latency
+	totalRequests := float64(snapshot.RequestCount)
+	if totalRequests > 0 {
+		currentSuccessRate := snapshot.SuccessRate
+		if success {
+			snapshot.SuccessRate = (currentSuccessRate*(totalRequests-1) + 1.0) / totalRequests
+		} else {
+			snapshot.SuccessRate = (currentSuccessRate * (totalRequests - 1)) / totalRequests
+		}
+		
+		// Update average latency
+		snapshot.AvgLatency = (snapshot.AvgLatency*(totalRequests-1) + latencyMS) / totalRequests
+	}
+}
+
+// GetCurrentUsage returns a snapshot of current live usage
+func (lua *LiveUsageAggregator) GetCurrentUsage() *LiveUsageSnapshot {
+	lua.mu.RLock()
+	defer lua.mu.RUnlock()
+	
+	snapshot := &LiveUsageSnapshot{
+		Timestamp:       time.Now(),
+		WindowDuration:  lua.windowDuration,
+		ProviderUsage:   make(map[string]*ProviderUsageSnapshot),
+		ContentActivity: make(map[string]*ContentActivitySnapshot),
+		TotalProviders:  len(lua.providerUsage),
+		TotalContent:    len(lua.contentActivity),
+	}
+	
+	// Copy provider usage snapshots
+	for providerID, usage := range lua.providerUsage {
+		usage.mu.RLock()
+		snapshot.ProviderUsage[providerID] = &ProviderUsageSnapshot{
+			ProviderID:     usage.ProviderID,
+			WindowStart:    usage.WindowStart,
+			LastUpdate:     usage.LastUpdate,
+			StorageUsage:   usage.StorageUsage,
+			BandwidthUsage: usage.BandwidthUsage,
+			ComputeUsage:   usage.ComputeUsage,
+			MemoryUsage:    usage.MemoryUsage,
+			RequestCount:   usage.RequestCount,
+			SuccessRate:    usage.SuccessRate,
+			AvgLatency:     usage.AvgLatency,
+		}
+		usage.mu.RUnlock()
+	}
+	
+	// Copy content activity snapshots
+	for activityKey, activity := range lua.contentActivity {
+		activity.mu.RLock()
+		snapshot.ContentActivity[activityKey] = &ContentActivitySnapshot{
+			CreatorID:       activity.CreatorID,
+			ContentID:       activity.ContentID,
+			WindowStart:     activity.WindowStart,
+			LastUpdate:      activity.LastUpdate,
+			ViewSeconds:     activity.ViewSeconds,
+			ViewCount:       activity.ViewCount,
+			DataDelivered:   activity.DataDelivered,
+			EngagementScore: activity.EngagementScore,
+			QualityScore:    activity.QualityScore,
+		}
+		activity.mu.RUnlock()
+	}
+	
+	return snapshot
+}
+
+// windowResetWorker periodically resets aggregation windows
+func (lua *LiveUsageAggregator) windowResetWorker(ctx context.Context) {
+	defer lua.wg.Done()
+	
+	// Reset windows every minute to keep data fresh for real-time distribution
+	ticker := time.NewTicker(lua.windowDuration)
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-lua.stopChan:
+			return
+		case <-ticker.C:
+			lua.resetAggregationWindows()
+		}
+	}
+}
+
+// resetAggregationWindows resets or cleans up stale aggregation windows
+func (lua *LiveUsageAggregator) resetAggregationWindows() {
+	lua.mu.Lock()
+	defer lua.mu.Unlock()
+	
+	now := time.Now()
+	staleThreshold := 2 * lua.windowDuration // Remove data older than 2 windows
+	
+	// Clean up stale provider usage
+	for providerID, usage := range lua.providerUsage {
+		usage.mu.RLock()
+		lastUpdate := usage.LastUpdate
+		usage.mu.RUnlock()
+		
+		if now.Sub(lastUpdate) > staleThreshold {
+			delete(lua.providerUsage, providerID)
+			lua.logger.Debug().
+				Str("provider_id", providerID).
+				Dur("stale_duration", now.Sub(lastUpdate)).
+				Msg("Removed stale provider usage data")
+		}
+	}
+	
+	// Clean up stale content activity
+	for activityKey, activity := range lua.contentActivity {
+		activity.mu.RLock()
+		lastUpdate := activity.LastUpdate
+		activity.mu.RUnlock()
+		
+		if now.Sub(lastUpdate) > staleThreshold {
+			delete(lua.contentActivity, activityKey)
+			lua.logger.Debug().
+				Str("activity_key", activityKey).
+				Dur("stale_duration", now.Sub(lastUpdate)).
+				Msg("Removed stale content activity data")
+		}
+	}
+	
+	lua.lastReset = now
+	
+	lua.logger.Debug().
+		Int("active_providers", len(lua.providerUsage)).
+		Int("active_content", len(lua.contentActivity)).
+		Msg("Reset aggregation windows")
+}
+
+// GetStats returns aggregator statistics
+func (lua *LiveUsageAggregator) GetStats() *LiveUsageStats {
+	lua.mu.RLock()
+	defer lua.mu.RUnlock()
+	
+	stats := &LiveUsageStats{
+		WindowDuration:    lua.windowDuration,
+		LastReset:         lua.lastReset,
+		ActiveProviders:   len(lua.providerUsage),
+		ActiveContent:     len(lua.contentActivity),
+		TotalStorageUsage: 0,
+		TotalBandwidthUsage: 0,
+		TotalComputeUsage: 0,
+		TotalMemoryUsage:  0,
+		TotalViewSeconds:  0,
+		TotalViews:        0,
+	}
+	
+	// Aggregate totals
+	for _, usage := range lua.providerUsage {
+		usage.mu.RLock()
+		stats.TotalStorageUsage += usage.StorageUsage
+		stats.TotalBandwidthUsage += usage.BandwidthUsage
+		stats.TotalComputeUsage += usage.ComputeUsage
+		stats.TotalMemoryUsage += usage.MemoryUsage
+		usage.mu.RUnlock()
+	}
+	
+	for _, activity := range lua.contentActivity {
+		activity.mu.RLock()
+		stats.TotalViewSeconds += activity.ViewSeconds
+		stats.TotalViews += activity.ViewCount
+		activity.mu.RUnlock()
+	}
+	
+	return stats
+}
+
+// LiveUsageStats provides statistics about live usage aggregation
+type LiveUsageStats struct {
+	WindowDuration      time.Duration `json:"window_duration"`
+	LastReset           time.Time     `json:"last_reset"`
+	ActiveProviders     int           `json:"active_providers"`
+	ActiveContent       int           `json:"active_content"`
+	TotalStorageUsage   float64       `json:"total_storage_usage"`
+	TotalBandwidthUsage float64       `json:"total_bandwidth_usage"`
+	TotalComputeUsage   float64       `json:"total_compute_usage"`
+	TotalMemoryUsage    float64       `json:"total_memory_usage"`
+	TotalViewSeconds    float64       `json:"total_view_seconds"`
+	TotalViews          int64         `json:"total_views"`
+}
+
+// SetWindowDuration updates the aggregation window duration
+func (lua *LiveUsageAggregator) SetWindowDuration(duration time.Duration) {
+	lua.mu.Lock()
+	defer lua.mu.Unlock()
+	
+	lua.windowDuration = duration
+	lua.logger.Info().
+		Dur("new_window_duration", duration).
+		Msg("Updated aggregation window duration")
+}

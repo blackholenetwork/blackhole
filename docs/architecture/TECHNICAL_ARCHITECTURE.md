@@ -221,12 +221,12 @@ VFS Metadata Update
 ```go
 func (rm *ResourceManager) Allocate(job Job) error {
     priority := rm.getUserPriority(job.UserID)
-    
+
     // Economic tiers get priority
     // Ultimate > Advance > Normal > Free
     queue := rm.queues[priority]
     queue.Push(job)
-    
+
     // Allocate based on current load
     load := rm.currentLoad()
     if load < 0.8 {
@@ -234,7 +234,7 @@ func (rm *ResourceManager) Allocate(job Job) error {
     } else if priority >= PriorityAdvance && load < 0.95 {
         return rm.executeJob(job)
     }
-    
+
     return ErrQueuedForLaterExecution
 }
 
@@ -242,7 +242,7 @@ func (rm *ResourceManager) currentLoad() float64 {
     cpu := rm.monitor.CPUUsage()
     mem := rm.monitor.MemoryUsage()
     net := rm.monitor.NetworkUsage()
-    
+
     // Weighted average
     return (cpu*0.4 + mem*0.4 + net*0.2)
 }
@@ -273,13 +273,13 @@ Data Portability
    func TestComponentLifecycle(t *testing.T) {
        orchestrator := NewOrchestrator()
        component := NewMockComponent()
-       
+
        err := orchestrator.Register(component)
        require.NoError(t, err)
-       
+
        err = orchestrator.Start()
        require.NoError(t, err)
-       
+
        health := orchestrator.Health()
        assert.Equal(t, HealthyStatus, health)
    }
@@ -314,7 +314,7 @@ Data Portability
 ### 6. Major Technical Challenges & Solutions
 
 #### Challenge: Unreliable Home Networks (50-80% uptime)
-**Solution**: 
+**Solution**:
 - Erasure coding (10+4) ensures availability with 40% nodes offline
 - Automatic replication when nodes drop below threshold
 - Predictive pre-replication based on node behavior
@@ -358,11 +358,11 @@ func (u *Updater) CheckAndUpdate() error {
     if err != nil {
         return err
     }
-    
+
     if latest.GreaterThan(u.current) {
         return u.installer.Update(latest)
     }
-    
+
     return nil
 }
 ```

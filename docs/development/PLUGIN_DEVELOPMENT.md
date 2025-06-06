@@ -182,12 +182,12 @@ All plugins must implement the base interface:
 type Plugin interface {
     // Metadata
     Info() Info
-    
+
     // Lifecycle
     Init(ctx context.Context, config Config) error
     Start(ctx context.Context) error
     Stop(ctx context.Context) error
-    
+
     // Health
     Health() Health
 }
@@ -265,10 +265,10 @@ func (p *myFeature) Init(ctx context.Context, config plugin.Config) error {
     if err := p.validateConfig(config); err != nil {
         return fmt.Errorf("invalid configuration: %w", err)
     }
-    
+
     // Initialize resources
     // TODO: Add your initialization logic
-    
+
     return nil
 }
 
@@ -287,16 +287,16 @@ Edit `my_feature_test.go`:
 func TestMyFeature_DoSomething(t *testing.T) {
     plugin := New()
     ctx := context.Background()
-    
+
     // Initialize
     err := plugin.Init(ctx, plugin.Config{})
     require.NoError(t, err)
-    
+
     // Start
     err = plugin.Start(ctx)
     require.NoError(t, err)
     defer plugin.Stop(ctx)
-    
+
     // Test your logic
     // TODO: Add test cases
 }
@@ -361,28 +361,28 @@ Always clean up resources:
 ```go
 func (p *myPlugin) Start(ctx context.Context) error {
     p.ctx, p.cancel = context.WithCancel(ctx)
-    
+
     // Start goroutines
     p.wg.Add(1)
     go func() {
         defer p.wg.Done()
         p.worker()
     }()
-    
+
     return nil
 }
 
 func (p *myPlugin) Stop(ctx context.Context) error {
     // Signal shutdown
     p.cancel()
-    
+
     // Wait for goroutines
     done := make(chan struct{})
     go func() {
         p.wg.Wait()
         close(done)
     }()
-    
+
     select {
     case <-done:
         return nil
@@ -399,18 +399,18 @@ Validate configuration early:
 ```go
 func (p *myPlugin) validateConfig(config plugin.Config) error {
     helper := utils.NewConfigHelper(config, "BLACKHOLE_MY_PLUGIN")
-    
+
     // Validate required fields
     if err := helper.Validate([]string{"required_field"}); err != nil {
         return err
     }
-    
+
     // Validate ranges
     capacity := helper.GetInt64("capacity", 0)
     if capacity < 0 {
         return fmt.Errorf("capacity must be non-negative")
     }
-    
+
     return nil
 }
 ```
@@ -422,19 +422,19 @@ Implement meaningful health checks:
 ```go
 func (p *myPlugin) performHealthCheck() {
     checker := utils.NewHealthChecker(utils.DefaultHealthCheckerConfig())
-    
+
     // Register checks
     checker.RegisterCheck("database", func(ctx context.Context) error {
         return p.checkDatabaseConnection(ctx)
     })
-    
+
     checker.RegisterCheck("resources", func(ctx context.Context) error {
         return p.checkResourceAvailability(ctx)
     })
-    
+
     // Run checks
     checker.RunChecks(context.Background())
-    
+
     // Update plugin health
     p.health = checker.GetHealth()
 }
@@ -447,14 +447,14 @@ Track important metrics:
 ```go
 func (p *myPlugin) initMetrics() {
     p.metrics = utils.NewMetricsCollector()
-    
+
     // Track operations
     p.metrics.IncrementCounter("operations_total")
     p.metrics.RecordHistogram("operation_duration_seconds", duration)
-    
+
     // Track resources
     p.metrics.SetGauge("resource_usage_bytes", usage)
-    
+
     // Use timer for functions
     p.metrics.ObserveDuration("process_time", func() {
         p.processData()
@@ -503,7 +503,7 @@ func TestPlugin_Init(t *testing.T) {
             wantErr: true,
         },
     }
-    
+
     for _, tt := range tests {
         t.Run(tt.name, func(t *testing.T) {
             p := New()
@@ -527,20 +527,20 @@ func TestPlugin_Integration(t *testing.T) {
     if testing.Short() {
         t.Skip("Skipping integration test")
     }
-    
+
     // Create test registry
     registry := plugin.NewRegistry()
-    
+
     // Register plugins
     registry.Register(New())
     registry.Register(dependency.New())
-    
+
     // Start registry
     ctx := context.Background()
     err := registry.Start(ctx)
     require.NoError(t, err)
     defer registry.Stop(ctx)
-    
+
     // Test plugin interaction
     // ...
 }
@@ -554,11 +554,11 @@ Measure performance:
 func BenchmarkPlugin_Allocate(b *testing.B) {
     p := New()
     ctx := context.Background()
-    
+
     p.Init(ctx, plugin.Config{"capacity": int64(1000000)})
     p.Start(ctx)
     defer p.Stop(ctx)
-    
+
     b.ResetTimer()
     for i := 0; i < b.N; i++ {
         id, _ := p.Allocate(ctx, 10)
@@ -592,7 +592,7 @@ func (p *myPlugin) handleDebug(ctx context.Context, req plugin.Request) (plugin.
         "config": p.config,
         "state": p.getInternalState(),
     }
-    
+
     body, _ := json.Marshal(state)
     return plugin.Response{
         Status: 200,
@@ -655,16 +655,16 @@ Support runtime reconfiguration:
 func (p *myPlugin) Configure(ctx context.Context, config plugin.Config) error {
     p.mu.Lock()
     defer p.mu.Unlock()
-    
+
     // Validate new config
     if err := p.validateConfig(config); err != nil {
         return err
     }
-    
+
     // Apply changes
     p.config = config
     p.applyConfigChanges()
-    
+
     return nil
 }
 ```
@@ -698,19 +698,19 @@ func (p *myPlugin) setupHealthChecks() {
         FailureThreshold: 3,
         Timeout: 5 * time.Second,
     })
-    
+
     // Check external dependencies
     checker.RegisterCheck("upstream", utils.HTTPHealthCheck("https://api.example.com/health"))
-    
+
     // Check resource limits
     checker.RegisterCheck("memory", utils.MemoryHealthCheck(80.0))
-    
+
     // Check disk space
     checker.RegisterCheck("disk", utils.DiskSpaceHealthCheck("/data", 1<<30)) // 1GB
-    
+
     // Start health check loop
     checker.StartHealthCheckLoop(p.ctx)
-    
+
     p.healthChecker = checker
 }
 ```
@@ -725,7 +725,7 @@ func (p *myPlugin) IsCompatibleWith(version string) bool {
     // Parse versions
     current, _ := semver.Parse(p.info.Version)
     required, _ := semver.Parse(version)
-    
+
     // Check major version compatibility
     return current.Major == required.Major
 }

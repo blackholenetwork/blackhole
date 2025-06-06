@@ -1,0 +1,367 @@
+package webserver
+
+import (
+	"time"
+)
+
+// SubscriberDashboard represents subscriber dashboard data
+type SubscriberDashboard struct {
+	UserID               string                 `json:"user_id"`
+	UserType             string                 `json:"user_type"` // "subscriber"
+	
+	// Subscription Information
+	SubscriptionTier     string                 `json:"subscription_tier"`
+	MonthlyAmount        float64                `json:"monthly_amount"`
+	StartDate            time.Time              `json:"start_date"`
+	Status               string                 `json:"status"`
+	RevenuePerSecond     float64                `json:"revenue_per_second"`
+	TotalSecondsActive   int64                  `json:"total_seconds_active"`
+	TotalAmountGenerated float64                `json:"total_amount_generated"`
+	
+	// Current Usage
+	CurrentUsage         *SubscriberUsageStats  `json:"current_usage"`
+	
+	// Revenue Distribution Breakdown
+	DistributionBreakdown *RevenueDistribution  `json:"distribution_breakdown"`
+	
+	// System Stats
+	NetworkStats         *NetworkOverview       `json:"network_stats"`
+	
+	LastUpdated          time.Time              `json:"last_updated"`
+}
+
+// SubscriberUsageStats represents current usage statistics
+type SubscriberUsageStats struct {
+	StorageUsed          int64   `json:"storage_used_bytes"`
+	BandwidthUsed        int64   `json:"bandwidth_used_bytes"`
+	ComputeHours         float64 `json:"compute_hours"`
+	ContentConsumed      int64   `json:"content_consumed_bytes"`
+	AppsUsed             int     `json:"apps_used_count"`
+	
+	// This month's activity
+	MonthlyStorageOps    int     `json:"monthly_storage_operations"`
+	MonthlyContentViews  int     `json:"monthly_content_views"`
+	MonthlyAppSessions   int     `json:"monthly_app_sessions"`
+}
+
+// RevenueDistribution shows how subscriber revenue is distributed
+type RevenueDistribution struct {
+	ContentCreators      float64 `json:"content_creators_percentage"` // 70%
+	NetworkOperations    float64 `json:"network_operations_percentage"` // 2.5%
+	AppDevelopers        float64 `json:"app_developers_percentage"` // 2.5%
+	InfrastructureProviders float64 `json:"infrastructure_providers_percentage"` // 25%
+	
+	MonthlyAmounts       *RevenueAmounts `json:"monthly_amounts"`
+}
+
+// RevenueAmounts shows actual dollar amounts
+type RevenueAmounts struct {
+	Total                float64 `json:"total_monthly"`
+	ContentCreators      float64 `json:"content_creators_monthly"`
+	NetworkOperations    float64 `json:"network_operations_monthly"`
+	AppDevelopers        float64 `json:"app_developers_monthly"`
+	InfrastructureProviders float64 `json:"infrastructure_providers_monthly"`
+}
+
+// ContentCreatorDashboard represents content creator dashboard data
+type ContentCreatorDashboard struct {
+	CreatorID            string                    `json:"creator_id"`
+	UserType             string                    `json:"user_type"` // "content_creator"
+	
+	// Real-Time Engagement
+	CurrentEngagement    *ContentEngagementStats   `json:"current_engagement"`
+	
+	// Rewards Information
+	RewardStats          *ContentRewardStats       `json:"reward_stats"`
+	
+	// Content Performance
+	ContentPerformance   *ContentPerformanceStats  `json:"content_performance"`
+	
+	// Distribution History
+	RecentDistributions  []*ContentDistributionSummary `json:"recent_distributions"`
+	
+	LastUpdated          time.Time                 `json:"last_updated"`
+}
+
+// ContentEngagementStats represents real-time engagement statistics
+type ContentEngagementStats struct {
+	VideoWatchTime       float64 `json:"video_watch_time_seconds"`
+	AudioListenTime      float64 `json:"audio_listen_time_seconds"`
+	DocumentReadTime     float64 `json:"document_read_time_seconds"`
+	PhotoViewTime        float64 `json:"photo_view_time_seconds"`
+	TotalEngagementValue float64 `json:"total_engagement_value"`
+	QualityMultiplier    float64 `json:"quality_multiplier"`
+	IsActive             bool    `json:"is_active"`
+}
+
+// ContentRewardStats represents reward statistics
+type ContentRewardStats struct {
+	TotalRewardsToday    float64 `json:"total_rewards_today"`
+	TotalRewardsThisWeek float64 `json:"total_rewards_this_week"`
+	TotalRewardsThisMonth float64 `json:"total_rewards_this_month"`
+	AccumulatedRewards   float64 `json:"accumulated_rewards"`
+	CurrentPoolShare     float64 `json:"current_pool_share_percentage"`
+	AverageRewardPerSecond float64 `json:"average_reward_per_second"`
+}
+
+// ContentPerformanceStats represents content performance metrics
+type ContentPerformanceStats struct {
+	TotalContentPieces   int     `json:"total_content_pieces"`
+	ActiveContentPieces  int     `json:"active_content_pieces"`
+	TopContentType       string  `json:"top_content_type"`
+	AverageEngagementTime float64 `json:"average_engagement_time"`
+	TotalViews           int64   `json:"total_views"`
+	QualityScore         float64 `json:"quality_score"`
+}
+
+// ContentDistributionSummary represents recent distribution summary
+type ContentDistributionSummary struct {
+	Timestamp            time.Time `json:"timestamp"`
+	PoolAmount           float64   `json:"pool_amount"`
+	CreatorReward        float64   `json:"creator_reward"`
+	SharePercentage      float64   `json:"share_percentage"`
+	EngagementValue      float64   `json:"engagement_value"`
+}
+
+// AppDeveloperDashboard represents app developer dashboard data
+type AppDeveloperDashboard struct {
+	DeveloperID          string                      `json:"developer_id"`
+	UserType             string                      `json:"user_type"` // "app_developer"
+	
+	// Real-Time App Usage
+	CurrentUsage         *AppUsageStats              `json:"current_usage"`
+	
+	// Rewards Information
+	RewardStats          *AppDeveloperRewardStats    `json:"reward_stats"`
+	
+	// App Performance
+	AppPerformance       *AppPerformanceStats        `json:"app_performance"`
+	
+	// Distribution History
+	RecentDistributions  []*AppDeveloperDistributionSummary `json:"recent_distributions"`
+	
+	LastUpdated          time.Time                   `json:"last_updated"`
+}
+
+// AppUsageStats represents real-time app usage statistics
+type AppUsageStats struct {
+	ActiveUserTime       float64 `json:"active_user_time_seconds"`
+	UserRetentionRate    float64 `json:"user_retention_rate"`
+	AppRating            float64 `json:"app_rating"`
+	QualityMultiplier    float64 `json:"quality_multiplier"`
+	TotalUsageValue      float64 `json:"total_usage_value"`
+	IsActive             bool    `json:"is_active"`
+}
+
+// AppDeveloperRewardStats represents app developer reward statistics
+type AppDeveloperRewardStats struct {
+	TotalRewardsToday    float64 `json:"total_rewards_today"`
+	TotalRewardsThisWeek float64 `json:"total_rewards_this_week"`
+	TotalRewardsThisMonth float64 `json:"total_rewards_this_month"`
+	AccumulatedRewards   float64 `json:"accumulated_rewards"`
+	CurrentPoolShare     float64 `json:"current_pool_share_percentage"`
+	AverageRewardPerSecond float64 `json:"average_reward_per_second"`
+}
+
+// AppPerformanceStats represents app performance metrics
+type AppPerformanceStats struct {
+	TotalApps            int     `json:"total_apps"`
+	ActiveApps           int     `json:"active_apps"`
+	TotalUsers           int     `json:"total_users"`
+	AverageSessionTime   float64 `json:"average_session_time"`
+	TotalSessions        int64   `json:"total_sessions"`
+	AverageRating        float64 `json:"average_rating"`
+	AverageRetention     float64 `json:"average_retention"`
+}
+
+// AppDeveloperDistributionSummary represents recent app developer distribution summary
+type AppDeveloperDistributionSummary struct {
+	Timestamp            time.Time `json:"timestamp"`
+	PoolAmount           float64   `json:"pool_amount"`
+	DeveloperReward      float64   `json:"developer_reward"`
+	SharePercentage      float64   `json:"share_percentage"`
+	UsageValue           float64   `json:"usage_value"`
+}
+
+// ProviderDashboard represents infrastructure provider dashboard data
+type ProviderDashboard struct {
+	ProviderID           string                    `json:"provider_id"`
+	UserType             string                    `json:"user_type"` // "provider"
+	
+	// Real-Time Resource Usage
+	CurrentUsage         *ProviderUsageStats       `json:"current_usage"`
+	
+	// Rewards Information
+	RewardStats          *ProviderRewardStats      `json:"reward_stats"`
+	
+	// Resource Performance
+	ResourcePerformance  *ResourcePerformanceStats `json:"resource_performance"`
+	
+	// Distribution History
+	RecentDistributions  []*ProviderDistributionSummary `json:"recent_distributions"`
+	
+	LastUpdated          time.Time                 `json:"last_updated"`
+}
+
+// ProviderUsageStats represents real-time provider usage statistics
+type ProviderUsageStats struct {
+	StorageGBHours       float64 `json:"storage_gb_hours_per_second"`
+	BandwidthGBPerSecond float64 `json:"bandwidth_gb_per_second"`
+	CPUHours             float64 `json:"cpu_hours_per_second"`
+	GPUHours             float64 `json:"gpu_hours_per_second"`
+	MemoryGBHours        float64 `json:"memory_gb_hours_per_second"`
+	MarketValuePerSecond float64 `json:"market_value_per_second"`
+	IsActive             bool    `json:"is_active"`
+}
+
+// ProviderRewardStats represents provider reward statistics
+type ProviderRewardStats struct {
+	TotalRewardsToday    float64 `json:"total_rewards_today"`
+	TotalRewardsThisWeek float64 `json:"total_rewards_this_week"`
+	TotalRewardsThisMonth float64 `json:"total_rewards_this_month"`
+	AccumulatedRewards   float64 `json:"accumulated_rewards"`
+	CurrentPoolShare     float64 `json:"current_pool_share_percentage"`
+	AverageRewardPerSecond float64 `json:"average_reward_per_second"`
+}
+
+// ResourcePerformanceStats represents resource performance metrics
+type ResourcePerformanceStats struct {
+	TotalStorageProvided int64   `json:"total_storage_provided_bytes"`
+	TotalBandwidthProvided int64 `json:"total_bandwidth_provided_bytes"`
+	TotalComputeHours    float64 `json:"total_compute_hours"`
+	UptimePercentage     float64 `json:"uptime_percentage"`
+	TotalOperations      int64   `json:"total_operations"`
+	SuccessRate          float64 `json:"success_rate"`
+}
+
+// ProviderDistributionSummary represents recent provider distribution summary
+type ProviderDistributionSummary struct {
+	Timestamp            time.Time `json:"timestamp"`
+	PoolAmount           float64   `json:"pool_amount"`
+	ProviderReward       float64   `json:"provider_reward"`
+	SharePercentage      float64   `json:"share_percentage"`
+	MarketValue          float64   `json:"market_value"`
+}
+
+// FreeUserDashboard represents free user dashboard data
+type FreeUserDashboard struct {
+	UserID               string                 `json:"user_id"`
+	UserType             string                 `json:"user_type"` // "free_user"
+	
+	// Usage Statistics
+	CurrentUsage         *FreeUserUsageStats    `json:"current_usage"`
+	
+	// Quotas and Limits
+	QuotaInformation     *QuotaInfo             `json:"quota_information"`
+	
+	// Upgrade Information
+	UpgradeOptions       *UpgradeOptions        `json:"upgrade_options"`
+	
+	LastUpdated          time.Time              `json:"last_updated"`
+}
+
+// FreeUserUsageStats represents free user usage statistics
+type FreeUserUsageStats struct {
+	StorageUsed          int64   `json:"storage_used_bytes"`
+	BandwidthUsed        int64   `json:"bandwidth_used_bytes"`
+	ComputeHours         float64 `json:"compute_hours"`
+	ContentConsumed      int64   `json:"content_consumed_bytes"`
+	AppsUsed             int     `json:"apps_used_count"`
+	
+	// Monthly activity
+	MonthlyOperations    int     `json:"monthly_operations"`
+	MonthlyContentViews  int     `json:"monthly_content_views"`
+	MonthlyAppSessions   int     `json:"monthly_app_sessions"`
+}
+
+// QuotaInfo represents quota information for free users
+type QuotaInfo struct {
+	StorageQuota         int64   `json:"storage_quota_bytes"`
+	BandwidthQuota       int64   `json:"bandwidth_quota_bytes"`
+	ComputeQuota         float64 `json:"compute_quota_hours"`
+	
+	StorageUsedPercent   float64 `json:"storage_used_percent"`
+	BandwidthUsedPercent float64 `json:"bandwidth_used_percent"`
+	ComputeUsedPercent   float64 `json:"compute_used_percent"`
+	
+	ResetDate            time.Time `json:"quota_reset_date"`
+}
+
+// UpgradeOptions represents available upgrade options
+type UpgradeOptions struct {
+	AvailableTiers       []SubscriptionTierInfo `json:"available_tiers"`
+	RecommendedTier      string                 `json:"recommended_tier"`
+	EstimatedSavings     float64                `json:"estimated_monthly_savings"`
+}
+
+// SubscriptionTierInfo represents subscription tier information
+type SubscriptionTierInfo struct {
+	TierName             string  `json:"tier_name"`
+	MonthlyPrice         float64 `json:"monthly_price"`
+	StorageLimit         string  `json:"storage_limit"`
+	BandwidthLimit       string  `json:"bandwidth_limit"`
+	ComputeLimit         string  `json:"compute_limit"`
+	Features             []string `json:"features"`
+}
+
+// NetworkOverview represents overall network statistics
+type NetworkOverview struct {
+	TotalActiveUsers     int     `json:"total_active_users"`
+	TotalSubscribers     int     `json:"total_subscribers"`
+	TotalProviders       int     `json:"total_providers"`
+	TotalContentCreators int     `json:"total_content_creators"`
+	TotalAppDevelopers   int     `json:"total_app_developers"`
+	
+	CurrentRevenueRate   float64 `json:"current_revenue_per_second"`
+	TotalDistributedToday float64 `json:"total_distributed_today"`
+	
+	ActiveDistribution   *ActiveDistributionBreakdown `json:"active_distribution"`
+}
+
+// ActiveDistributionBreakdown represents current distribution breakdown
+type ActiveDistributionBreakdown struct {
+	ContentPool          float64 `json:"content_pool_current"`
+	NetworkOpsPool       float64 `json:"network_ops_pool_current"`
+	AppDeveloperPool     float64 `json:"app_developer_pool_current"`
+	InfrastructurePool   float64 `json:"infrastructure_pool_current"`
+	UnusedFunds          float64 `json:"unused_funds_current"`
+}
+
+// setupEconomicsDashboardRoutes sets up all economics dashboard API routes
+func (s *server) setupEconomicsDashboardRoutes() {
+	// Create authenticated API group for dashboard endpoints
+	api := s.app.Group("/api/dashboard")
+	
+	// Apply authentication middleware to all dashboard routes
+	if s.authService != nil {
+		api.Use(s.authMiddleware())
+	}
+	
+	// Subscriber dashboard endpoints (DID-based)
+	api.Get("/subscriber/:did", s.handleSubscriberDashboard)
+	s.addRoute("GET", "/api/dashboard/subscriber/:did")
+	
+	// Content creator dashboard endpoints (DID-based)
+	api.Get("/creator/:did", s.handleContentCreatorDashboard)
+	s.addRoute("GET", "/api/dashboard/creator/:did")
+	
+	// App developer dashboard endpoints (DID-based)
+	api.Get("/developer/:did", s.handleAppDeveloperDashboard)
+	s.addRoute("GET", "/api/dashboard/developer/:did")
+	
+	// Infrastructure provider dashboard endpoints (DID-based)
+	api.Get("/provider/:did", s.handleProviderDashboard)
+	s.addRoute("GET", "/api/dashboard/provider/:did")
+	
+	// Free user dashboard endpoints (DID-based)
+	api.Get("/free-user/:did", s.handleFreeUserDashboard)
+	s.addRoute("GET", "/api/dashboard/free-user/:did")
+	
+	// Network overview endpoint (for all authenticated users)
+	api.Get("/network-overview", s.handleNetworkOverview)
+	s.addRoute("GET", "/api/dashboard/network-overview")
+	
+	// Personal dashboard endpoint (uses authenticated user's DID)
+	api.Get("/me", s.handlePersonalDashboard)
+	s.addRoute("GET", "/api/dashboard/me")
+}

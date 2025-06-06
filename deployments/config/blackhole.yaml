@@ -1,0 +1,131 @@
+# Blackhole Network Configuration
+# This is the default configuration file for Blackhole Network
+
+# Server configuration
+server:
+  # HTTP/WebSocket server port
+  http_port: 8080
+  # Server bind address
+  bind_address: "0.0.0.0"
+  # Enable CORS
+  enable_cors: true
+  # API rate limiting (requests per minute)
+  rate_limit: 60
+
+# P2P networking configuration
+p2p:
+  # P2P listening ports
+  listen_addresses:
+    - "/ip4/0.0.0.0/tcp/4001"
+    - "/ip6/::/tcp/4001"
+    - "/ip4/0.0.0.0/udp/4002/quic"
+    - "/ip6/::/udp/4002/quic"
+  # Enable NAT traversal
+  enable_nat: true
+  # Enable relay for nodes behind NAT
+  enable_relay: true
+  # DHT mode (server, client, or auto)
+  dht_mode: "auto"
+  # Bootstrap peers (optional)
+  bootstrap_peers: []
+  # Connection limits
+  connection_manager:
+    high_water: 900
+    low_water: 600
+    grace_period: "20s"
+
+# Storage configuration
+storage:
+  # Data directory for all persistent data
+  data_dir: "/var/lib/blackhole"
+  # Cache directory
+  cache_dir: "/var/lib/blackhole/cache"
+  # Maximum storage space to use (in GB)
+  max_storage_gb: 100
+  # Garbage collection interval
+  gc_interval: "6h"
+  # Enable content indexing
+  enable_indexing: true
+
+# Resource management
+resources:
+  # CPU allocation percentage (0-100)
+  cpu_percent: 50
+  # Memory limit in MB (0 = no limit)
+  memory_limit_mb: 2048
+  # Bandwidth limits
+  bandwidth:
+    # Upload limit in Mbps (0 = no limit)
+    upload_mbps: 0
+    # Download limit in Mbps (0 = no limit)
+    download_mbps: 0
+  # GPU allocation (if available)
+  gpu:
+    enabled: false
+    percent: 30
+
+# Logging configuration
+logging:
+  # Log level (debug, info, warn, error)
+  level: "info"
+  # Log file path (empty = stdout only)
+  file: "/var/log/blackhole/blackhole.log"
+  # Maximum log file size in MB
+  max_size_mb: 100
+  # Maximum number of old log files to keep
+  max_backups: 3
+  # Maximum age of log files in days
+  max_age_days: 7
+  # Compress old log files
+  compress: true
+
+# Monitoring configuration
+monitoring:
+  # Enable metrics collection
+  enabled: true
+  # Metrics update interval
+  update_interval: "10s"
+  # Prometheus metrics endpoint
+  prometheus_enabled: true
+  prometheus_port: 9090
+
+# Security configuration
+security:
+  # Enable DID authentication
+  enable_did: true
+  # TLS configuration for HTTPS
+  tls:
+    enabled: false
+    cert_file: ""
+    key_file: ""
+  # API authentication
+  api_auth:
+    enabled: false
+    token: ""
+
+# Economic layer configuration
+economic:
+  # User tier (free, normal, advance, ultimate)
+  user_tier: "free"
+  # Enable resource sharing rewards
+  enable_rewards: true
+  # Minimum uptime percentage for rewards
+  min_uptime_percent: 80
+
+# Plugin configuration
+plugins:
+  # Enable plugin system
+  enabled: true
+  # Plugin directory
+  plugin_dir: "/var/lib/blackhole/plugins"
+  # Auto-load plugins on startup
+  auto_load: true
+
+# Development/debug options
+debug:
+  # Enable debug mode
+  enabled: false
+  # Enable pprof profiling endpoint
+  pprof_enabled: false
+  # Verbose logging
+  verbose: false

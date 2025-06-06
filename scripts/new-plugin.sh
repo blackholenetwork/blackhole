@@ -11,13 +11,13 @@ NC='\033[0m'
 
 # Check arguments
 if [ $# -lt 3 ]; then
-    echo -e "${RED}Usage: $0 <type> <name> <description>${NC}"
-    echo -e "  type: core, resource, data, service, economic"
-    echo -e "  name: plugin name (e.g., storage)"
-    echo -e "  description: brief description"
-    echo ""
-    echo -e "Example: $0 resource storage \"Distributed storage with erasure coding\""
-    exit 1
+  echo -e "${RED}Usage: $0 <type> <name> <description>${NC}"
+  echo -e "  type: core, resource, data, service, economic"
+  echo -e "  name: plugin name (e.g., storage)"
+  echo -e "  description: brief description"
+  echo ""
+  echo -e "Example: $0 resource storage \"Distributed storage with erasure coding\""
+  exit 1
 fi
 
 TYPE=$1
@@ -34,31 +34,31 @@ LICENSE="MIT"
 
 # Determine target directory based on type
 case $TYPE in
-    core)
-        TARGET_DIR="pkg/core/$PACKAGE_NAME"
-        ;;
-    resource)
-        TARGET_DIR="pkg/resources/$PACKAGE_NAME"
-        ;;
-    data)
-        TARGET_DIR="pkg/data/$PACKAGE_NAME"
-        ;;
-    service)
-        TARGET_DIR="pkg/service/$PACKAGE_NAME"
-        ;;
-    economic)
-        TARGET_DIR="pkg/economic/$PACKAGE_NAME"
-        ;;
-    *)
-        echo -e "${RED}Invalid type: $TYPE${NC}"
-        exit 1
-        ;;
+core)
+  TARGET_DIR="pkg/core/$PACKAGE_NAME"
+  ;;
+resource)
+  TARGET_DIR="pkg/resources/$PACKAGE_NAME"
+  ;;
+data)
+  TARGET_DIR="pkg/data/$PACKAGE_NAME"
+  ;;
+service)
+  TARGET_DIR="pkg/service/$PACKAGE_NAME"
+  ;;
+economic)
+  TARGET_DIR="pkg/economic/$PACKAGE_NAME"
+  ;;
+*)
+  echo -e "${RED}Invalid type: $TYPE${NC}"
+  exit 1
+  ;;
 esac
 
 # Check if plugin already exists
 if [ -d "$TARGET_DIR" ]; then
-    echo -e "${RED}Plugin already exists: $TARGET_DIR${NC}"
-    exit 1
+  echo -e "${RED}Plugin already exists: $TARGET_DIR${NC}"
+  exit 1
 fi
 
 # Create plugin directory
@@ -73,18 +73,18 @@ TEMPLATE_DIR="scripts/templates/plugin"
 
 # Function to process template
 process_template() {
-    local template=$1
-    local output=$2
-    
-    # Replace Go template syntax with actual values
-    sed -e "s/{{\.PackageName}}/$PACKAGE_NAME/g" \
-        -e "s/{{\.Name}}/$NAME/g" \
-        -e "s/{{\.Type}}/$TYPE/g" \
-        -e "s/{{\.Description}}/$DESCRIPTION/g" \
-        -e "s/{{\.Version}}/$VERSION/g" \
-        -e "s/{{\.Author}}/$AUTHOR/g" \
-        -e "s/{{\.License}}/$LICENSE/g" \
-        "$template" > "$output"
+  local template=$1
+  local output=$2
+
+  # Replace Go template syntax with actual values
+  sed -e "s/{{\.PackageName}}/$PACKAGE_NAME/g" \
+    -e "s/{{\.Name}}/$NAME/g" \
+    -e "s/{{\.Type}}/$TYPE/g" \
+    -e "s/{{\.Description}}/$DESCRIPTION/g" \
+    -e "s/{{\.Version}}/$VERSION/g" \
+    -e "s/{{\.Author}}/$AUTHOR/g" \
+    -e "s/{{\.License}}/$LICENSE/g" \
+    "$template" >"$output"
 }
 
 # Generate plugin.go

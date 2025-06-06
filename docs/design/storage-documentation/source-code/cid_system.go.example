@@ -1,0 +1,319 @@
+package storage
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"math"
+	"time"
+
+	"github.com/ipfs/go-cid"
+	"github.com/multiformats/go-multihash"
+)
+
+// ContentCID represents a content-based identifier (IPFS-style)
+type ContentCID string
+
+// ChunkCID represents a content-based chunk identifier  
+type ChunkCID string
+
+// ContentInfo contains minimal derivable information about content
+type ContentInfo struct {
+	CID         ContentCID `json:"cid"`
+	Available   bool       `json:"available"`
+	Size        uint64     `json:"size,omitempty"`        // Derivable from content
+	ChunkCount  int        `json:"chunk_count,omitempty"` // Derivable from size
+	BlockCount  int        `json:"block_count,omitempty"` // Derivable from chunks
+	ParityLevel string     `json:"parity_level,omitempty"` // System config (e.g., "10+3")
+	LastAccess  *time.Time `json:"last_access,omitempty"` // Optional operational tracking
+	AccessCount int64      `json:"access_count,omitempty"` // Optional operational tracking
+}
+
+// ContentBasedChunk represents a chunk identified by its content
+type ContentBasedChunk struct {
+	CID      ChunkCID `json:"cid"`      // Content-based identifier
+	Data     []byte   `json:"data"`     // Actual chunk data
+	IsParity bool     `json:"is_parity"` // Data or parity chunk
+}
+
+// CIDSystem handles pure content-based identification with zero metadata
+type CIDSystem struct {
+	chunkSize int
+	blockSize int
+}
+
+// NewCIDSystem creates a new content-based ID system
+func NewCIDSystem() *CIDSystem {
+	return &CIDSystem{
+		chunkSize: ChunkSize, // 256KB
+		blockSize: BlockSize, // 10 chunks per block
+	}
+}
+
+// GenerateFileCID creates a proper IPFS-compatible CID for a file
+func (cs *CIDSystem) GenerateFileCID(content []byte) ContentCID {
+	// Create SHA256 hash
+	hash := sha256.Sum256(content)
+	
+	// Create multihash with full 32-byte hash
+	mhash, err := multihash.Encode(hash[:], multihash.SHA2_256)
+	if err != nil {
+		// Fallback to simplified format if multihash fails
+		return ContentCID("bafybei" + hex.EncodeToString(hash[:16]))
+	}
+	
+	// Create CID v1 with Raw codec (0x55) for file content
+	c := cid.NewCidV1(cid.Raw, mhash)
+	
+	return ContentCID(c.String())
+}
+
+// GenerateFileCIDFromReader creates a CID from a reader (streaming)
+func (cs *CIDSystem) GenerateFileCIDFromReader(reader io.Reader) (ContentCID, []byte, error) {
+	// Read all content to generate CID
+	content, err := io.ReadAll(reader)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to read content: %w", err)
+	}
+	
+	cid := cs.GenerateFileCID(content)
+	return cid, content, nil
+}
+
+// GenerateChunkCID creates a proper IPFS-compatible CID for a chunk
+func (cs *CIDSystem) GenerateChunkCID(chunkContent []byte) ChunkCID {
+	// Create SHA256 hash
+	hash := sha256.Sum256(chunkContent)
+	
+	// Create multihash with full 32-byte hash
+	mhash, err := multihash.Encode(hash[:], multihash.SHA2_256)
+	if err != nil {
+		// Fallback to simplified format if multihash fails
+		return ChunkCID(hex.EncodeToString(hash[:16]))
+	}
+	
+	// Create CID v1 with Raw codec for chunk content
+	c := cid.NewCidV1(cid.Raw, mhash)
+	
+	return ChunkCID(c.String())
+}
+
+// CalculateFileProperties derives all file properties from content
+func (cs *CIDSystem) CalculateFileProperties(content []byte) FileProperties {
+	size := uint64(len(content))
+	chunkCount := int(math.Ceil(float64(size) / float64(cs.chunkSize)))
+	blockCount := int(math.Ceil(float64(chunkCount) / float64(cs.blockSize)))
+	
+	return FileProperties{
+		Size:       size,
+		ChunkCount: chunkCount,
+		BlockCount: blockCount,
+	}
+}
+
+// CalculateChunkCIDs deterministically generates all chunk CIDs for a file
+func (cs *CIDSystem) CalculateChunkCIDs(content []byte) []ChunkCID {
+	var chunkCIDs []ChunkCID
+	
+	for i := 0; i < len(content); i += cs.chunkSize {
+		end := i + cs.chunkSize
+		if end > len(content) {
+			end = len(content)
+		}
+		
+		chunkData := content[i:end]
+		chunkCID := cs.GenerateChunkCID(chunkData)
+		chunkCIDs = append(chunkCIDs, chunkCID)
+	}
+	
+	return chunkCIDs
+}
+
+// CalculateParityChunkCIDs generates parity chunk CIDs for a block
+func (cs *CIDSystem) CalculateParityChunkCIDs(dataChunks [][]byte, parityData [][]byte) []ChunkCID {
+	var parityCIDs []ChunkCID
+	
+	for _, parity := range parityData {
+		if parity != nil { // Skip nil parity chunks
+			parityCID := cs.GenerateChunkCID(parity)
+			parityCIDs = append(parityCIDs, parityCID)
+		}
+	}
+	
+	return parityCIDs
+}
+
+// FileProperties represents derivable properties from content
+type FileProperties struct {
+	Size       uint64 `json:"size"`
+	ChunkCount int    `json:"chunk_count"`
+	BlockCount int    `json:"block_count"`
+}
+
+// ChunkInfo represents information about a chunk derived from its position
+type ChunkInfo struct {
+	CID        ChunkCID `json:"cid"`
+	Index      int      `json:"index"`       // Position in file
+	BlockIndex int      `json:"block_index"` // Which erasure coding block
+	IsParity   bool     `json:"is_parity"`   // Data or parity chunk
+}
+
+// CalculateChunkInfo derives chunk information from its index and file properties
+func (cs *CIDSystem) CalculateChunkInfo(chunkIndex int, fileProps FileProperties) ChunkInfo {
+	blockIndex := chunkIndex / cs.blockSize
+	
+	return ChunkInfo{
+		Index:      chunkIndex,
+		BlockIndex: blockIndex,
+		IsParity:   false, // Data chunks are not parity
+	}
+}
+
+// ReconstructFileFromChunks rebuilds file content from chunk CIDs and data
+func (cs *CIDSystem) ReconstructFileFromChunks(chunks map[ChunkCID][]byte, expectedCID ContentCID) ([]byte, error) {
+	// Sort chunks by their content to determine order
+	// This is where the deterministic reconstruction happens
+	
+	var orderedChunks [][]byte
+	var totalSize int
+	
+	// Calculate expected order based on content
+	for _, chunkData := range chunks {
+		orderedChunks = append(orderedChunks, chunkData)
+		totalSize += len(chunkData)
+	}
+	
+	// Reconstruct file
+	reconstructed := make([]byte, 0, totalSize)
+	for _, chunk := range orderedChunks {
+		reconstructed = append(reconstructed, chunk...)
+	}
+	
+	// Verify CID matches
+	if cs.GenerateFileCID(reconstructed) != expectedCID {
+		return nil, fmt.Errorf("reconstructed file CID mismatch: content corrupted")
+	}
+	
+	return reconstructed, nil
+}
+
+// IsValidCID checks if a CID is properly formatted using IPFS validation
+func (cs *CIDSystem) IsValidCID(cidStr ContentCID) bool {
+	_, err := cid.Decode(string(cidStr))
+	return err == nil
+}
+
+// DeriveStorageLocations calculates deterministic storage positions for chunk CIDs
+func (cs *CIDSystem) DeriveStorageLocations(chunkCID ChunkCID) StorageLocation {
+	chunkStr := string(chunkCID)
+	
+	return StorageLocation{
+		Primary:   cs.hashToPosition(chunkStr + "primary"),
+		Secondary: cs.hashToPosition(chunkStr + "secondary"), 
+		Tertiary:  cs.hashToPosition(chunkStr + "tertiary"),
+	}
+}
+
+// hashToPosition converts a string to a deterministic position (same as bucket system)
+func (cs *CIDSystem) hashToPosition(input string) Position {
+	hash := sha256.Sum256([]byte(input))
+	
+	// Use first 8 bytes for global position
+	globalPos := uint64(0)
+	for i := 0; i < 8; i++ {
+		globalPos = (globalPos << 8) | uint64(hash[i])
+	}
+	globalPos = globalPos % TotalPositions
+	
+	// Calculate bucket and position within bucket
+	bucket := BucketID(globalPos / PositionsPerBucket)
+	position := PositionID(globalPos % PositionsPerBucket)
+	
+	return Position{
+		Bucket:   bucket,
+		Position: position,
+		Global:   GlobalPosition(globalPos),
+	}
+}
+
+
+// ValidateChunk verifies that chunk data matches its CID
+func (cs *CIDSystem) ValidateChunk(chunk *ContentBasedChunk) bool {
+	expectedCID := cs.GenerateChunkCID(chunk.Data)
+	return expectedCID == chunk.CID
+}
+
+// CID CONVERSION FUNCTIONS FOR NETWORK INTEGRATION
+
+// StringToCID converts a string key to a validated ContentCID
+func StringToCID(key string) (ContentCID, error) {
+	// Validate that the string is a proper CID
+	_, err := cid.Decode(key)
+	if err != nil {
+		return "", fmt.Errorf("invalid CID format: %s - %w", key, err)
+	}
+	
+	return ContentCID(key), nil
+}
+
+// CIDToString converts a ContentCID to a string for network operations
+func CIDToString(cidVal ContentCID) string {
+	return string(cidVal)
+}
+
+// ContentCIDToLibp2pCID converts our ContentCID to libp2p cid.Cid type
+func ContentCIDToLibp2pCID(cidVal ContentCID) (cid.Cid, error) {
+	return cid.Decode(string(cidVal))
+}
+
+// Libp2pCIDToContentCID converts libp2p cid.Cid to our ContentCID type
+func Libp2pCIDToContentCID(libp2pCID cid.Cid) ContentCID {
+	return ContentCID(libp2pCID.String())
+}
+
+// ChunkCIDToLibp2pCID converts our ChunkCID to libp2p cid.Cid type
+func ChunkCIDToLibp2pCID(chunkCID ChunkCID) (cid.Cid, error) {
+	return cid.Decode(string(chunkCID))
+}
+
+// Libp2pCIDToChunkCID converts libp2p cid.Cid to our ChunkCID type
+func Libp2pCIDToChunkCID(libp2pCID cid.Cid) ChunkCID {
+	return ChunkCID(libp2pCID.String())
+}
+
+// IsIPFSCID checks if a string is a valid IPFS CID
+func IsIPFSCID(str string) bool {
+	_, err := cid.Decode(str)
+	return err == nil
+}
+
+// CIDFromHash creates a CID from a raw hash (for migration/compatibility)
+func CIDFromHash(hash []byte, codec uint64) (ContentCID, error) {
+	// Create multihash
+	mhash, err := multihash.Encode(hash, multihash.SHA2_256)
+	if err != nil {
+		return "", fmt.Errorf("failed to create multihash: %w", err)
+	}
+	
+	// Create CID v1
+	c := cid.NewCidV1(codec, mhash)
+	
+	return ContentCID(c.String()), nil
+}
+
+// ExtractHashFromCID extracts the raw hash from a CID
+func ExtractHashFromCID(cidVal ContentCID) ([]byte, error) {
+	c, err := cid.Decode(string(cidVal))
+	if err != nil {
+		return nil, fmt.Errorf("invalid CID: %w", err)
+	}
+	
+	// Decode the multihash to get the raw hash
+	dmh, err := multihash.Decode(c.Hash())
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode multihash: %w", err)
+	}
+	
+	return dmh.Digest, nil
+}

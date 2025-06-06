@@ -68,7 +68,7 @@ if err != nil {
 // Define in pkg/errors/errors.go
 var (
     ErrNotFound        = errors.New("not found")
-    ErrUnauthorized    = errors.New("unauthorized")  
+    ErrUnauthorized    = errors.New("unauthorized")
     ErrQuotaExceeded   = errors.New("quota exceeded")
     ErrInvalidInput    = errors.New("invalid input")
     ErrUnavailable     = errors.New("service unavailable")
@@ -106,7 +106,7 @@ type XxxRequest struct {
     // Required fields at top
     UserID   UserID   `json:"user_id" validate:"required"`
     Resource Resource `json:"resource" validate:"required"`
-    
+
     // Optional fields below
     Priority Priority     `json:"priority,omitempty"`
     Timeout  time.Duration `json:"timeout,omitempty"`
@@ -130,7 +130,7 @@ func ProcessFile(id FileID) error {
         return err
     }
     defer file.Close() // Always defer cleanup
-    
+
     // Process file
     return nil
 }
@@ -150,15 +150,15 @@ defer func() {
 // ✅ CORRECT - Always manage goroutine lifecycle
 func (s *Service) Start(ctx context.Context) error {
     g, ctx := errgroup.WithContext(ctx)
-    
+
     g.Go(func() error {
         return s.runWorker(ctx)
     })
-    
+
     g.Go(func() error {
         return s.runMonitor(ctx)
     })
-    
+
     return g.Wait()
 }
 
@@ -174,11 +174,11 @@ func (s *Service) Start() {
 func StreamData(ctx context.Context) (<-chan Data, <-chan error) {
     dataCh := make(chan Data)
     errCh := make(chan error, 1) // Buffered for error
-    
+
     go func() {
         defer close(dataCh) // Producer closes
         defer close(errCh)
-        
+
         for {
             select {
             case <-ctx.Done():
@@ -190,7 +190,7 @@ func StreamData(ctx context.Context) (<-chan Data, <-chan error) {
                     errCh <- err
                     return
                 }
-                
+
                 select {
                 case dataCh <- data:
                 case <-ctx.Done():
@@ -200,7 +200,7 @@ func StreamData(ctx context.Context) (<-chan Data, <-chan error) {
             }
         }
     }()
-    
+
     return dataCh, errCh
 }
 ```
@@ -299,7 +299,7 @@ func TestStorage_GetFile(t *testing.T) {
             wantErr: ErrNotFound,
         },
     }
-    
+
     for _, tt := range tests {
         t.Run(tt.name, func(t *testing.T) {
             got, err := storage.GetFile(ctx, tt.fileID)
@@ -390,11 +390,11 @@ import (
     "context"
     "fmt"
     "time"
-    
+
     // External packages
     "github.com/gofiber/fiber/v2"
     "github.com/stretchr/testify/assert"
-    
+
     // Internal packages
     "github.com/blackhole/pkg/common/errors"
     "github.com/blackhole/pkg/storage"
@@ -441,13 +441,13 @@ func (s *Storage) GetFile(ctx context.Context, id FileID) (io.ReadCloser, error)
 type FileMetadata struct {
     // ID is the unique identifier for the file
     ID FileID `json:"id"`
-    
+
     // Name is the original filename
     Name string `json:"name"`
-    
+
     // Size in bytes
     Size int64 `json:"size"`
-    
+
     // Tags can be updated after creation
     Tags []string `json:"tags,omitempty"`
 }
@@ -512,12 +512,12 @@ func (s *Storage) StoreFile(ctx context.Context, name string, size int64) error 
     if err := validateFilename(name); err != nil {
         return fmt.Errorf("invalid filename: %w", err)
     }
-    
+
     // Validate size
     if size <= 0 || size > MaxFileSize {
         return fmt.Errorf("invalid file size %d: %w", size, ErrInvalidInput)
     }
-    
+
     // Proceed with storage
 }
 ```
@@ -541,10 +541,10 @@ log.Info("api key generated", "key", apiKey)   // NEVER log secrets
 type Config struct {
     // Required fields with no defaults
     NodeID string `env:"NODE_ID" validate:"required"`
-    
+
     // Optional with defaults
     Port int `env:"PORT" default:"8080"`
-    
+
     // Nested configs
     Storage StorageConfig
     Network NetworkConfig

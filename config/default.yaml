@@ -1,0 +1,94 @@
+# Default configuration for Blackhole Network
+# This file can be overridden by environment variables or command-line flags
+
+# Server configuration
+server:
+  http_port: 8080
+  grpc_port: 9000
+  metrics_port: 9090
+  enable_tls: false
+  tls_cert_path: "/config/cert.pem"
+  tls_key_path: "/config/key.pem"
+
+# P2P Network configuration
+p2p:
+  port: 4001
+  bootstrap_peers:
+    - "/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN"
+    - "/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa"
+  enable_dht: true
+  enable_pubsub: true
+  max_peers: 50
+
+# IPFS configuration
+ipfs:
+  api_port: 5001
+  gateway_port: 8081
+  datastore_path: "/data/ipfs"
+
+# Storage configuration
+storage:
+  data_dir: "/data"
+  max_storage_gb: 100
+  cache_size_mb: 512
+  gc_interval: "1h"
+
+# Resource limits
+resources:
+  max_cpu_percent: 80
+  max_memory_gb: 4
+  max_bandwidth_mbps: 100
+  max_connections: 1000
+
+# Database configuration
+database:
+  type: "badger"
+  path: "/data/db"
+  in_memory: false
+  compression: true
+
+# Logging configuration
+logging:
+  level: "info"
+  format: "json"
+  output: "stdout"
+  file_path: "/logs/blackhole.log"
+  max_size_mb: 100
+  max_backups: 3
+  max_age_days: 7
+
+# Monitoring configuration
+monitoring:
+  enable_metrics: true
+  enable_tracing: false
+  trace_endpoint: "http://jaeger:14268/api/traces"
+  trace_sample_rate: 0.1
+
+# Security configuration
+security:
+  enable_auth: false
+  auth_token: ""
+  enable_rate_limiting: true
+  rate_limit_requests_per_minute: 60
+  allowed_origins:
+    - "http://localhost:3000"
+    - "http://localhost:8080"
+
+# Economic layer configuration
+economic:
+  enable_incentives: true
+  reward_interval: "1h"
+  min_stake: 100
+  max_stake: 10000
+
+# Service layer configuration
+services:
+  enable_webserver: true
+  enable_realtime: true
+  enable_social: false
+
+# Feature flags
+features:
+  enable_experimental: false
+  enable_beta_features: false
+  enable_debug_endpoints: false

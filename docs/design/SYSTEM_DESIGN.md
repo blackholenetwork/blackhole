@@ -67,11 +67,11 @@ type Storage struct {
     chunks   ChunkStore      // Low-level chunk storage
     metadata MetadataStore   // File metadata
     erasure  ErasureCoder    // Reed-Solomon coding
-    
+
     // State
     state    StorageState
     metrics  *StorageMetrics
-    
+
     // Configuration
     config   StorageConfig
 }
@@ -88,13 +88,13 @@ type StorageConfig struct {
 func (s *Storage) StoreFile(ctx context.Context, reader io.Reader, metadata FileMetadata) (*FileID, error) {
     // 1. Chunk the file
     chunks := s.chunkFile(reader)
-    
+
     // 2. Erasure code each chunk
     encoded := make([]EncodedChunk, len(chunks))
     for i, chunk := range chunks {
         encoded[i] = s.erasure.Encode(chunk)
     }
-    
+
     // 3. Store chunks
     stored := make([]StoredChunk, 0)
     for _, chunk := range encoded {
@@ -106,7 +106,7 @@ func (s *Storage) StoreFile(ctx context.Context, reader io.Reader, metadata File
         }
         stored = append(stored, sc)
     }
-    
+
     // 4. Create manifest
     manifest := &FileManifest{
         ID:       generateFileID(),
@@ -114,17 +114,17 @@ func (s *Storage) StoreFile(ctx context.Context, reader io.Reader, metadata File
         Chunks:   stored,
         Created:  time.Now(),
     }
-    
+
     // 5. Store manifest
     err := s.metadata.StoreManifest(manifest)
     if err != nil {
         s.rollback(stored)
         return nil, err
     }
-    
+
     // 6. Publish to DHT
     s.publishToDHT(manifest)
-    
+
     return &manifest.ID, nil
 }
 ```
@@ -138,10 +138,10 @@ type Network struct {
     host      host.Host
     dht       *dht.IpfsDHT
     pubsub    *pubsub.PubSub
-    
+
     peers     *PeerManager
     nat       *NATManager
-    
+
     handlers  map[Protocol]Handler
     state     NetworkState
 }
@@ -152,7 +152,7 @@ type PeerManager struct {
     peers       map[peer.ID]*PeerInfo
     maxPeers    int
     minPeers    int
-    
+
     connecting  map[peer.ID]chan error
     scores      *PeerScorer
 }
@@ -162,12 +162,12 @@ type PeerInfo struct {
     Addresses   []multiaddr.Multiaddr
     Connected   time.Time
     LastSeen    time.Time
-    
+
     // Performance tracking
     Latency     time.Duration
     Bandwidth   BandwidthStats
     Reliability float64  // 0.0 to 1.0
-    
+
     // Economic info
     Tier        UserTier
     Balance     int64
@@ -177,27 +177,27 @@ type PeerInfo struct {
 func (pm *PeerManager) SelectPeersForStorage(count int, exclude []peer.ID) []peer.ID {
     pm.mu.RLock()
     defer pm.mu.RUnlock()
-    
+
     // Score peers by multiple factors
     candidates := make([]*ScoredPeer, 0)
     for id, info := range pm.peers {
         if contains(exclude, id) {
             continue
         }
-        
+
         score := pm.scores.Score(info)
         candidates = append(candidates, &ScoredPeer{id, score})
     }
-    
+
     // Sort by score
     sort.Sort(ByScore(candidates))
-    
+
     // Select top N
     selected := make([]peer.ID, 0, count)
     for i := 0; i < count && i < len(candidates); i++ {
         selected = append(selected, candidates[i].ID)
     }
-    
+
     return selected
 }
 ```
@@ -213,11 +213,11 @@ type APIServer struct {
     network  network.Interface
     auth     *Authenticator
     limiter  *RateLimiter
-    
+
     // WebSocket
     hub      *Hub
     upgrader websocket.Upgrader
-    
+
     // Metrics
     metrics  *APIMetrics
 }
@@ -241,33 +241,33 @@ type RequestContext struct {
 func (s *APIServer) handleFileUpload(c *fiber.Ctx) error {
     ctx := c.Context()
     rc := getRequestContext(c)
-    
+
     // 1. Validate request
     var req UploadRequest
     if err := c.BodyParser(&req); err != nil {
         return s.error(c, InvalidRequest, "Invalid request body", err)
     }
-    
+
     // 2. Check rate limits
     if limited := s.limiter.Check(rc.UserID, "upload"); limited {
         return s.error(c, RateLimited, "Rate limit exceeded", nil)
     }
-    
+
     // 3. Check quotas
     quota, err := s.checkQuota(rc.UserID, req.Size)
     if err != nil {
         return s.error(c, QuotaExceeded, "Storage quota exceeded", err)
     }
-    
+
     // 4. Process upload
     fileID, err := s.storage.StoreFile(ctx, req.Data, req.Metadata)
     if err != nil {
         return s.error(c, StorageError, "Failed to store file", err)
     }
-    
+
     // 5. Update metrics
     s.metrics.RecordUpload(rc.UserID, req.Size, time.Since(rc.StartTime))
-    
+
     // 6. Return response
     return c.JSON(UploadResponse{
         FileID:    fileID,
@@ -284,17 +284,17 @@ package resource
 
 type ResourceManager struct {
     mu        sync.RWMutex
-    
+
     // Resource tracking
     cpu       *CPUManager
     memory    *MemoryManager
     storage   *StorageManager
     bandwidth *BandwidthManager
-    
+
     // Job scheduling
     queues    map[UserTier]*PriorityQueue
     scheduler *Scheduler
-    
+
     // Policies
     policies  *ResourcePolicies
 }
@@ -304,19 +304,19 @@ type Job struct {
     UserID    string
     Tier      UserTier
     Type      JobType
-    
+
     // Resource requirements
     CPU       float64  // cores
     Memory    int64    // bytes
     Bandwidth int64    // bytes/sec
     Duration  time.Duration
-    
+
     // Scheduling
     Priority  int
     Submitted time.Time
     Started   *time.Time
     Completed *time.Time
-    
+
     // Execution
     Handler   JobHandler
     Context   context.Context
@@ -327,31 +327,31 @@ type Job struct {
 func (rm *ResourceManager) ScheduleJob(job *Job) error {
     rm.mu.Lock()
     defer rm.mu.Unlock()
-    
+
     // 1. Validate resources available
     if !rm.canAllocate(job) {
         return ErrInsufficientResources
     }
-    
+
     // 2. Add to appropriate queue
     queue := rm.queues[job.Tier]
     queue.Push(job)
-    
+
     // 3. Try immediate execution
     if rm.tryExecute(job) {
         return nil
     }
-    
+
     // 4. Will execute when resources available
     go rm.scheduler.Schedule(job)
-    
+
     return nil
 }
 
 func (rm *ResourceManager) tryExecute(job *Job) bool {
     // Check current load
     load := rm.currentLoad()
-    
+
     // Tier-based execution thresholds
     var threshold float64
     switch job.Tier {
@@ -364,17 +364,17 @@ func (rm *ResourceManager) tryExecute(job *Job) bool {
     case TierFree:
         threshold = 0.50
     }
-    
+
     if load >= threshold {
         return false
     }
-    
+
     // Try to allocate resources
     alloc, err := rm.allocate(job)
     if err != nil {
         return false
     }
-    
+
     // Execute job
     go rm.executeJob(job, alloc)
     return true
@@ -399,11 +399,11 @@ type Events struct {
     FileStored      FileStoredEvent
     ChunkMissing    ChunkMissingEvent
     StorageFull     StorageFullEvent
-    
-    // Network events  
+
+    // Network events
     PeerConnected   PeerConnectedEvent
     PeerDisconnect  PeerDisconnectEvent
-    
+
     // Economic events
     PaymentReceived PaymentEvent
     BalanceUpdated  BalanceEvent
@@ -445,14 +445,14 @@ const (
 // Explicit state transitions
 func (s *Storage) setupStateMachine() {
     s.fsm = NewStateMachine(StorageInitializing)
-    
+
     // Define valid transitions
     s.fsm.AddTransition(StorageInitializing, EventInitComplete, StorageReady)
     s.fsm.AddTransition(StorageReady, EventChunkLost, StorageDegraded)
     s.fsm.AddTransition(StorageDegraded, EventRebuildStart, StorageRebuilding)
     s.fsm.AddTransition(StorageRebuilding, EventRebuildComplete, StorageReady)
     s.fsm.AddTransition(StorageReady, EventStorageFull, StorageFull)
-    
+
     // State handlers
     s.fsm.OnEnter(StorageDegraded, s.startRecovery)
     s.fsm.OnEnter(StorageFull, s.rejectNewFiles)
@@ -479,9 +479,9 @@ func (cb *CircuitBreaker) Call(fn func() error) error {
             return ErrCircuitOpen
         }
     }
-    
+
     err := fn()
-    
+
     if err != nil {
         cb.recordFailure()
         if cb.failures >= cb.threshold {
@@ -489,7 +489,7 @@ func (cb *CircuitBreaker) Call(fn func() error) error {
         }
         return err
     }
-    
+
     if cb.state == HalfOpen {
         cb.state = Closed
     }
@@ -509,15 +509,15 @@ type File struct {
     Name        string
     Size        int64
     ContentType string
-    
+
     // Ownership
     Owner       NodeID
     Permissions Permissions
-    
+
     // Storage
     Chunks      []ChunkRef
     Erasure     ErasureInfo
-    
+
     // Metadata
     Created     time.Time
     Modified    time.Time
@@ -530,11 +530,11 @@ type Chunk struct {
     FileID  FileID   // Parent file
     Index   int      // Position in file
     Size    int64
-    
+
     // Erasure coding
     DataShard   int  // Which data shard (0-9)
     ParityShard int  // Which parity shard (0-3)
-    
+
     // Storage location
     Nodes   []NodeID // Where it's stored
     Primary NodeID   // Primary replica
@@ -572,9 +572,9 @@ type MetricsBuffer struct {
 // Efficient peer scoring
 type PeerScore struct {
     Latency     ewma.MovingAverage
-    Bandwidth   ewma.MovingAverage  
+    Bandwidth   ewma.MovingAverage
     Reliability ewma.MovingAverage
-    
+
     LastUpdated time.Time
 }
 
@@ -583,7 +583,7 @@ type ChunkStore struct {
     file   *os.File
     mmap   mmap.MMap
     index  *ChunkIndex
-    
+
     // Free space management
     freeList *FreeList
 }
@@ -607,12 +607,12 @@ const (
     ErrPeerUnreachable
     ErrTimeout
     ErrBandwidthExceeded
-    
+
     // Storage errors (some retryable)
     ErrChunkNotFound
     ErrStorageFull
     ErrCorruptData
-    
+
     // Fatal errors (not retryable)
     ErrInvalidConfiguration
     ErrCryptoFailure
@@ -622,21 +622,21 @@ const (
 func withRetry(fn func() error, opts RetryOptions) error {
     var err error
     backoff := opts.InitialDelay
-    
+
     for i := 0; i < opts.MaxAttempts; i++ {
         err = fn()
         if err == nil {
             return nil
         }
-        
+
         if !isRetryable(err) {
             return err
         }
-        
+
         time.Sleep(backoff)
         backoff = time.Duration(float64(backoff) * opts.Multiplier)
     }
-    
+
     return fmt.Errorf("failed after %d attempts: %w", opts.MaxAttempts, err)
 }
 ```
@@ -665,14 +665,14 @@ func TestChunkStorage(t *testing.T) {
         },
         // ... 20 more cases
     }
-    
+
     for _, tt := range tests {
         t.Run(tt.name, func(t *testing.T) {
             store := NewTestStore()
             if tt.setup != nil {
                 tt.setup(store)
             }
-            
+
             err := store.Store(tt.chunk)
             assert.Equal(t, tt.wantErr, err)
         })
@@ -692,15 +692,15 @@ type TestNetwork struct {
 func TestDataRecovery(t *testing.T) {
     // Create network with 20 nodes
     net := NewTestNetwork(20)
-    
+
     // Store file
     file := generateFile(10*MB)
     id, err := net.nodes[0].Store(file)
     require.NoError(t, err)
-    
+
     // Kill 4 nodes (maximum we can lose)
     net.KillNodes(4)
-    
+
     // Should still retrieve
     retrieved, err := net.nodes[5].Retrieve(id)
     require.NoError(t, err)
@@ -715,19 +715,19 @@ func TestDataRecovery(t *testing.T) {
 node:
   identity:
     path: ~/.blackhole/identity
-  
+
   network:
     listen: /ip4/0.0.0.0/tcp/4001
     bootstrap:
       - /dnsaddr/bootstrap.blackhole.network
     max_peers: 50
     min_peers: 10
-  
+
   storage:
     path: ~/.blackhole/storage
     max_size: 500GB
     cache_size: 1GB
-    
+
   resources:
     cpu:
       max_percent: 80
@@ -738,7 +738,7 @@ node:
     bandwidth:
       up_mbps: 100
       down_mbps: 500
-      
+
   api:
     listen: localhost:8080
     max_request_size: 100MB
@@ -758,16 +758,16 @@ type Metrics struct {
     StorageUsage  prometheus.Gauge
     BandwidthIn   prometheus.Counter
     BandwidthOut  prometheus.Counter
-    
+
     // Operations
     FilesStored   prometheus.Counter
     FilesRetrieved prometheus.Counter
     ChunksServed  prometheus.Counter
-    
+
     // Network health
     PeerCount     prometheus.Gauge
     PeerLatency   prometheus.Histogram
-    
+
     // Economic
     EarningsTotal prometheus.Counter
     JobsCompleted prometheus.Counter
@@ -824,10 +824,10 @@ Example: User uploads a video for transcoding
 func (api *APIServer) HandleVideoUpload(c *fiber.Ctx) error {
     // Validate and get file
     video := c.FormFile("video")
-    
+
     // 2. Storage stores the file
     storageRef, err := api.storage.StoreFile(ctx, video.Reader, metadata)
-    
+
     // 3. Storage triggers compute job through coordinator
     coordinator := api.resourceCoordinator
     job := ComputeJob{
@@ -836,9 +836,9 @@ func (api *APIServer) HandleVideoUpload(c *fiber.Ctx) error {
         Output:   OutputSpec{Format: "mp4", Quality: "1080p"},
         Priority: UserTier(c.Locals("tier")),
     }
-    
+
     jobHandle, err := coordinator.ScheduleCompute(ctx, storageRef, job)
-    
+
     // 4. ResourceCoordinator orchestrates:
     //    - Finds compute node with capacity
     //    - Reserves memory for transcoding
@@ -851,23 +851,23 @@ func (compute *ComputeNode) ProcessJob(job ComputeJob) error {
     // Reserve memory first
     memHandle, err := compute.coordinator.ReserveMemoryForJob(ctx, job.ID, job.EstimatedMemory)
     defer memHandle.Release()
-    
+
     // Stream data from storage
     bridge := compute.storageBridge
     dataHandle, err := bridge.PrepareDataForCompute(ctx, job.Input.Chunks)
     defer bridge.ReleaseComputeData(ctx, dataHandle)
-    
+
     // Allocate bandwidth for streaming
     bwHandle, err := compute.coordinator.AllocateBandwidthForTransfer(ctx, job.Input.Size, job.Priority)
     defer bwHandle.Release()
-    
+
     // Process with memory and bandwidth limits
     reader := bridge.StreamToCompute(ctx, dataHandle, bwHandle.LimitedWriter())
     result := compute.transcode(reader, job.Output)
-    
+
     // Store results back
     resultRef, err := compute.coordinator.StoreResult(ctx, job.ID, result)
-    
+
     // Notify completion
     compute.eventBus.Publish(JobComplete{ID: job.ID, Result: resultRef})
 }
@@ -881,7 +881,7 @@ func (memory *MemoryManager) HandlePressure() {
     })
 }
 
-// 7. Bandwidth congestion handling  
+// 7. Bandwidth congestion handling
 func (bandwidth *BandwidthManager) HandleCongestion() {
     // Reduce transfer rates for free tier
     for _, transfer := range bandwidth.activeTransfers {
@@ -908,13 +908,13 @@ This ensures resources work together efficiently while respecting priorities and
 type Security struct {
     // Encryption at rest
     cipher cipher.AEAD
-    
+
     // Rate limiting
     limiter *rate.Limiter
-    
+
     // Input validation
     validator *Validator
-    
+
     // Audit logging
     audit *AuditLogger
 }
@@ -924,11 +924,11 @@ func (s *Security) ValidateChunk(data []byte) error {
     if len(data) > MaxChunkSize {
         return ErrChunkTooLarge
     }
-    
+
     if !isValidContent(data) {
         return ErrInvalidContent
     }
-    
+
     return nil
 }
 ```

@@ -39,7 +39,7 @@ DELETE  # Remove resource (idempotent)
 204 No Content         # Successful DELETE
 206 Partial Content    # Range request
 
-// Client Errors  
+// Client Errors
 400 Bad Request        # Invalid request format
 401 Unauthorized       # Missing/invalid authentication
 403 Forbidden          # Authenticated but not authorized
@@ -120,7 +120,7 @@ Link: <...?page=1>; rel="first",
 # Filtering
 GET /api/v1/files?type=video&size_gt=1000000&owner=user123
 
-# Sorting  
+# Sorting
 GET /api/v1/files?sort=created_at:desc,size:asc
 
 # Field selection
@@ -187,18 +187,18 @@ enum MessageType {
   WELCOME = "welcome",
   PING = "ping",
   PONG = "pong",
-  
+
   // Subscription
   SUBSCRIBE = "subscribe",
   UNSUBSCRIBE = "unsubscribe",
   SUBSCRIBED = "subscribed",
   UNSUBSCRIBED = "unsubscribed",
-  
+
   // Data
   MESSAGE = "message",
   REQUEST = "request",
   RESPONSE = "response",
-  
+
   // Errors
   ERROR = "error"
 }
@@ -489,15 +489,15 @@ func TestAPI_GetFile(t *testing.T) {
     // Setup
     app := setupTestApp()
     file := createTestFile()
-    
+
     // Test successful request
     req := httptest.NewRequest("GET", "/api/v1/files/"+file.ID, nil)
     req.Header.Set("Authorization", "Bearer "+validToken)
-    
+
     resp, err := app.Test(req)
     require.NoError(t, err)
     assert.Equal(t, 200, resp.StatusCode)
-    
+
     // Test error cases
     testCases := []struct {
         name       string
@@ -509,7 +509,7 @@ func TestAPI_GetFile(t *testing.T) {
         {"unauthorized", file.ID, "", 401},
         {"forbidden", file.ID, otherUserToken, 403},
     }
-    
+
     for _, tc := range testCases {
         t.Run(tc.name, func(t *testing.T) {
             req := httptest.NewRequest("GET", "/api/v1/files/"+tc.fileID, nil)
@@ -541,7 +541,7 @@ c.Set("X-Deprecated", "field 'size' is deprecated, use 'size_bytes'")
 
 // 3. Log deprecation usage
 if hasDeprecatedField(req) {
-    log.Warn("deprecated field used", 
+    log.Warn("deprecated field used",
         "field", "size",
         "user", userID,
         "endpoint", "/api/v1/files",

@@ -89,7 +89,7 @@ Brief description of what this PR does.
 ### Review Comments
 ```go
 // ✅ GOOD: Specific and actionable
-// "This could cause a race condition if two goroutines call this simultaneously. 
+// "This could cause a race condition if two goroutines call this simultaneously.
 // Consider adding a mutex or using sync.Once"
 
 // ❌ BAD: Vague or personal preference
@@ -143,17 +143,17 @@ func TestSomething(t *testing.T) {
 func BenchmarkStorageWrite(b *testing.B) {
     storage := setupTestStorage(b)
     data := generateTestData(1 * MB)
-    
+
     b.ResetTimer()
     b.ReportAllocs()
-    
+
     for i := 0; i < b.N; i++ {
         _, err := storage.Write(data)
         if err != nil {
             b.Fatal(err)
         }
     }
-    
+
     b.SetBytes(int64(len(data)))
 }
 ```
@@ -190,11 +190,11 @@ func TestPerformance(t *testing.T) {
     if testing.Short() {
         t.Skip("skipping performance test")
     }
-    
+
     f, _ := os.Create("cpu.prof")
     pprof.StartCPUProfile(f)
     defer pprof.StopCPUProfile()
-    
+
     // Run performance-critical code
 }
 
@@ -203,12 +203,12 @@ func TestMemoryUsage(t *testing.T) {
     var m runtime.MemStats
     runtime.ReadMemStats(&m)
     before := m.Alloc
-    
+
     // Run code
-    
+
     runtime.ReadMemStats(&m)
     after := m.Alloc
-    
+
     if after-before > 100*MB {
         t.Errorf("Used too much memory: %d bytes", after-before)
     }
@@ -358,7 +358,7 @@ var (
         },
         []string{"status", "tier"},
     )
-    
+
     uploadDuration = promauto.NewHistogramVec(
         prometheus.HistogramOpts{
             Name: "blackhole_upload_duration_seconds",
@@ -386,15 +386,15 @@ func (s *Storage) StoreFile(ctx context.Context, data []byte) error {
         ),
     )
     defer span.End()
-    
+
     // Implementation
-    
+
     if err != nil {
         span.RecordError(err)
         span.SetStatus(codes.Error, err.Error())
         return err
     }
-    
+
     return nil
 }
 ```

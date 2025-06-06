@@ -1,0 +1,150 @@
+version: '3.8'
+
+services:
+  blackhole:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: blackhole:latest
+    container_name: blackhole
+    restart: unless-stopped
+    ports:
+      - "8080:8080"  # Web dashboard
+      - "4001:4001"  # P2P swarm
+      - "5001:5001"  # IPFS API
+    volumes:
+      - blackhole-data:/data
+      - blackhole-config:/config
+      - ./config/blackhole.yaml:/config/blackhole.yaml:ro
+    environment:
+      - NODE_ENV=production
+      - LOG_LEVEL=info
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - blackhole-network
+
+  # Development profile services
+  blackhole-dev:
+    profiles: ["dev"]
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: blackhole:dev
+    container_name: blackhole-dev
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "4001:4001"
+      - "5001:5001"
+      - "2345:2345"  # Delve debugger
+    volumes:
+      - .:/app
+      - blackhole-data:/data
+      - blackhole-config:/config
+    environment:
+      - NODE_ENV=development
+      - LOG_LEVEL=debug
+      - DEBUG=true
+    command: ["dlv", "debug", "--headless", "--listen=:2345", "--api-version=2", "--accept-multiclient", "./cmd/blackhole"]
+    networks:
+      - blackhole-network
+
+  # Monitoring profile services
+  prometheus:
+    profiles: ["monitoring"]
+    image: prom/prometheus:latest
+    container_name: blackhole-prometheus
+    restart: unless-stopped
+    volumes:
+      - ./deployments/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    ports:
+      - "9091:9090"
+    networks:
+      - blackhole-network
+
+  grafana:
+    profiles: ["monitoring"]
+    image: grafana/grafana:latest
+    container_name: blackhole-grafana
+    restart: unless-stopped
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./deployments/monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./deployments/monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./deployments/monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards/json:ro
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+    ports:
+      - "3000:3000"
+    networks:
+      - blackhole-network
+    depends_on:
+      - prometheus
+
+  node-exporter:
+    profiles: ["monitoring"]
+    image: prom/node-exporter:latest
+    container_name: blackhole-node-exporter
+    restart: unless-stopped
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    ports:
+      - "9100:9100"
+    networks:
+      - blackhole-network
+
+  cadvisor:
+    profiles: ["monitoring"]
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: blackhole-cadvisor
+    restart: unless-stopped
+    privileged: true
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /cgroup:/cgroup:ro
+    ports:
+      - "8081:8080"
+    networks:
+      - blackhole-network
+
+volumes:
+  blackhole-data:
+    driver: local
+  blackhole-config:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+
+networks:
+  blackhole-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

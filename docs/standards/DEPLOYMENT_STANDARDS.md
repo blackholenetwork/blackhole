@@ -21,27 +21,27 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         go: ['1.22']
-    
+
     steps:
       - uses: actions/checkout@v3
-      
+
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
           go-version: ${{ matrix.go }}
-      
+
       - name: Cache Go modules
         uses: actions/cache@v3
         with:
           path: ~/go/pkg/mod
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-      
+
       - name: Install dependencies
         run: go mod download
-      
+
       - name: Run tests
         run: go test -v -race -coverprofile=coverage.out ./...
-      
+
       - name: Check coverage
         run: |
           go tool cover -func=coverage.out
@@ -50,12 +50,12 @@ jobs:
             echo "Coverage is below 80%"
             exit 1
           fi
-      
+
       - name: Run linters
         uses: golangci/golangci-lint-action@v3
         with:
           version: latest
-      
+
       - name: Build binary
         run: |
           go build -ldflags="-s -w -X main.Version=${{ github.sha }}" \
@@ -185,7 +185,7 @@ services:
   blackhole:
     image: blackhole/node:latest
     container_name: blackhole-node
-    
+
     # Security options
     security_opt:
       - no-new-privileges:true
@@ -194,7 +194,7 @@ services:
     cap_add:
       - NET_BIND_SERVICE
     read_only: true
-    
+
     # Resource limits
     deploy:
       resources:
@@ -204,7 +204,7 @@ services:
         reservations:
           cpus: '1'
           memory: 2G
-    
+
     # Volumes
     volumes:
       - type: volume
@@ -212,21 +212,21 @@ services:
         target: /data
       - type: tmpfs
         target: /tmp
-    
+
     # Network
     ports:
       - "8080:8080"
       - "4001:4001"
     networks:
       - blackhole-net
-    
+
     # Environment
     environment:
       - NODE_ENV=production
       - LOG_LEVEL=info
     env_file:
       - .env.production
-    
+
     # Health and restart
     healthcheck:
       test: ["CMD", "blackhole", "health"]
@@ -285,10 +285,10 @@ spec:
         fsGroup: 65534
         seccompProfile:
           type: RuntimeDefault
-      
+
       # Service account
       serviceAccountName: blackhole-node
-      
+
       # Init container for setup
       initContainers:
       - name: init-config
@@ -299,13 +299,13 @@ spec:
           mountPath: /config
         - name: data
           mountPath: /data
-      
+
       # Main container
       containers:
       - name: blackhole
         image: blackhole/node:v1.0.0
         imagePullPolicy: IfNotPresent
-        
+
         # Security
         securityContext:
           allowPrivilegeEscalation: false
@@ -313,7 +313,7 @@ spec:
           capabilities:
             drop:
             - ALL
-        
+
         # Ports
         ports:
         - name: http
@@ -325,7 +325,7 @@ spec:
         - name: metrics
           containerPort: 9090
           protocol: TCP
-        
+
         # Environment
         env:
         - name: NODE_NAME
@@ -345,7 +345,7 @@ spec:
             name: blackhole-config
         - secretRef:
             name: blackhole-secrets
-        
+
         # Resources
         resources:
           requests:
@@ -356,7 +356,7 @@ spec:
             cpu: 2
             memory: 4Gi
             ephemeral-storage: 20Gi
-        
+
         # Probes
         startupProbe:
           httpGet:
@@ -365,7 +365,7 @@ spec:
           initialDelaySeconds: 10
           periodSeconds: 10
           failureThreshold: 30
-        
+
         livenessProbe:
           httpGet:
             path: /health/live
@@ -374,7 +374,7 @@ spec:
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 3
-        
+
         readinessProbe:
           httpGet:
             path: /health/ready
@@ -383,7 +383,7 @@ spec:
           periodSeconds: 5
           timeoutSeconds: 3
           failureThreshold: 3
-        
+
         # Volumes
         volumeMounts:
         - name: data
@@ -392,7 +392,7 @@ spec:
           mountPath: /tmp
         - name: cache
           mountPath: /cache
-      
+
       # Volumes
       volumes:
       - name: config
@@ -458,18 +458,18 @@ spec:
 node:
   id: "${NODE_ID}"  # From environment
   region: "us-east-1"
-  
+
 api:
   host: "0.0.0.0"
   port: 8080
   read_timeout: 30s
   write_timeout: 30s
-  
+
 storage:
   path: "/data/storage"
   max_size: "500GB"
   cache_size: "10GB"
-  
+
 network:
   listen_addresses:
     - "/ip4/0.0.0.0/tcp/4001"
@@ -477,17 +477,17 @@ network:
   bootstrap_peers:
     - "/dnsaddr/bootstrap1.blackhole.network/p2p/QmNodeID1"
     - "/dnsaddr/bootstrap2.blackhole.network/p2p/QmNodeID2"
-  
+
 monitoring:
   metrics_port: 9090
   log_level: "${LOG_LEVEL:-info}"
   log_format: "json"
-  
+
 security:
   tls_enabled: true
   tls_cert: "/certs/tls.crt"
   tls_key: "/certs/tls.key"
-  
+
 resources:
   cpu_limit: "80%"
   memory_limit: "4GB"
@@ -620,7 +620,7 @@ var (
         },
         []string{"version", "commit", "region"},
     )
-    
+
     // Resource metrics
     ResourceUsage = prometheus.NewGaugeVec(
         prometheus.GaugeOpts{
@@ -629,7 +629,7 @@ var (
         },
         []string{"resource", "unit"},
     )
-    
+
     // P2P metrics
     PeerCount = prometheus.NewGauge(
         prometheus.GaugeOpts{
@@ -765,19 +765,19 @@ kubectl scale deployment blackhole-node --replicas=3
 func EmergencyShutdown() {
     // 1. Stop accepting traffic
     server.GracefulStop()
-    
+
     // 2. Drain in-flight requests
     waitForDrain(30 * time.Second)
-    
+
     // 3. Flush data to disk
     storage.Flush()
-    
+
     // 4. Notify peers
     network.BroadcastShutdown()
-    
+
     // 5. Final cleanup
     cleanup()
-    
+
     os.Exit(0)
 }
 ```

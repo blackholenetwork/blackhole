@@ -44,13 +44,13 @@ func GetUser(id string) (*User, error) {
     if user, found := userCache.Get(id); found {
         return user, nil
     }
-    
+
     // Fetch from database
     user, err := db.GetUser(id)
     if err != nil {
         return nil, err
     }
-    
+
     // Cache for next time
     userCache.Set(id, user)
     return user, nil
@@ -64,15 +64,15 @@ func GetUser(id string) (*User, error) {
 func main() {
     ctx, cancel := context.WithCancel(context.Background())
     defer cancel()
-    
+
     // Start services
     server := startServer(ctx)
-    
+
     // Wait for interrupt
     sigCh := make(chan os.Signal, 1)
     signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
     <-sigCh
-    
+
     // Graceful shutdown
     log.Println("Shutting down...")
     shutdownCtx, _ := context.WithTimeout(context.Background(), 30*time.Second)
@@ -100,7 +100,7 @@ func (ec *errorCollector) Add(err error) {
 func (ec *errorCollector) Error() error {
     ec.mu.Lock()
     defer ec.mu.Unlock()
-    
+
     if len(ec.errors) == 0 {
         return nil
     }
@@ -125,12 +125,12 @@ func NewRateLimiter(rate int, interval time.Duration) *RateLimiter {
         interval: interval,
         tokens:   make(chan struct{}, rate),
     }
-    
+
     // Fill initial tokens
     for i := 0; i < rate; i++ {
         rl.tokens <- struct{}{}
     }
-    
+
     // Refill tokens
     rl.ticker = time.NewTicker(interval / time.Duration(rate))
     go func() {
@@ -141,7 +141,7 @@ func NewRateLimiter(rate int, interval time.Duration) *RateLimiter {
             }
         }
     }()
-    
+
     return rl
 }
 
@@ -160,7 +160,7 @@ func ProcessInBatches[T any](items []T, batchSize int, fn func([]T) error) error
         if end > len(items) {
             end = len(items)
         }
-        
+
         batch := items[i:end]
         if err := fn(batch); err != nil {
             return fmt.Errorf("batch %d failed: %w", i/batchSize, err)
@@ -185,35 +185,35 @@ type CircuitBreaker struct {
 
 func (cb *CircuitBreaker) Call(fn func() error) error {
     cb.mu.Lock()
-    
+
     // Check if circuit should be half-open
     if cb.state == "open" && time.Since(cb.lastFailTime) > cb.timeout {
         cb.state = "half-open"
     }
-    
+
     if cb.state == "open" {
         cb.mu.Unlock()
         return fmt.Errorf("circuit breaker is open")
     }
-    
+
     cb.mu.Unlock()
-    
+
     // Execute function
     err := fn()
-    
+
     cb.mu.Lock()
     defer cb.mu.Unlock()
-    
+
     if err != nil {
         cb.failures++
         cb.lastFailTime = time.Now()
-        
+
         if cb.failures >= cb.threshold {
             cb.state = "open"
         }
         return err
     }
-    
+
     // Success - reset
     cb.failures = 0
     cb.state = "closed"
@@ -236,13 +236,13 @@ func (le *LeaderElection) Campaign() error {
     if err != nil {
         return err
     }
-    
+
     err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
     if err != nil {
         file.Close()
         return fmt.Errorf("not elected as leader")
     }
-    
+
     le.file = file
     le.isLeader = true
     return nil
@@ -258,14 +258,14 @@ func WithTimeout[T any](timeout time.Duration, fn func() (T, error)) (T, error) 
         value T
         err   error
     }
-    
+
     resultCh := make(chan result, 1)
-    
+
     go func() {
         value, err := fn()
         resultCh <- result{value, err}
     }()
-    
+
     select {
     case res := <-resultCh:
         return res.value, res.err
@@ -284,7 +284,7 @@ data, err := WithTimeout(5*time.Second, func() ([]byte, error) {
 ## Quick Decision Guide
 
 - **Need to retry?** → Use `retry` package
-- **Need concurrency?** → Use `pool` package  
+- **Need concurrency?** → Use `pool` package
 - **Need caching?** → Use `cache` package
 - **Need validation?** → Use `validation` package
 - **Need custom pattern?** → Check this document first

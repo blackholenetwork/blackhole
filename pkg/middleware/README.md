@@ -56,21 +56,21 @@ handler := Chain(
 // In your API setup
 func SetupAPI() *fiber.App {
     app := fiber.New()
-    
+
     // Global middleware
     app.Use(middleware.WithRequestID())
     app.Use(middleware.WithLogging())
     app.Use(middleware.WithMetrics())
-    
+
     // Public routes
     public := app.Group("/api/v1")
     public.Use(middleware.WithRateLimit(100))
-    
+
     // Protected routes
     protected := app.Group("/api/v1")
     protected.Use(middleware.WithAuth())
     protected.Use(middleware.WithRateLimit(1000))
-    
+
     return app
 }
 ```

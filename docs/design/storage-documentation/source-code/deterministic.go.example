@@ -1,0 +1,192 @@
+package storage
+
+import (
+	"crypto/sha256"
+	"encoding/binary"
+	"fmt"
+	"sort"
+)
+
+// DeterministicPlacer handles chunk placement calculations
+type DeterministicPlacer struct {
+	candidateCount int
+	networkSize    int64 // Estimated network size
+}
+
+// NewDeterministicPlacer creates a new deterministic placer
+func NewDeterministicPlacer(candidateCount int) *DeterministicPlacer {
+	return &DeterministicPlacer{
+		candidateCount: candidateCount,
+		networkSize:    1000000, // Default estimate
+	}
+}
+
+// NodeID represents a node identifier in the network
+type NodeID string
+
+// PlacementCandidate represents a potential storage location
+type PlacementCandidate struct {
+	NodeID   NodeID
+	Priority int    // Lower priority = preferred
+	Distance uint64 // XOR distance for consistent hashing
+}
+
+// CalculatePlacement determines candidate nodes for a chunk
+func (dp *DeterministicPlacer) CalculatePlacement(chunkID ChunkCID) []PlacementCandidate {
+	candidates := make([]PlacementCandidate, 0, dp.candidateCount)
+	
+	// Generate candidate nodes using consistent hashing
+	for i := 0; i < dp.candidateCount; i++ {
+		// Create unique seed for this candidate
+		seed := fmt.Sprintf("%s:%d", chunkID, i)
+		nodeID := dp.hashToNodeID(seed)
+		
+		// Calculate XOR distance for consistent hashing
+		distance := dp.calculateDistance(chunkID, nodeID)
+		
+		candidate := PlacementCandidate{
+			NodeID:   nodeID,
+			Priority: i,
+			Distance: distance,
+		}
+		
+		candidates = append(candidates, candidate)
+	}
+	
+	// Sort by distance for consistent hashing order
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].Distance < candidates[j].Distance
+	})
+	
+	return candidates
+}
+
+// CalculateNodeChunks determines which chunks a node should store
+func (dp *DeterministicPlacer) CalculateNodeChunks(nodeID NodeID, allChunks []ChunkCID) []ChunkCID {
+	var assignedChunks []ChunkCID
+	
+	for _, chunkID := range allChunks {
+		candidates := dp.CalculatePlacement(chunkID)
+		
+		// Check if this node is in the candidate list
+		for _, candidate := range candidates {
+			if candidate.NodeID == nodeID {
+				assignedChunks = append(assignedChunks, chunkID)
+				break
+			}
+		}
+	}
+	
+	return assignedChunks
+}
+
+// IsResponsibleForChunk checks if a node should store a chunk
+func (dp *DeterministicPlacer) IsResponsibleForChunk(nodeID NodeID, chunkID ChunkCID) bool {
+	candidates := dp.CalculatePlacement(chunkID)
+	
+	for _, candidate := range candidates {
+		if candidate.NodeID == nodeID {
+			return true
+		}
+	}
+	
+	return false
+}
+
+// hashToNodeID converts a seed string to a node ID
+func (dp *DeterministicPlacer) hashToNodeID(seed string) NodeID {
+	hash := sha256.Sum256([]byte(seed))
+	
+	// Convert to a number and mod by network size
+	num := binary.BigEndian.Uint64(hash[:8])
+	nodeNum := num % uint64(dp.networkSize)
+	
+	return NodeID(fmt.Sprintf("node-%d", nodeNum))
+}
+
+// calculateDistance calculates XOR distance for consistent hashing
+func (dp *DeterministicPlacer) calculateDistance(chunkID ChunkCID, nodeID NodeID) uint64 {
+	chunkHash := sha256.Sum256([]byte(chunkID))
+	nodeHash := sha256.Sum256([]byte(nodeID))
+	
+	// XOR the first 8 bytes
+	var distance uint64
+	for i := 0; i < 8; i++ {
+		distance = (distance << 8) | uint64(chunkHash[i]^nodeHash[i])
+	}
+	
+	return distance
+}
+
+// UpdateNetworkSize updates the estimated network size
+func (dp *DeterministicPlacer) UpdateNetworkSize(size int64) {
+	if size > 0 {
+		dp.networkSize = size
+	}
+}
+
+// GeographicPlacer extends deterministic placement with geographic awareness
+type GeographicPlacer struct {
+	*DeterministicPlacer
+	regionWeights map[string]float64
+}
+
+// NewGeographicPlacer creates a new geographic-aware placer
+func NewGeographicPlacer(candidateCount int) *GeographicPlacer {
+	return &GeographicPlacer{
+		DeterministicPlacer: NewDeterministicPlacer(candidateCount),
+		regionWeights:       make(map[string]float64),
+	}
+}
+
+// UpdateRegionWeight updates the weight for a geographic region
+func (gp *GeographicPlacer) UpdateRegionWeight(region string, weight float64) {
+	gp.regionWeights[region] = weight
+}
+
+// CalculatePlacementWithGeography returns candidates with geographic preferences
+func (gp *GeographicPlacer) CalculatePlacementWithGeography(
+	chunkID ChunkCID, 
+	nodeRegions map[NodeID]string,
+) []PlacementCandidate {
+	// Get base candidates
+	candidates := gp.CalculatePlacement(chunkID)
+	
+	// Adjust priorities based on region weights
+	for i := range candidates {
+		if region, exists := nodeRegions[candidates[i].NodeID]; exists {
+			if weight, hasWeight := gp.regionWeights[region]; hasWeight && weight > 1.0 {
+				// Boost priority for high-demand regions
+				candidates[i].Priority = int(float64(candidates[i].Priority) / weight)
+			}
+		}
+	}
+	
+	// Re-sort by adjusted priority
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].Priority != candidates[j].Priority {
+			return candidates[i].Priority < candidates[j].Priority
+		}
+		return candidates[i].Distance < candidates[j].Distance
+	})
+	
+	return candidates
+}
+
+// PlacementStrategy defines how chunks should be distributed
+type PlacementStrategy struct {
+	MinReplicas      int     // Minimum number of replicas
+	TargetReplicas   int     // Target number of replicas
+	GeographicSpread float64 // 0-1, how much to spread geographically
+	LoadBalance      float64 // 0-1, how much to consider node load
+}
+
+// DefaultPlacementStrategy returns the default placement strategy
+func DefaultPlacementStrategy() PlacementStrategy {
+	return PlacementStrategy{
+		MinReplicas:      1,
+		TargetReplicas:   3,
+		GeographicSpread: 0.7,
+		LoadBalance:      0.8,
+	}
+}

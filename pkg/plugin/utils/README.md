@@ -86,10 +86,10 @@ func (p *MyPlugin) Init(ctx context.Context, config plugin.Config) error {
     if err := utils.LoadConfig("myplugin", config, p.config); err != nil {
         return err
     }
-    
+
     // Register metrics
     p.metrics.RegisterCounter("operations_total", nil)
-    
+
     return p.lifecycle.TransitionTo(utils.StateInitialized)
 }
 ```

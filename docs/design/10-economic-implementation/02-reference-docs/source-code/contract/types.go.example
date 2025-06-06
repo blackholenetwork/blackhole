@@ -1,0 +1,307 @@
+package contract
+
+import (
+	"time"
+)
+
+// SubscriptionTier represents different subscription tiers
+type SubscriptionTier string
+
+const (
+	TierFree     SubscriptionTier = "free"
+	TierNormal   SubscriptionTier = "normal"
+	TierAdvance  SubscriptionTier = "advance"
+	TierUltimate SubscriptionTier = "ultimate"
+	TierCustom   SubscriptionTier = "custom"
+)
+
+// SubscriptionStatus represents the status of a subscription
+type SubscriptionStatus string
+
+const (
+	SubscriptionActive    SubscriptionStatus = "active"
+	SubscriptionPending   SubscriptionStatus = "pending"
+	SubscriptionExpired   SubscriptionStatus = "expired"
+	SubscriptionCancelled SubscriptionStatus = "cancelled"
+	SubscriptionSuspended SubscriptionStatus = "suspended"
+	SubscriptionTrial     SubscriptionStatus = "trial"
+)
+
+// PaymentStatus represents the status of a payment
+type PaymentStatus string
+
+const (
+	PaymentPending   PaymentStatus = "pending"
+	PaymentCompleted PaymentStatus = "completed"
+	PaymentFailed    PaymentStatus = "failed"
+	PaymentRefunded  PaymentStatus = "refunded"
+	PaymentCancelled PaymentStatus = "cancelled"
+)
+
+// Subscription represents a user's subscription contract
+type Subscription struct {
+	ID                    string             `json:"id" db:"id"`
+	UserID                string             `json:"user_id" db:"user_id"`
+	UserDID               string             `json:"user_did" db:"user_did"`
+	
+	// Subscription details
+	Tier                  SubscriptionTier   `json:"tier" db:"tier"`
+	Status                SubscriptionStatus `json:"status" db:"status"`
+	MonthlyAmount         float64            `json:"monthly_amount" db:"monthly_amount"`
+	Currency              string             `json:"currency" db:"currency"`
+	
+	// Billing cycle
+	BillingCycle          time.Duration      `json:"billing_cycle" db:"billing_cycle"`
+	StartDate             time.Time          `json:"start_date" db:"start_date"`
+	EndDate               time.Time          `json:"end_date" db:"end_date"`
+	NextBillingDate       time.Time          `json:"next_billing_date" db:"next_billing_date"`
+	
+	// Trial information
+	IsTrialPeriod         bool               `json:"is_trial_period" db:"is_trial_period"`
+	TrialEndDate          *time.Time         `json:"trial_end_date,omitempty" db:"trial_end_date"`
+	
+	// Payment information
+	PaymentMethodID       string             `json:"payment_method_id" db:"payment_method_id"`
+	LastPaymentDate       *time.Time         `json:"last_payment_date,omitempty" db:"last_payment_date"`
+	LastPaymentAmount     float64            `json:"last_payment_amount" db:"last_payment_amount"`
+	
+	// Usage tracking
+	ResourceLimits        ResourceLimits     `json:"resource_limits"`
+	APIRateLimits         APIRateLimits      `json:"api_rate_limits"`
+	Features              []string           `json:"features"`
+	
+	// Metadata
+	Metadata              map[string]string  `json:"metadata"`
+	
+	// Timestamps
+	CreatedAt             time.Time          `json:"created_at" db:"created_at"`
+	UpdatedAt             time.Time          `json:"updated_at" db:"updated_at"`
+	
+	// Cancellation details
+	CancellationReason    string             `json:"cancellation_reason,omitempty" db:"cancellation_reason"`
+	CancelledAt           *time.Time         `json:"cancelled_at,omitempty" db:"cancelled_at"`
+}
+
+// Payment represents a payment transaction
+type Payment struct {
+	ID                    string            `json:"id" db:"id"`
+	SubscriptionID        string            `json:"subscription_id" db:"subscription_id"`
+	UserID                string            `json:"user_id" db:"user_id"`
+	
+	// Payment details
+	Amount                float64           `json:"amount" db:"amount"`
+	Currency              string            `json:"currency" db:"currency"`
+	Status                PaymentStatus     `json:"status" db:"status"`
+	
+	// External payment provider details
+	ExternalPaymentID     string            `json:"external_payment_id" db:"external_payment_id"`
+	PaymentProvider       string            `json:"payment_provider" db:"payment_provider"`
+	PaymentMethodID       string            `json:"payment_method_id" db:"payment_method_id"`
+	
+	// Billing period
+	BillingPeriodStart    time.Time         `json:"billing_period_start" db:"billing_period_start"`
+	BillingPeriodEnd      time.Time         `json:"billing_period_end" db:"billing_period_end"`
+	
+	// Processing details
+	AttemptCount          int               `json:"attempt_count" db:"attempt_count"`
+	LastAttemptAt         *time.Time        `json:"last_attempt_at,omitempty" db:"last_attempt_at"`
+	NextRetryAt           *time.Time        `json:"next_retry_at,omitempty" db:"next_retry_at"`
+	
+	// Transaction details
+	TransactionID         string            `json:"transaction_id,omitempty" db:"transaction_id"`
+	FailureReason         string            `json:"failure_reason,omitempty" db:"failure_reason"`
+	
+	// Metadata
+	Metadata              map[string]string `json:"metadata"`
+	
+	// Timestamps
+	CreatedAt             time.Time         `json:"created_at" db:"created_at"`
+	UpdatedAt             time.Time         `json:"updated_at" db:"updated_at"`
+	ProcessedAt           *time.Time        `json:"processed_at,omitempty" db:"processed_at"`
+}
+
+// PaymentMethod represents a user's payment method
+type PaymentMethod struct {
+	ID                    string            `json:"id" db:"id"`
+	UserID                string            `json:"user_id" db:"user_id"`
+	
+	// Payment method details
+	Type                  string            `json:"type" db:"type"` // "card", "bank_account", "crypto"
+	Provider              string            `json:"provider" db:"provider"` // "stripe", "paypal", etc.
+	ExternalID            string            `json:"external_id" db:"external_id"`
+	
+	// Card details (if applicable)
+	CardLast4             string            `json:"card_last4,omitempty" db:"card_last4"`
+	CardBrand             string            `json:"card_brand,omitempty" db:"card_brand"`
+	CardExpMonth          int               `json:"card_exp_month,omitempty" db:"card_exp_month"`
+	CardExpYear           int               `json:"card_exp_year,omitempty" db:"card_exp_year"`
+	
+	// Crypto details (if applicable)
+	CryptoAddress         string            `json:"crypto_address,omitempty" db:"crypto_address"`
+	CryptoNetwork         string            `json:"crypto_network,omitempty" db:"crypto_network"`
+	
+	// Status
+	IsDefault             bool              `json:"is_default" db:"is_default"`
+	IsValid               bool              `json:"is_valid" db:"is_valid"`
+	
+	// Metadata
+	Metadata              map[string]string `json:"metadata"`
+	
+	// Timestamps
+	CreatedAt             time.Time         `json:"created_at" db:"created_at"`
+	UpdatedAt             time.Time         `json:"updated_at" db:"updated_at"`
+}
+
+// Invoice represents a billing invoice
+type Invoice struct {
+	ID                    string            `json:"id" db:"id"`
+	SubscriptionID        string            `json:"subscription_id" db:"subscription_id"`
+	UserID                string            `json:"user_id" db:"user_id"`
+	
+	// Invoice details
+	InvoiceNumber         string            `json:"invoice_number" db:"invoice_number"`
+	Amount                float64           `json:"amount" db:"amount"`
+	TaxAmount             float64           `json:"tax_amount" db:"tax_amount"`
+	TotalAmount           float64           `json:"total_amount" db:"total_amount"`
+	Currency              string            `json:"currency" db:"currency"`
+	
+	// Billing period
+	BillingPeriodStart    time.Time         `json:"billing_period_start" db:"billing_period_start"`
+	BillingPeriodEnd      time.Time         `json:"billing_period_end" db:"billing_period_end"`
+	
+	// Status
+	Status                PaymentStatus     `json:"status" db:"status"`
+	DueDate               time.Time         `json:"due_date" db:"due_date"`
+	PaidAt                *time.Time        `json:"paid_at,omitempty" db:"paid_at"`
+	
+	// Line items
+	LineItems             []InvoiceLineItem `json:"line_items"`
+	
+	// External reference
+	ExternalInvoiceID     string            `json:"external_invoice_id,omitempty" db:"external_invoice_id"`
+	
+	// Metadata
+	Metadata              map[string]string `json:"metadata"`
+	
+	// Timestamps
+	CreatedAt             time.Time         `json:"created_at" db:"created_at"`
+	UpdatedAt             time.Time         `json:"updated_at" db:"updated_at"`
+}
+
+// InvoiceLineItem represents a line item on an invoice
+type InvoiceLineItem struct {
+	ID                    string  `json:"id"`
+	Description           string  `json:"description"`
+	Quantity              float64 `json:"quantity"`
+	UnitPrice             float64 `json:"unit_price"`
+	Amount                float64 `json:"amount"`
+	TaxRate               float64 `json:"tax_rate"`
+	TaxAmount             float64 `json:"tax_amount"`
+}
+
+// SubscriptionChange represents a change to a subscription
+type SubscriptionChange struct {
+	ID                    string             `json:"id" db:"id"`
+	SubscriptionID        string             `json:"subscription_id" db:"subscription_id"`
+	UserID                string             `json:"user_id" db:"user_id"`
+	
+	// Change details
+	ChangeType            string             `json:"change_type" db:"change_type"` // "upgrade", "downgrade", "cancel", "reactivate"
+	FromTier              SubscriptionTier   `json:"from_tier" db:"from_tier"`
+	ToTier                SubscriptionTier   `json:"to_tier" db:"to_tier"`
+	FromAmount            float64            `json:"from_amount" db:"from_amount"`
+	ToAmount              float64            `json:"to_amount" db:"to_amount"`
+	
+	// Effective dates
+	RequestedAt           time.Time          `json:"requested_at" db:"requested_at"`
+	EffectiveAt           time.Time          `json:"effective_at" db:"effective_at"`
+	
+	// Proration details
+	ProrationAmount       float64            `json:"proration_amount" db:"proration_amount"`
+	ProrationCreditUsed   float64            `json:"proration_credit_used" db:"proration_credit_used"`
+	
+	// Reason
+	Reason                string             `json:"reason,omitempty" db:"reason"`
+	
+	// Metadata
+	Metadata              map[string]string  `json:"metadata"`
+	
+	// Timestamps
+	CreatedAt             time.Time          `json:"created_at" db:"created_at"`
+	UpdatedAt             time.Time          `json:"updated_at" db:"updated_at"`
+}
+
+// UsageRecord represents resource usage tracking for billing
+type UsageRecord struct {
+	ID                    string    `json:"id" db:"id"`
+	SubscriptionID        string    `json:"subscription_id" db:"subscription_id"`
+	UserID                string    `json:"user_id" db:"user_id"`
+	
+	// Usage details
+	ResourceType          string    `json:"resource_type" db:"resource_type"` // "storage", "bandwidth", "compute"
+	Amount                float64   `json:"amount" db:"amount"`
+	Unit                  string    `json:"unit" db:"unit"`
+	
+	// Billing period
+	BillingPeriodStart    time.Time `json:"billing_period_start" db:"billing_period_start"`
+	BillingPeriodEnd      time.Time `json:"billing_period_end" db:"billing_period_end"`
+	
+	// Metadata
+	Metadata              map[string]string `json:"metadata"`
+	
+	// Timestamps
+	RecordedAt            time.Time `json:"recorded_at" db:"recorded_at"`
+	CreatedAt             time.Time `json:"created_at" db:"created_at"`
+}
+
+// ContractStats represents contract service statistics
+type ContractStats struct {
+	TotalSubscriptions     int                              `json:"total_subscriptions"`
+	ActiveSubscriptions    int                              `json:"active_subscriptions"`
+	TrialSubscriptions     int                              `json:"trial_subscriptions"`
+	CancelledSubscriptions int                              `json:"cancelled_subscriptions"`
+	
+	SubscriptionsByTier    map[SubscriptionTier]int         `json:"subscriptions_by_tier"`
+	RevenueByTier          map[SubscriptionTier]float64     `json:"revenue_by_tier"`
+	
+	TotalRevenue           float64                          `json:"total_revenue"`
+	MonthlyRecurringRevenue float64                         `json:"monthly_recurring_revenue"`
+	AverageRevenuePerUser  float64                          `json:"average_revenue_per_user"`
+	
+	PaymentSuccessRate     float64                          `json:"payment_success_rate"`
+	ChurnRate              float64                          `json:"churn_rate"`
+	
+	LastUpdated            time.Time                        `json:"last_updated"`
+}
+
+// SubscriptionRequest represents a request to create or modify a subscription
+type SubscriptionRequest struct {
+	UserID           string             `json:"user_id"`
+	UserDID          string             `json:"user_did"`
+	Tier             SubscriptionTier   `json:"tier"`
+	CustomAmount     *float64           `json:"custom_amount,omitempty"`
+	PaymentMethodID  string             `json:"payment_method_id"`
+	BillingCycle     *time.Duration     `json:"billing_cycle,omitempty"`
+	StartTrial       bool               `json:"start_trial"`
+	Metadata         map[string]string  `json:"metadata,omitempty"`
+}
+
+// SubscriptionUpdateRequest represents a request to update a subscription
+type SubscriptionUpdateRequest struct {
+	Tier             *SubscriptionTier  `json:"tier,omitempty"`
+	CustomAmount     *float64           `json:"custom_amount,omitempty"`
+	PaymentMethodID  *string            `json:"payment_method_id,omitempty"`
+	Reason           string             `json:"reason,omitempty"`
+	EffectiveAt      *time.Time         `json:"effective_at,omitempty"`
+	Metadata         map[string]string  `json:"metadata,omitempty"`
+}
+
+// PaymentMethodRequest represents a request to add a payment method
+type PaymentMethodRequest struct {
+	UserID           string            `json:"user_id"`
+	Type             string            `json:"type"`
+	Provider         string            `json:"provider"`
+	ExternalID       string            `json:"external_id"`
+	IsDefault        bool              `json:"is_default"`
+	Metadata         map[string]string `json:"metadata,omitempty"`
+}

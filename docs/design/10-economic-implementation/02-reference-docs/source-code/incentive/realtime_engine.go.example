@@ -1,0 +1,298 @@
+package incentive
+
+import (
+	"context"
+	"sync"
+	"time"
+
+	"github.com/rs/zerolog"
+)
+
+// RealTimeEngine handles continuous revenue distribution based on live resource usage
+type RealTimeEngine struct {
+	mu              sync.RWMutex
+	logger          zerolog.Logger
+	config          *Config
+	marketPricing   *MarketPricingModel
+	
+	// Revenue streams
+	revenueCalculator *RevenueStreamCalculator
+	usageAggregator   *LiveUsageAggregator
+	distributor       *StreamingDistributor
+	
+	// Real-time state
+	activeProviders   map[string]*ProviderState
+	currentRevenue    *RevenueSnapshot
+	
+	// Processing control
+	started           bool
+	stopChan          chan struct{}
+	wg                sync.WaitGroup
+	
+	// Distribution intervals
+	distributionInterval time.Duration // How often to distribute (default: 1 second)
+}
+
+// NewRealTimeEngine creates a new real-time distribution engine
+func NewRealTimeEngine(config *Config, logger zerolog.Logger) *RealTimeEngine {
+	engine := &RealTimeEngine{
+		logger:              logger.With().Str("component", "realtime_engine").Logger(),
+		config:              config,
+		marketPricing:       NewMarketPricingModel(),
+		activeProviders:     make(map[string]*ProviderState),
+		stopChan:            make(chan struct{}),
+		distributionInterval: time.Second, // Default: distribute every second
+	}
+	
+	// Initialize components
+	engine.revenueCalculator = NewRevenueStreamCalculator(config, logger)
+	engine.usageAggregator = NewLiveUsageAggregator(config, logger)
+	engine.distributor = NewStreamingDistributor(config, logger)
+	
+	return engine
+}
+
+// Start begins real-time distribution processing
+func (rte *RealTimeEngine) Start(ctx context.Context) error {
+	rte.mu.Lock()
+	defer rte.mu.Unlock()
+	
+	if rte.started {
+		return nil
+	}
+	
+	rte.logger.Info().Msg("Starting real-time distribution engine")
+	
+	// Start component services
+	if err := rte.revenueCalculator.Start(ctx); err != nil {
+		return err
+	}
+	if err := rte.usageAggregator.Start(ctx); err != nil {
+		return err
+	}
+	if err := rte.distributor.Start(ctx); err != nil {
+		return err
+	}
+	
+	// Start main distribution loop
+	rte.wg.Add(1)
+	go rte.distributionLoop(ctx)
+	
+	rte.started = true
+	rte.logger.Info().
+		Dur("interval", rte.distributionInterval).
+		Msg("Real-time distribution engine started")
+	
+	return nil
+}
+
+// Stop halts real-time distribution processing
+func (rte *RealTimeEngine) Stop(ctx context.Context) error {
+	rte.mu.Lock()
+	defer rte.mu.Unlock()
+	
+	if !rte.started {
+		return nil
+	}
+	
+	rte.logger.Info().Msg("Stopping real-time distribution engine")
+	
+	close(rte.stopChan)
+	rte.wg.Wait()
+	
+	// Stop components
+	rte.distributor.Stop(ctx)
+	rte.usageAggregator.Stop(ctx)
+	rte.revenueCalculator.Stop(ctx)
+	
+	rte.started = false
+	rte.logger.Info().Msg("Real-time distribution engine stopped")
+	
+	return nil
+}
+
+// distributionLoop runs the continuous distribution process
+func (rte *RealTimeEngine) distributionLoop(ctx context.Context) {
+	defer rte.wg.Done()
+	
+	ticker := time.NewTicker(rte.distributionInterval)
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-rte.stopChan:
+			return
+		case <-ticker.C:
+			rte.processDistribution()
+		}
+	}
+}
+
+// processDistribution handles one distribution cycle
+func (rte *RealTimeEngine) processDistribution() {
+	start := time.Now()
+	
+	// Get current revenue rate ($/second from all subscriptions)
+	revenueRate := rte.revenueCalculator.GetCurrentRevenueRate()
+	if revenueRate <= 0 {
+		return // No revenue to distribute
+	}
+	
+	// Get current resource usage from all providers
+	liveUsage := rte.usageAggregator.GetCurrentUsage()
+	if len(liveUsage.ProviderUsage) == 0 {
+		// No active providers - revenue accumulates in pool
+		rte.distributor.AccumulateToPool(revenueRate)
+		return
+	}
+	
+	// Calculate distribution based on 70/1/29 split
+	distribution := rte.calculateDistribution(revenueRate, liveUsage)
+	
+	// Execute payments
+	if err := rte.distributor.DistributePayments(distribution); err != nil {
+		rte.logger.Error().
+			Err(err).
+			Float64("revenue_rate", revenueRate).
+			Msg("Failed to distribute payments")
+		return
+	}
+	
+	// Update metrics
+	duration := time.Since(start)
+	rte.logger.Debug().
+		Float64("revenue_rate", revenueRate).
+		Int("providers", len(liveUsage.ProviderUsage)).
+		Dur("processing_time", duration).
+		Msg("Distribution cycle completed")
+}
+
+// calculateDistribution computes the 70/1/29 split with market-based infrastructure allocation
+func (rte *RealTimeEngine) calculateDistribution(revenueRate float64, usage *LiveUsageSnapshot) *DistributionResult {
+	result := &DistributionResult{
+		Timestamp:           time.Now(),
+		TotalRevenue:        revenueRate,
+		ProviderRewards:     make(map[string]float64),
+		ContentCreatorRewards: make(map[string]float64),
+	}
+	
+	// Apply 70/1/29 split
+	contentPool := revenueRate * rte.config.MarketPricing.ContentCreatorPercentage      // 70%
+	networkOpsPool := revenueRate * rte.config.MarketPricing.NetworkOpsPercentage      // 1%
+	infrastructurePool := revenueRate * rte.config.MarketPricing.InfrastructurePercentage // 29%
+	
+	// Distribute content pool to creators (based on current activity)
+	result.ContentCreatorRewards = rte.distributeContentPool(contentPool, usage)
+	
+	// Distribute network ops pool to coordinators
+	result.NetworkOpsReward = networkOpsPool
+	
+	// Distribute infrastructure pool using market-based ratios
+	result.ProviderRewards = rte.distributeInfrastructurePool(infrastructurePool, usage)
+	
+	return result
+}
+
+// distributeInfrastructurePool allocates infrastructure revenue using market rates
+func (rte *RealTimeEngine) distributeInfrastructurePool(pool float64, usage *LiveUsageSnapshot) map[string]float64 {
+	// Convert live usage to provider contributions for market valuation
+	providerContributions := make(map[string]ProviderContribution)
+	
+	for providerID, providerUsage := range usage.ProviderUsage {
+		contribution := ProviderContribution{
+			ProviderID:        providerID,
+			BillingCycleID:    "realtime", // Real-time doesn't use billing cycles
+			StorageGBHours:    providerUsage.StorageUsage / 3600.0,        // Convert seconds to hours
+			BandwidthGB:       providerUsage.BandwidthUsage / (1024 * 1024 * 1024), // Convert bytes to GB
+			CPUHours:          providerUsage.ComputeUsage / 3600.0,        // Convert seconds to hours
+			MemoryGBHours:     providerUsage.MemoryUsage / (1024 * 1024 * 1024 * 3600), // Convert byte-seconds to GB-hours
+		}
+		providerContributions[providerID] = contribution
+	}
+	
+	// Use market pricing model to calculate proportional rewards
+	marketRewards := rte.marketPricing.CalculateProviderRewards(pool, providerContributions)
+	
+	return marketRewards
+}
+
+// distributeContentPool allocates content revenue to creators
+func (rte *RealTimeEngine) distributeContentPool(pool float64, usage *LiveUsageSnapshot) map[string]float64 {
+	rewards := make(map[string]float64)
+	
+	totalContentActivity := 0.0
+	for _, activity := range usage.ContentActivity {
+		totalContentActivity += activity.ViewSeconds
+	}
+	
+	if totalContentActivity > 0 {
+		for creatorID, activity := range usage.ContentActivity {
+			creatorShare := activity.ViewSeconds / totalContentActivity
+			rewards[creatorID] = pool * creatorShare
+		}
+	}
+	
+	return rewards
+}
+
+// TrackProviderUsage records real-time resource usage from a provider
+func (rte *RealTimeEngine) TrackProviderUsage(providerID string, resourceType string, amount float64, unit string) {
+	rte.usageAggregator.RecordUsage(providerID, resourceType, amount, unit)
+}
+
+// TrackContentActivity records real-time content activity
+func (rte *RealTimeEngine) TrackContentActivity(creatorID, contentID string, viewSeconds float64, dataConsumed int64) {
+	rte.usageAggregator.RecordContentActivity(creatorID, contentID, viewSeconds, dataConsumed)
+}
+
+// GetLiveStats returns current real-time statistics
+func (rte *RealTimeEngine) GetLiveStats() *RealTimeStats {
+	rte.mu.RLock()
+	defer rte.mu.RUnlock()
+	
+	return &RealTimeStats{
+		TotalActiveProviders:    len(rte.activeProviders),
+		CurrentRevenueRate:      rte.revenueCalculator.GetCurrentRevenueRate(),
+		DistributionInterval:    rte.distributionInterval,
+		LastDistribution:        rte.distributor.GetLastDistribution(),
+		TotalDistributedToday:   rte.distributor.GetTotalDistributedToday(),
+	}
+}
+
+// Supporting types for real-time distribution
+
+// ProviderState tracks the current state of a provider
+type ProviderState struct {
+	ProviderID       string    `json:"provider_id"`
+	LastActivity     time.Time `json:"last_activity"`
+	TotalEarned      float64   `json:"total_earned"`
+	CurrentUsage     *ProviderUsageSnapshot `json:"current_usage"`
+}
+
+// RevenueSnapshot represents current revenue state
+type RevenueSnapshot struct {
+	Timestamp        time.Time `json:"timestamp"`
+	TotalRevenueRate float64   `json:"total_revenue_rate"` // $/second
+	ActiveUsers      int       `json:"active_users"`
+	SubscriptionBreakdown map[SubscriptionTier]float64 `json:"subscription_breakdown"`
+}
+
+// DistributionResult represents the result of one distribution cycle
+type DistributionResult struct {
+	Timestamp             time.Time            `json:"timestamp"`
+	TotalRevenue          float64              `json:"total_revenue"`
+	ProviderRewards       map[string]float64   `json:"provider_rewards"`
+	ContentCreatorRewards map[string]float64   `json:"content_creator_rewards"`
+	NetworkOpsReward      float64              `json:"network_ops_reward"`
+}
+
+// RealTimeStats provides live statistics about the distribution engine
+type RealTimeStats struct {
+	TotalActiveProviders  int       `json:"total_active_providers"`
+	CurrentRevenueRate    float64   `json:"current_revenue_rate"`
+	DistributionInterval  time.Duration `json:"distribution_interval"`
+	LastDistribution      time.Time `json:"last_distribution"`
+	TotalDistributedToday float64   `json:"total_distributed_today"`
+}

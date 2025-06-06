@@ -1,0 +1,566 @@
+package incentive
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/rs/zerolog"
+)
+
+// UsageTracker tracks resource contributions from providers based on payment logic
+type UsageTracker struct {
+	mu            sync.RWMutex
+	logger        zerolog.Logger
+	config        *Config
+	pool          *SubscriptionPool
+	
+	// Usage tracking by operation type
+	storageUsage     map[string][]*StorageContribution  // providerID -> contributions
+	bandwidthUsage   map[string][]*BandwidthContribution // providerID -> contributions
+	computeUsage     map[string][]*ComputeContribution   // providerID -> contributions
+	contentUsage     map[string][]*ContentContribution   // creatorID -> contributions
+	networkOpsUsage  map[string][]*NetworkOpsContribution // providerID -> contributions
+	
+	// Billing cycle aggregation
+	cycleAggregates  map[string]*CycleAggregate // cycleID -> aggregate
+	
+	started          bool
+	stopChan         chan struct{}
+	wg               sync.WaitGroup
+}
+
+// StorageContribution represents chargeable storage operations
+type StorageContribution struct {
+	ProviderID       string    `json:"provider_id"`
+	Operation        string    `json:"operation"`        // put, get, replicate
+	DataSize         int64     `json:"data_size"`        // bytes
+	Duration         time.Duration `json:"duration"`     // how long stored
+	StorageHours     float64   `json:"storage_hours"`    // GB-hours
+	BandwidthUsed    int64     `json:"bandwidth_used"`   // bytes transferred
+	Timestamp        time.Time `json:"timestamp"`
+	UserID           string    `json:"user_id"`          // requesting user
+	ChargableToUser  bool      `json:"chargeable_to_user"` // vs protocol overhead
+	VerificationProof string   `json:"verification_proof"`
+}
+
+// BandwidthContribution represents chargeable bandwidth operations
+type BandwidthContribution struct {
+	ProviderID       string    `json:"provider_id"`
+	Operation        string    `json:"operation"`        // stream, upload, download, relay
+	BytesTransferred int64     `json:"bytes_transferred"`
+	Direction        string    `json:"direction"`        // upstream, downstream
+	Duration         time.Duration `json:"duration"`
+	Timestamp        time.Time `json:"timestamp"`
+	UserID           string    `json:"user_id"`
+	ChargableToUser  bool      `json:"chargeable_to_user"`
+	VerificationProof string   `json:"verification_proof"`
+}
+
+// ComputeContribution represents chargeable compute operations
+type ComputeContribution struct {
+	ProviderID       string    `json:"provider_id"`
+	Operation        string    `json:"operation"`        // execute, process, ai_inference
+	CPUHours         float64   `json:"cpu_hours"`
+	GPUHours         float64   `json:"gpu_hours"`
+	MemoryGBHours    float64   `json:"memory_gb_hours"`
+	JobID            string    `json:"job_id"`
+	Timestamp        time.Time `json:"timestamp"`
+	UserID           string    `json:"user_id"`
+	ChargableToUser  bool      `json:"chargeable_to_user"`
+	VerificationProof string   `json:"verification_proof"`
+}
+
+// NetworkOpsContribution represents network operations (mostly coordination, some chargeable)
+type NetworkOpsContribution struct {
+	ProviderID       string    `json:"provider_id"`
+	Operation        string    `json:"operation"`        // maintenance, coordination, complex_query
+	OperationType    string    `json:"operation_type"`   // FREE, PAID, CONDITIONAL
+	ComputeUnits     float64   `json:"compute_units"`    // normalized compute effort
+	Timestamp        time.Time `json:"timestamp"`
+	UserID           string    `json:"user_id"`
+	ChargableToUser  bool      `json:"chargeable_to_user"`
+	VerificationProof string   `json:"verification_proof"`
+}
+
+// CycleAggregate represents aggregated contributions for a billing cycle
+type CycleAggregate struct {
+	CycleID          string                           `json:"cycle_id"`
+	StorageTotals    map[string]float64              `json:"storage_totals"`    // providerID -> GB-hours
+	BandwidthTotals  map[string]float64              `json:"bandwidth_totals"`  // providerID -> GB
+	ComputeTotals    map[string]float64              `json:"compute_totals"`    // providerID -> CPU-hours
+	ContentTotals    map[string]float64              `json:"content_totals"`    // creatorID -> content points
+	NetworkOpsTotals map[string]float64              `json:"network_ops_totals"` // providerID -> units
+	LastUpdated      time.Time                       `json:"last_updated"`
+}
+
+// NewUsageTracker creates a new usage tracker
+func NewUsageTracker(config *Config, pool *SubscriptionPool, logger zerolog.Logger) *UsageTracker {
+	return &UsageTracker{
+		logger:          logger.With().Str("component", "usage_tracker").Logger(),
+		config:          config,
+		pool:            pool,
+		storageUsage:    make(map[string][]*StorageContribution),
+		bandwidthUsage:  make(map[string][]*BandwidthContribution),
+		computeUsage:    make(map[string][]*ComputeContribution),
+		contentUsage:    make(map[string][]*ContentContribution),
+		networkOpsUsage: make(map[string][]*NetworkOpsContribution),
+		cycleAggregates: make(map[string]*CycleAggregate),
+		stopChan:        make(chan struct{}),
+	}
+}
+
+// Start begins usage tracking
+func (ut *UsageTracker) Start(ctx context.Context) error {
+	ut.mu.Lock()
+	defer ut.mu.Unlock()
+	
+	if ut.started {
+		return fmt.Errorf("usage tracker already started")
+	}
+	
+	ut.logger.Info().Msg("Starting usage tracker")
+	
+	ut.started = true
+	
+	// Start background aggregation worker
+	ut.wg.Add(1)
+	go ut.aggregationWorker(ctx)
+	
+	return nil
+}
+
+// Stop stops usage tracking
+func (ut *UsageTracker) Stop(ctx context.Context) error {
+	ut.mu.Lock()
+	defer ut.mu.Unlock()
+	
+	if !ut.started {
+		return nil
+	}
+	
+	ut.logger.Info().Msg("Stopping usage tracker")
+	
+	close(ut.stopChan)
+	ut.wg.Wait()
+	
+	ut.started = false
+	return nil
+}
+
+// STORAGE TRACKING METHODS
+
+// TrackStorageOperation records a chargeable storage operation
+func (ut *UsageTracker) TrackStorageOperation(providerID, operation string, dataSize int64, duration time.Duration, userID string, isChargeable bool) error {
+	if !ut.isChargeableStorageOp(operation) && !isChargeable {
+		// Free operations like "exists", "hash" are not tracked for payments
+		return nil
+	}
+	
+	ut.mu.Lock()
+	defer ut.mu.Unlock()
+	
+	storageHours := float64(dataSize) / (1024 * 1024 * 1024) * duration.Hours() // GB-hours
+	
+	contribution := &StorageContribution{
+		ProviderID:      providerID,
+		Operation:       operation,
+		DataSize:        dataSize,
+		Duration:        duration,
+		StorageHours:    storageHours,
+		Timestamp:       time.Now(),
+		UserID:          userID,
+		ChargableToUser: isChargeable,
+	}
+	
+	ut.storageUsage[providerID] = append(ut.storageUsage[providerID], contribution)
+	
+	ut.logger.Debug().
+		Str("provider_id", providerID).
+		Str("operation", operation).
+		Float64("storage_hours", storageHours).
+		Bool("chargeable", isChargeable).
+		Msg("Storage operation tracked")
+	
+	return nil
+}
+
+// isChargeableStorageOp determines if a storage operation is chargeable based on payment logic
+func (ut *UsageTracker) isChargeableStorageOp(operation string) bool {
+	switch operation {
+	case "put", "get", "replicate", "stream":
+		return true // Consumes physical resources
+	case "exists", "hash", "metadata", "list":
+		return false // Metadata operations are free
+	default:
+		return false // Conservative default
+	}
+}
+
+// BANDWIDTH TRACKING METHODS
+
+// TrackBandwidthOperation records a chargeable bandwidth operation
+func (ut *UsageTracker) TrackBandwidthOperation(providerID, operation string, bytesTransferred int64, direction, userID string, isChargeable bool) error {
+	if !ut.isChargeableBandwidthOp(operation) && !isChargeable {
+		// Free operations like DHT lookups are not tracked
+		return nil
+	}
+	
+	ut.mu.Lock()
+	defer ut.mu.Unlock()
+	
+	contribution := &BandwidthContribution{
+		ProviderID:       providerID,
+		Operation:        operation,
+		BytesTransferred: bytesTransferred,
+		Direction:        direction,
+		Timestamp:        time.Now(),
+		UserID:           userID,
+		ChargableToUser:  isChargeable,
+	}
+	
+	ut.bandwidthUsage[providerID] = append(ut.bandwidthUsage[providerID], contribution)
+	
+	ut.logger.Debug().
+		Str("provider_id", providerID).
+		Str("operation", operation).
+		Int64("bytes", bytesTransferred).
+		Bool("chargeable", isChargeable).
+		Msg("Bandwidth operation tracked")
+	
+	return nil
+}
+
+// isChargeableBandwidthOp determines if a bandwidth operation is chargeable
+func (ut *UsageTracker) isChargeableBandwidthOp(operation string) bool {
+	switch operation {
+	case "upload", "download", "stream", "relay":
+		return true // User-requested data transfer
+	case "ping", "discovery", "dht_lookup", "consensus":
+		return false // Protocol coordination
+	default:
+		return false
+	}
+}
+
+// COMPUTE TRACKING METHODS
+
+// TrackComputeOperation records a chargeable compute operation
+func (ut *UsageTracker) TrackComputeOperation(providerID, operation, jobID, userID string, cpuHours, gpuHours, memoryGBHours float64, isChargeable bool) error {
+	if !ut.isChargeableComputeOp(operation) && !isChargeable {
+		return nil
+	}
+	
+	ut.mu.Lock()
+	defer ut.mu.Unlock()
+	
+	contribution := &ComputeContribution{
+		ProviderID:      providerID,
+		Operation:       operation,
+		CPUHours:        cpuHours,
+		GPUHours:        gpuHours,
+		MemoryGBHours:   memoryGBHours,
+		JobID:           jobID,
+		Timestamp:       time.Now(),
+		UserID:          userID,
+		ChargableToUser: isChargeable,
+	}
+	
+	ut.computeUsage[providerID] = append(ut.computeUsage[providerID], contribution)
+	
+	ut.logger.Debug().
+		Str("provider_id", providerID).
+		Str("operation", operation).
+		Float64("cpu_hours", cpuHours).
+		Bool("chargeable", isChargeable).
+		Msg("Compute operation tracked")
+	
+	return nil
+}
+
+// isChargeableComputeOp determines if a compute operation is chargeable
+func (ut *UsageTracker) isChargeableComputeOp(operation string) bool {
+	switch operation {
+	case "execute", "ai_inference", "ml_training", "video_processing":
+		return true // User-requested computation
+	case "validation", "hash_verification", "signature_check":
+		return false // Protocol validation
+	default:
+		return false
+	}
+}
+
+// CONTENT CREATOR TRACKING METHODS
+
+// TrackContentContribution records content creator contribution
+func (ut *UsageTracker) TrackContentContribution(creatorID, contentID, contentType string, viewCount int64, dataTransferred int64, engagementScore, qualityScore float64) error {
+	ut.mu.Lock()
+	defer ut.mu.Unlock()
+	
+	// Calculate content points based on config weights
+	viewPoints := float64(viewCount) * ut.config.ContentCreator.ViewWeight
+	engagementPoints := engagementScore * ut.config.ContentCreator.EngagementWeight
+	qualityMultiplier := 1.0 + (qualityScore * ut.config.ContentCreator.QualityWeight)
+	
+	// Apply quality bonus for high quality content
+	if qualityScore > 0.8 { // 80% quality threshold
+		qualityMultiplier *= ut.config.ContentCreator.QualityBonus
+	}
+	
+	contentPoints := (viewPoints + engagementPoints) * qualityMultiplier
+	
+	// Get current cycle
+	cycle := ut.pool.GetCurrentCycle()
+	if cycle == nil {
+		return fmt.Errorf("no active billing cycle")
+	}
+	
+	contribution := &ContentContribution{
+		CreatorID:       creatorID,
+		ContentID:       contentID,
+		ContentType:     contentType,
+		ViewCount:       viewCount,
+		DataTransferred: dataTransferred,
+		EngagementScore: engagementScore,
+		QualityScore:    qualityScore,
+		ContentPoints:   contentPoints,
+		BillingCycleID:  cycle.ID,
+		Timestamp:       time.Now(),
+	}
+	
+	ut.contentUsage[creatorID] = append(ut.contentUsage[creatorID], contribution)
+	
+	ut.logger.Debug().
+		Str("creator_id", creatorID).
+		Str("content_id", contentID).
+		Int64("views", viewCount).
+		Float64("engagement", engagementScore).
+		Float64("quality", qualityScore).
+		Float64("content_points", contentPoints).
+		Msg("Content contribution tracked")
+	
+	return nil
+}
+
+// TrackContentView records a single content view (for real-time tracking)
+func (ut *UsageTracker) TrackContentView(creatorID, contentID string, dataConsumed int64, engagementType string) error {
+	// This could be used for real-time view tracking
+	// For now, we'll aggregate and call TrackContentContribution periodically
+	ut.logger.Debug().
+		Str("creator_id", creatorID).
+		Str("content_id", contentID).
+		Int64("data_consumed", dataConsumed).
+		Str("engagement_type", engagementType).
+		Msg("Content view tracked")
+	
+	return nil
+}
+
+// NETWORK OPS TRACKING METHODS
+
+// TrackNetworkOperation records network operations (mostly free, some conditional)
+func (ut *UsageTracker) TrackNetworkOperation(providerID, operation, operationType, userID string, computeUnits float64, isChargeable bool) error {
+	ut.mu.Lock()
+	defer ut.mu.Unlock()
+	
+	contribution := &NetworkOpsContribution{
+		ProviderID:      providerID,
+		Operation:       operation,
+		OperationType:   operationType,
+		ComputeUnits:    computeUnits,
+		Timestamp:       time.Now(),
+		UserID:          userID,
+		ChargableToUser: isChargeable,
+	}
+	
+	ut.networkOpsUsage[providerID] = append(ut.networkOpsUsage[providerID], contribution)
+	
+	ut.logger.Debug().
+		Str("provider_id", providerID).
+		Str("operation", operation).
+		Str("type", operationType).
+		Float64("compute_units", computeUnits).
+		Bool("chargeable", isChargeable).
+		Msg("Network operation tracked")
+	
+	return nil
+}
+
+// aggregationWorker periodically aggregates usage data for billing cycles
+func (ut *UsageTracker) aggregationWorker(ctx context.Context) {
+	defer ut.wg.Done()
+	
+	ticker := time.NewTicker(10 * time.Minute) // Aggregate every 10 minutes
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ut.stopChan:
+			return
+		case <-ticker.C:
+			ut.aggregateCurrentCycle()
+		}
+	}
+}
+
+// aggregateCurrentCycle aggregates usage for the current billing cycle
+func (ut *UsageTracker) aggregateCurrentCycle() {
+	cycle := ut.pool.GetCurrentCycle()
+	if cycle == nil {
+		return
+	}
+	
+	ut.mu.Lock()
+	defer ut.mu.Unlock()
+	
+	aggregate := ut.cycleAggregates[cycle.ID]
+	if aggregate == nil {
+		aggregate = &CycleAggregate{
+			CycleID:          cycle.ID,
+			StorageTotals:    make(map[string]float64),
+			BandwidthTotals:  make(map[string]float64),
+			ComputeTotals:    make(map[string]float64),
+			ContentTotals:    make(map[string]float64),
+			NetworkOpsTotals: make(map[string]float64),
+		}
+		ut.cycleAggregates[cycle.ID] = aggregate
+	}
+	
+	// Reset totals for fresh calculation
+	for k := range aggregate.StorageTotals {
+		delete(aggregate.StorageTotals, k)
+	}
+	for k := range aggregate.BandwidthTotals {
+		delete(aggregate.BandwidthTotals, k)
+	}
+	for k := range aggregate.ComputeTotals {
+		delete(aggregate.ComputeTotals, k)
+	}
+	for k := range aggregate.ContentTotals {
+		delete(aggregate.ContentTotals, k)
+	}
+	for k := range aggregate.NetworkOpsTotals {
+		delete(aggregate.NetworkOpsTotals, k)
+	}
+	
+	// Aggregate storage contributions for current cycle
+	for providerID, contributions := range ut.storageUsage {
+		var total float64
+		for _, contrib := range contributions {
+			if contrib.Timestamp.After(cycle.StartDate) && contrib.Timestamp.Before(cycle.EndDate) {
+				total += contrib.StorageHours
+			}
+		}
+		if total > 0 {
+			aggregate.StorageTotals[providerID] = total
+		}
+	}
+	
+	// Aggregate bandwidth contributions
+	for providerID, contributions := range ut.bandwidthUsage {
+		var total float64
+		for _, contrib := range contributions {
+			if contrib.Timestamp.After(cycle.StartDate) && contrib.Timestamp.Before(cycle.EndDate) {
+				total += float64(contrib.BytesTransferred) / (1024 * 1024 * 1024) // Convert to GB
+			}
+		}
+		if total > 0 {
+			aggregate.BandwidthTotals[providerID] = total
+		}
+	}
+	
+	// Aggregate compute contributions
+	for providerID, contributions := range ut.computeUsage {
+		var total float64
+		for _, contrib := range contributions {
+			if contrib.Timestamp.After(cycle.StartDate) && contrib.Timestamp.Before(cycle.EndDate) {
+				// Combine CPU and GPU hours with GPU weighted higher
+				total += contrib.CPUHours + (contrib.GPUHours * 10) // GPU is 10x weight
+			}
+		}
+		if total > 0 {
+			aggregate.ComputeTotals[providerID] = total
+		}
+	}
+	
+	// Aggregate content contributions
+	for creatorID, contributions := range ut.contentUsage {
+		var total float64
+		for _, contrib := range contributions {
+			if contrib.Timestamp.After(cycle.StartDate) && contrib.Timestamp.Before(cycle.EndDate) {
+				// Only count if meets minimum thresholds
+				if contrib.ViewCount >= ut.config.ContentCreator.MinViews && 
+				   contrib.EngagementScore >= ut.config.ContentCreator.MinEngagement {
+					total += contrib.ContentPoints
+				}
+			}
+		}
+		if total >= ut.config.MinContribution.Content {
+			aggregate.ContentTotals[creatorID] = total
+		}
+	}
+	
+	// Aggregate network ops contributions  
+	for providerID, contributions := range ut.networkOpsUsage {
+		var total float64
+		for _, contrib := range contributions {
+			if contrib.Timestamp.After(cycle.StartDate) && contrib.Timestamp.Before(cycle.EndDate) {
+				total += contrib.ComputeUnits
+			}
+		}
+		if total > 0 {
+			aggregate.NetworkOpsTotals[providerID] = total
+		}
+	}
+	
+	aggregate.LastUpdated = time.Now()
+	
+	ut.logger.Debug().
+		Str("cycle_id", cycle.ID).
+		Int("storage_providers", len(aggregate.StorageTotals)).
+		Int("bandwidth_providers", len(aggregate.BandwidthTotals)).
+		Int("compute_providers", len(aggregate.ComputeTotals)).
+		Int("content_creators", len(aggregate.ContentTotals)).
+		Int("network_providers", len(aggregate.NetworkOpsTotals)).
+		Msg("Usage aggregated for current cycle")
+}
+
+// GetCycleAggregate returns aggregated usage for a billing cycle
+func (ut *UsageTracker) GetCycleAggregate(cycleID string) *CycleAggregate {
+	ut.mu.RLock()
+	defer ut.mu.RUnlock()
+	
+	aggregate := ut.cycleAggregates[cycleID]
+	if aggregate == nil {
+		return nil
+	}
+	
+	// Return a copy
+	copy := *aggregate
+	copy.StorageTotals = make(map[string]float64)
+	copy.BandwidthTotals = make(map[string]float64)
+	copy.ComputeTotals = make(map[string]float64)
+	copy.ContentTotals = make(map[string]float64)
+	copy.NetworkOpsTotals = make(map[string]float64)
+	
+	for k, v := range aggregate.StorageTotals {
+		copy.StorageTotals[k] = v
+	}
+	for k, v := range aggregate.BandwidthTotals {
+		copy.BandwidthTotals[k] = v
+	}
+	for k, v := range aggregate.ComputeTotals {
+		copy.ComputeTotals[k] = v
+	}
+	for k, v := range aggregate.ContentTotals {
+		copy.ContentTotals[k] = v
+	}
+	for k, v := range aggregate.NetworkOpsTotals {
+		copy.NetworkOpsTotals[k] = v
+	}
+	
+	return &copy
+}

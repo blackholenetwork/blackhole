@@ -26,7 +26,7 @@ export function useWebSocket(url: string) {
       ws.onclose = () => {
         setConnected(false);
         wsRef.current = null;
-        
+
         // Reconnect after 5 seconds
         if (!reconnectTimeoutRef.current) {
           reconnectTimeoutRef.current = setTimeout(connect, 5000);

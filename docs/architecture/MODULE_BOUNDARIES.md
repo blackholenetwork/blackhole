@@ -14,7 +14,7 @@ internal/
 common/
 ```
 
-**NEVER**: 
+**NEVER**:
 - common → pkg (would create circular dependency)
 - internal → pkg (internal is for shared utilities)
 - Any circular imports
@@ -107,7 +107,7 @@ type StorageReader interface {
 // ❌ WRONG - Mixed concerns in one package
 package utils
 - StringUtils
-- FileUtils  
+- FileUtils
 - NetworkUtils
 - CryptoUtils
 
@@ -117,7 +117,7 @@ package crypto
 - Decrypt()
 - GenerateKey()
 
-package network  
+package network
 - Dial()
 - Listen()
 - Discover()
@@ -131,20 +131,20 @@ func main() {
     // Create core services
     storage := storage.New(config.Storage)
     network := network.New(config.Network)
-    
+
     // Create higher-level services with dependencies
     api := api.New(
         api.WithStorage(storage),
         api.WithNetwork(network),
     )
-    
+
     // Start orchestrator with all services
     orchestrator := orchestrator.New(
         orchestrator.RegisterComponent("storage", storage),
         orchestrator.RegisterComponent("network", network),
         orchestrator.RegisterComponent("api", api),
     )
-    
+
     orchestrator.Start()
 }
 ```
@@ -156,7 +156,7 @@ func main() {
 - Mock all external dependencies
 - No real network/disk I/O
 
-### Integration Tests  
+### Integration Tests
 - Test module interactions
 - Use real implementations
 - Test through public interfaces only

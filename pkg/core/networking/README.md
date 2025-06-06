@@ -90,7 +90,7 @@ The networking plugin implements the `NetworkService` interface:
 // Send sends data to a specific peer
 Send(ctx context.Context, peerID string, data []byte) error
 
-// Broadcast sends data to all connected peers  
+// Broadcast sends data to all connected peers
 Broadcast(ctx context.Context, data []byte) error
 
 // GetPeers returns list of connected peers
@@ -114,7 +114,7 @@ The plugin publishes these events:
 
 - `peers_connected` (gauge) - Number of connected peers
 - `messages_sent` (counter) - Total messages sent
-- `messages_received` (counter) - Total messages received  
+- `messages_received` (counter) - Total messages received
 - `message_latency` (histogram) - Message latency distribution
 
 ## Performance

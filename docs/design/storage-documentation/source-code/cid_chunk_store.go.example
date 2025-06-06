@@ -1,0 +1,172 @@
+package storage
+
+import (
+	"fmt"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+)
+
+// ChunkStore manages local chunk storage for CID-based chunks
+type ChunkStore struct {
+	basePath string
+	mu       sync.RWMutex
+	
+	// Statistics
+	totalChunks int64
+	totalSize   int64
+}
+
+// NewChunkStore creates a new chunk store
+func NewChunkStore(basePath string) *ChunkStore {
+	return &ChunkStore{
+		basePath: basePath,
+	}
+}
+
+// Initialize prepares the chunk store
+func (cs *ChunkStore) Initialize() error {
+	// Create base directory
+	if err := os.MkdirAll(cs.basePath, 0755); err != nil {
+		return fmt.Errorf("failed to create chunk store directory: %w", err)
+	}
+	
+	return nil
+}
+
+// Store stores a content-based chunk
+func (cs *ChunkStore) Store(chunk *ContentBasedChunk) error {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	
+	// Create chunk file path based on CID
+	chunkPath := cs.getChunkPath(chunk.CID)
+	
+	// Create directory if needed
+	if err := os.MkdirAll(filepath.Dir(chunkPath), 0755); err != nil {
+		return fmt.Errorf("failed to create chunk directory: %w", err)
+	}
+	
+	// Write chunk data
+	if err := ioutil.WriteFile(chunkPath, chunk.Data, 0644); err != nil {
+		return fmt.Errorf("failed to write chunk: %w", err)
+	}
+	
+	// Update statistics
+	cs.totalChunks++
+	cs.totalSize += int64(len(chunk.Data))
+	
+	return nil
+}
+
+// Retrieve retrieves a chunk by CID
+func (cs *ChunkStore) Retrieve(chunkCID ChunkCID) (*ContentBasedChunk, error) {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	
+	chunkPath := cs.getChunkPath(chunkCID)
+	
+	// Check if chunk exists
+	if _, err := os.Stat(chunkPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("chunk not found: %s", chunkCID)
+	}
+	
+	// Read chunk data
+	data, err := ioutil.ReadFile(chunkPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read chunk: %w", err)
+	}
+	
+	return &ContentBasedChunk{
+		CID:  chunkCID,
+		Data: data,
+	}, nil
+}
+
+// Has checks if a chunk exists
+func (cs *ChunkStore) Has(chunkCID ChunkCID) bool {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	
+	chunkPath := cs.getChunkPath(chunkCID)
+	_, err := os.Stat(chunkPath)
+	return err == nil
+}
+
+// Delete removes a chunk
+func (cs *ChunkStore) Delete(chunkCID ChunkCID) error {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	
+	chunkPath := cs.getChunkPath(chunkCID)
+	
+	// Check if chunk exists
+	if _, err := os.Stat(chunkPath); os.IsNotExist(err) {
+		return nil // Already deleted
+	}
+	
+	// Get file size for statistics
+	info, err := os.Stat(chunkPath)
+	if err == nil {
+		cs.totalSize -= info.Size()
+		cs.totalChunks--
+	}
+	
+	// Remove chunk file
+	return os.Remove(chunkPath)
+}
+
+// GetStats returns storage statistics
+func (cs *ChunkStore) GetStats() (int64, int64) {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.totalChunks, cs.totalSize
+}
+
+// List returns all stored chunk CIDs
+func (cs *ChunkStore) List() ([]ChunkCID, error) {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	
+	var chunkCIDs []ChunkCID
+	
+	// Walk through the chunk directory
+	err := filepath.Walk(cs.basePath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		
+		// Skip directories and hidden files
+		if info.IsDir() || strings.HasPrefix(info.Name(), ".") {
+			return nil
+		}
+		
+		// The filename is the CID
+		chunkCID := ChunkCID(info.Name())
+		chunkCIDs = append(chunkCIDs, chunkCID)
+		
+		return nil
+	})
+	
+	return chunkCIDs, err
+}
+
+// Close gracefully shuts down the chunk store
+func (cs *ChunkStore) Close() error {
+	// Nothing to close for file-based storage
+	return nil
+}
+
+// getChunkPath returns the file path for a chunk CID
+func (cs *ChunkStore) getChunkPath(chunkCID ChunkCID) string {
+	// Create hierarchical directory structure based on CID prefix
+	cidStr := string(chunkCID)
+	if len(cidStr) < 4 {
+		return filepath.Join(cs.basePath, "short", cidStr)
+	}
+	
+	// Use first 2 characters for first level, next 2 for second level
+	return filepath.Join(cs.basePath, cidStr[:2], cidStr[2:4], cidStr)
+}

@@ -1,0 +1,462 @@
+package storage
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"mime"
+	"path/filepath"
+	"regexp"
+	"strings"
+
+	"github.com/blackholenetwork/blackhole/pkg/data/schema"
+	"github.com/blackholenetwork/blackhole/pkg/interfaces"
+	"github.com/rs/zerolog"
+)
+
+// SchemaIntegratedService wraps the basic Storage Service with automatic schema processing
+// This ensures tight coupling between file operations and metadata management
+type SchemaIntegratedService struct {
+	storage       Service                    // Underlying storage service
+	schemaService *schema.Service           // Schema service for metadata processing
+	vfs          interfaces.VFS            // VFS for metadata storage
+	logger       zerolog.Logger
+	config       *SchemaIntegrationConfig
+}
+
+// SchemaIntegrationConfig controls how schema integration behaves
+type SchemaIntegrationConfig struct {
+	// Enforcement levels
+	RequireSchemaForAllFiles bool     `json:"require_schema_for_all_files"`  // Reject files without schemas
+	RequiredContentTypes     []string `json:"required_content_types"`        // Content types that MUST have schemas
+	AllowUserMetadataOverride bool    `json:"allow_user_metadata_override"`  // Let users override auto-extracted metadata
+	
+	// Quality controls
+	MinQualityScore    float64 `json:"min_quality_score"`     // Minimum metadata quality to accept
+	MinCompletenessScore float64 `json:"min_completeness_score"` // Minimum completeness to accept
+}
+
+// SchemaAwareStoreRequest contains all information needed for schema-integrated storage
+type SchemaAwareStoreRequest struct {
+	// Required fields
+	Content     io.Reader `json:"-"`           // File content
+	ContentType string    `json:"content_type"` // MIME type
+	
+	// Optional schema information
+	SchemaID      schema.SchemaID            `json:"schema_id,omitempty"`       // Explicit schema to use
+	UserMetadata  map[string]interface{}     `json:"user_metadata,omitempty"`   // User-provided metadata
+	Filename      string                     `json:"filename,omitempty"`        // Original filename for extraction
+	
+	// User context
+	OwnerDID     string                      `json:"owner_did"`               // Content owner
+	Permissions  map[string]schema.FieldPermission `json:"permissions,omitempty"` // Field-level permissions
+}
+
+// SchemaAwareStoreResult contains both content and metadata information
+type SchemaAwareStoreResult struct {
+	// Storage result
+	ContentCID ContentCID `json:"content_cid"`  // Content identifier
+	Size       int64      `json:"size"`         // File size
+	
+	// Schema processing result
+	MetadataContainer *schema.MetadataContainer `json:"metadata"`      // Rich metadata
+	SchemaUsed        schema.SchemaID           `json:"schema_used"`   // Schema that was applied
+	QualityScore      float64                   `json:"quality_score"` // Metadata quality
+	CompletenessScore float64                   `json:"completeness"`  // Metadata completeness
+}
+
+// SchemaAwareRetrieveResult includes content with metadata
+type SchemaAwareRetrieveResult struct {
+	Content  io.ReadCloser             `json:"-"`         // File content
+	Metadata *schema.MetadataContainer `json:"metadata"`  // Associated metadata
+	
+	// Content information
+	ContentType string    `json:"content_type"`
+	Size        int64     `json:"size"`
+	SchemaID    schema.SchemaID `json:"schema_id"`
+}
+
+// NewSchemaIntegratedService creates a storage service with automatic schema integration
+func NewSchemaIntegratedService(
+	storage Service,
+	schemaService *schema.Service,
+	vfs interfaces.VFS,
+	config *SchemaIntegrationConfig,
+	logger zerolog.Logger,
+) *SchemaIntegratedService {
+	
+	if config == nil {
+		config = DefaultSchemaIntegrationConfig()
+	}
+	
+	return &SchemaIntegratedService{
+		storage:       storage,
+		schemaService: schemaService,
+		vfs:          vfs,
+		config:       config,
+		logger:       logger.With().Str("component", "schema_integrated_storage").Logger(),
+	}
+}
+
+// DefaultSchemaIntegrationConfig returns sensible defaults for schema integration
+func DefaultSchemaIntegrationConfig() *SchemaIntegrationConfig {
+	return &SchemaIntegrationConfig{
+		RequireSchemaForAllFiles:  false,
+		RequiredContentTypes:     []string{"image/*", "video/*"}, // Require schemas for media
+		AllowUserMetadataOverride: true,
+		MinQualityScore:          0.3,  // Accept low quality but encourage improvement
+		MinCompletenessScore:     0.2,  // Accept minimal completeness
+	}
+}
+
+// StoreWithSchema performs schema-integrated storage - the main entry point for file uploads
+func (sis *SchemaIntegratedService) StoreWithSchema(ctx context.Context, req *SchemaAwareStoreRequest) (*SchemaAwareStoreResult, error) {
+	sis.logger.Info().
+		Str("content_type", req.ContentType).
+		Str("owner", req.OwnerDID).
+		Msg("Starting schema-integrated storage")
+	
+	// Step 1: Read content into memory for processing
+	content, err := io.ReadAll(req.Content)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read content: %w", err)
+	}
+	
+	// Step 2: Detect/validate content type
+	if req.ContentType == "" {
+		req.ContentType = sis.detectContentType(req.Filename, content)
+	}
+	
+	// Step 3: Determine appropriate schema
+	schemaID := req.SchemaID
+	if schemaID == "" {
+		// For now, use simple content type mapping since the schema service doesn't expose GetSuggestedSchema
+		schemaID = sis.suggestSchemaFromContentType(req.ContentType)
+		if schemaID == "" {
+			if sis.requiresSchema(req.ContentType) {
+				return nil, fmt.Errorf("no suitable schema found for content type: %s", req.ContentType)
+			}
+			// Use generic schema for unsupported types
+			schemaID = schema.SchemaID("generic/v1")
+		}
+	}
+	
+	// Step 4: Extract basic metadata from content (simplified for now)
+	extractionResult := &schema.ExtractionResult{
+		ExtractedData: sis.extractBasicMetadata(req.ContentType, content),
+		Confidence:    make(map[string]float64),
+	}
+	
+	// Set confidence for basic extracted fields
+	for field := range extractionResult.ExtractedData {
+		extractionResult.Confidence[field] = 0.8 // Basic confidence
+	}
+	
+	// Step 5: Extract metadata from filename if provided
+	if req.Filename != "" {
+		filenameMetadata := sis.extractMetadataFromFilename(req.Filename)
+		// Merge filename extraction with content extraction
+		for field, value := range filenameMetadata {
+			if _, exists := extractionResult.ExtractedData[field]; !exists {
+				extractionResult.ExtractedData[field] = value
+				extractionResult.Confidence[field] = 0.9 // High confidence for filename data
+			}
+		}
+	}
+	
+	// Step 6: Merge user-provided metadata with auto-extracted metadata
+	finalMetadata := make(map[string]interface{})
+	autoExtracted := make(map[string]bool)
+	
+	// Start with auto-extracted data
+	for field, value := range extractionResult.ExtractedData {
+		finalMetadata[field] = value
+		autoExtracted[field] = true
+	}
+	
+	// Override with user-provided data if allowed
+	if sis.config.AllowUserMetadataOverride {
+		for field, value := range req.UserMetadata {
+			finalMetadata[field] = value
+			autoExtracted[field] = false // User provided
+		}
+	}
+	
+	// Step 7: Create metadata creation request
+	metadataReq := &schema.CreateMetadataRequest{
+		ContentHash: "", // Will be set after storage
+		SchemaID:    schemaID,
+		OwnerDID:    req.OwnerDID,
+		UserData:    finalMetadata,
+		Permissions: req.Permissions,
+		Content:     content,
+		ContentType: req.ContentType,
+	}
+	
+	// Step 8: Store content in underlying storage
+	contentReader := strings.NewReader(string(content))
+	contentCID, err := sis.storage.Store(ctx, contentReader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to store content: %w", err)
+	}
+	
+	// Step 9: Update metadata with content hash and create metadata container
+	metadataReq.ContentHash = string(contentCID)
+	metadataContainer, err := sis.schemaService.CreateMetadata(ctx, metadataReq)
+	if err != nil {
+		// Storage succeeded but metadata creation failed - this is recoverable
+		sis.logger.Warn().Err(err).Str("cid", string(contentCID)).Msg("Content stored but metadata creation failed")
+		
+		// Create minimal metadata container
+		metadataContainer = &schema.MetadataContainer{
+			ContentHash:       string(contentCID),
+			SchemaID:          schemaID,
+			OwnerDID:          req.OwnerDID,
+			Data:              finalMetadata,
+			Permissions:       req.Permissions,
+			QualityScore:      0.5, // Default score
+			CompletenessScore: 0.3, // Default score
+			AutoExtracted:     autoExtracted,
+		}
+	}
+	
+	// Step 10: Quality control checks
+	if err := sis.validateQuality(metadataContainer); err != nil {
+		// Quality check failed - could delete content or warn user
+		sis.logger.Warn().Err(err).Float64("quality", metadataContainer.QualityScore).Msg("Quality check failed")
+		if sis.config.RequireSchemaForAllFiles {
+			// Delete the stored content and return error
+			sis.storage.Delete(ctx, contentCID)
+			return nil, fmt.Errorf("content rejected due to insufficient metadata quality: %w", err)
+		}
+	}
+	
+	// Step 11: Get storage info for response
+	storageInfo, err := sis.storage.GetContentInfo(ctx, contentCID)
+	if err != nil {
+		sis.logger.Warn().Err(err).Msg("Failed to get content info")
+	}
+	
+	// Convert uint64 to int64 for response
+	var size int64
+	if storageInfo.Size > 0 {
+		size = int64(storageInfo.Size)
+	}
+	
+	// Step 12: Return comprehensive result
+	result := &SchemaAwareStoreResult{
+		ContentCID:        contentCID,
+		Size:              size,
+		MetadataContainer: metadataContainer,
+		SchemaUsed:        schemaID,
+		QualityScore:      metadataContainer.QualityScore,
+		CompletenessScore: metadataContainer.CompletenessScore,
+	}
+	
+	sis.logger.Info().
+		Str("cid", string(contentCID)).
+		Str("schema", string(schemaID)).
+		Float64("quality", result.QualityScore).
+		Msg("Schema-integrated storage completed")
+	
+	return result, nil
+}
+
+// RetrieveWithMetadata retrieves content along with its metadata
+func (sis *SchemaIntegratedService) RetrieveWithMetadata(ctx context.Context, contentCID ContentCID) (*SchemaAwareRetrieveResult, error) {
+	// Retrieve content from underlying storage
+	content, err := sis.storage.Retrieve(ctx, contentCID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve content: %w", err)
+	}
+	
+	// Load associated metadata using GetMetadata method
+	metadataContainer, err := sis.schemaService.GetMetadata(ctx, string(contentCID))
+	if err != nil {
+		sis.logger.Warn().Err(err).Str("cid", string(contentCID)).Msg("Content found but metadata missing")
+		// Return content without metadata for backward compatibility
+		return &SchemaAwareRetrieveResult{
+			Content:     content,
+			Metadata:    nil,
+			ContentType: "application/octet-stream", // Unknown type
+			Size:        0,
+			SchemaID:    "",
+		}, nil
+	}
+	
+	// Get content info
+	contentInfo, err := sis.storage.GetContentInfo(ctx, contentCID)
+	var size int64
+	if err == nil {
+		size = int64(contentInfo.Size) // Convert uint64 to int64
+	}
+	
+	return &SchemaAwareRetrieveResult{
+		Content:     content,
+		Metadata:    metadataContainer,
+		ContentType: sis.extractContentType(metadataContainer),
+		Size:        size,
+		SchemaID:    metadataContainer.SchemaID,
+	}, nil
+}
+
+// Helper methods
+
+func (sis *SchemaIntegratedService) detectContentType(filename string, content []byte) string {
+	// Try to detect from filename extension
+	if filename != "" {
+		ext := strings.ToLower(filepath.Ext(filename))
+		if mimeType := mime.TypeByExtension(ext); mimeType != "" {
+			return mimeType
+		}
+	}
+	
+	// Try to detect from content (basic detection)
+	if len(content) > 0 {
+		// Basic magic number detection
+		switch {
+		case len(content) >= 4 && string(content[:4]) == "\x89PNG":
+			return "image/png"
+		case len(content) >= 3 && string(content[:3]) == "\xff\xd8\xff":
+			return "image/jpeg"
+		case len(content) >= 12 && string(content[4:12]) == "ftypmp4":
+			return "video/mp4"
+		case len(content) >= 4 && string(content[:4]) == "Rar!":
+			return "application/rar"
+		}
+	}
+	
+	return "application/octet-stream" // Default fallback
+}
+
+func (sis *SchemaIntegratedService) requiresSchema(contentType string) bool {
+	for _, required := range sis.config.RequiredContentTypes {
+		if sis.matchesContentType(contentType, required) {
+			return true
+		}
+	}
+	return sis.config.RequireSchemaForAllFiles
+}
+
+func (sis *SchemaIntegratedService) matchesContentType(contentType, pattern string) bool {
+	if strings.HasSuffix(pattern, "*") {
+		prefix := strings.TrimSuffix(pattern, "*")
+		return strings.HasPrefix(contentType, prefix)
+	}
+	return contentType == pattern
+}
+
+func (sis *SchemaIntegratedService) validateQuality(metadata *schema.MetadataContainer) error {
+	if metadata.QualityScore < sis.config.MinQualityScore {
+		return fmt.Errorf("quality score %.2f below minimum %.2f", metadata.QualityScore, sis.config.MinQualityScore)
+	}
+	if metadata.CompletenessScore < sis.config.MinCompletenessScore {
+		return fmt.Errorf("completeness score %.2f below minimum %.2f", metadata.CompletenessScore, sis.config.MinCompletenessScore)
+	}
+	return nil
+}
+
+
+func (sis *SchemaIntegratedService) extractContentType(metadata *schema.MetadataContainer) string {
+	if contentType, exists := metadata.Data["content_type"]; exists {
+		if ct, ok := contentType.(string); ok {
+			return ct
+		}
+	}
+	return "application/octet-stream"
+}
+
+// Helper methods for schema suggestion and metadata extraction
+
+func (sis *SchemaIntegratedService) suggestSchemaFromContentType(contentType string) schema.SchemaID {
+	// Basic content type to schema mapping
+	switch {
+	case strings.HasPrefix(contentType, "image/"):
+		return schema.SchemaID("image/basic/v1")
+	case strings.HasPrefix(contentType, "video/"):
+		return schema.SchemaID("video/basic/v1")
+	case strings.HasPrefix(contentType, "audio/"):
+		return schema.SchemaID("audio/basic/v1")
+	case strings.HasPrefix(contentType, "text/"):
+		return schema.SchemaID("document/text/v1")
+	case contentType == "application/pdf":
+		return schema.SchemaID("document/pdf/v1")
+	case strings.HasPrefix(contentType, "application/"):
+		return schema.SchemaID("application/binary/v1")
+	default:
+		return schema.SchemaID("generic/v1")
+	}
+}
+
+func (sis *SchemaIntegratedService) extractBasicMetadata(contentType string, content []byte) map[string]interface{} {
+	metadata := make(map[string]interface{})
+	
+	// Always include basic information
+	metadata["content_type"] = contentType
+	metadata["size"] = len(content)
+	metadata["content_hash"] = fmt.Sprintf("%x", content[:min(len(content), 32)]) // First 32 bytes as hex
+	
+	// Content-type specific extraction
+	switch {
+	case strings.HasPrefix(contentType, "image/"):
+		metadata["media_type"] = "image"
+		metadata["category"] = "visual"
+		// Could add image dimension detection here
+		
+	case strings.HasPrefix(contentType, "video/"):
+		metadata["media_type"] = "video"
+		metadata["category"] = "visual"
+		// Could add video metadata extraction here
+		
+	case strings.HasPrefix(contentType, "audio/"):
+		metadata["media_type"] = "audio"
+		metadata["category"] = "audio"
+		// Could add audio metadata extraction here
+		
+	case strings.HasPrefix(contentType, "text/"):
+		metadata["media_type"] = "text"
+		metadata["category"] = "document"
+		if len(content) < 10000 { // Small text files
+			metadata["word_count"] = len(strings.Fields(string(content)))
+		}
+		
+	default:
+		metadata["media_type"] = "binary"
+		metadata["category"] = "data"
+	}
+	
+	return metadata
+}
+
+func (sis *SchemaIntegratedService) extractMetadataFromFilename(filename string) map[string]interface{} {
+	metadata := make(map[string]interface{})
+	
+	// Extract basic filename information
+	metadata["original_filename"] = filename
+	
+	// Extract file extension
+	if ext := filepath.Ext(filename); ext != "" {
+		metadata["file_extension"] = strings.ToLower(ext[1:]) // Remove the dot
+	}
+	
+	// Extract base name without extension
+	baseName := strings.TrimSuffix(filename, filepath.Ext(filename))
+	metadata["base_name"] = baseName
+	
+	// Try to extract semantic information from filename
+	if strings.Contains(strings.ToLower(baseName), "screenshot") {
+		metadata["content_hint"] = "screenshot"
+	} else if strings.Contains(strings.ToLower(baseName), "photo") {
+		metadata["content_hint"] = "photo"
+	} else if strings.Contains(strings.ToLower(baseName), "document") {
+		metadata["content_hint"] = "document"
+	}
+	
+	// Extract date from filename if present (basic pattern matching)
+	if matches := regexp.MustCompile(`(\d{4}[-_](\d{2})[-_](\d{2}))`).FindStringSubmatch(baseName); len(matches) > 0 {
+		metadata["date_hint"] = matches[1]
+	}
+	
+	return metadata
+}
+

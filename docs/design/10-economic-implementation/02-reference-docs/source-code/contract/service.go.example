@@ -1,0 +1,409 @@
+package contract
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/blackholenetwork/blackhole/pkg/core"
+	"github.com/rs/zerolog"
+)
+
+// Service represents the contract management service
+type Service struct {
+	*core.BaseService
+	mu               sync.RWMutex
+	logger           zerolog.Logger
+	config           *Config
+	
+	// Core components
+	storage          SubscriptionStorage
+	paymentProcessor PaymentProcessor
+	notifier         NotificationService
+	
+	// Integration points
+	incentiveNotifier IncentiveNotifier
+	authNotifier     AuthorizationNotifier
+	
+	// Background workers
+	started          bool
+	stopChan         chan struct{}
+	wg               sync.WaitGroup
+	
+	// Internal state
+	stats            *ContractStats
+	lastStatsUpdate  time.Time
+}
+
+// SubscriptionStorage interface defines storage operations for subscriptions
+type SubscriptionStorage interface {
+	// Subscription operations
+	CreateSubscription(ctx context.Context, subscription *Subscription) error
+	GetSubscription(ctx context.Context, id string) (*Subscription, error)
+	GetSubscriptionByUserID(ctx context.Context, userID string) (*Subscription, error)
+	UpdateSubscription(ctx context.Context, subscription *Subscription) error
+	DeleteSubscription(ctx context.Context, id string) error
+	ListSubscriptions(ctx context.Context, filters SubscriptionFilters) ([]*Subscription, error)
+	
+	// Payment operations
+	CreatePayment(ctx context.Context, payment *Payment) error
+	GetPayment(ctx context.Context, id string) (*Payment, error)
+	UpdatePayment(ctx context.Context, payment *Payment) error
+	ListPayments(ctx context.Context, filters PaymentFilters) ([]*Payment, error)
+	
+	// Payment method operations
+	CreatePaymentMethod(ctx context.Context, method *PaymentMethod) error
+	GetPaymentMethod(ctx context.Context, id string) (*PaymentMethod, error)
+	ListPaymentMethods(ctx context.Context, userID string) ([]*PaymentMethod, error)
+	UpdatePaymentMethod(ctx context.Context, method *PaymentMethod) error
+	DeletePaymentMethod(ctx context.Context, id string) error
+	
+	// Invoice operations
+	CreateInvoice(ctx context.Context, invoice *Invoice) error
+	GetInvoice(ctx context.Context, id string) (*Invoice, error)
+	ListInvoices(ctx context.Context, filters InvoiceFilters) ([]*Invoice, error)
+	UpdateInvoice(ctx context.Context, invoice *Invoice) error
+	
+	// Change tracking
+	CreateSubscriptionChange(ctx context.Context, change *SubscriptionChange) error
+	ListSubscriptionChanges(ctx context.Context, subscriptionID string) ([]*SubscriptionChange, error)
+	
+	// Usage tracking
+	CreateUsageRecord(ctx context.Context, record *UsageRecord) error
+	GetUsageRecords(ctx context.Context, subscriptionID string, start, end time.Time) ([]*UsageRecord, error)
+	
+	// Statistics
+	GetStats(ctx context.Context) (*ContractStats, error)
+}
+
+// NotificationService interface defines notification operations
+type NotificationService interface {
+	SendPaymentSuccessNotification(ctx context.Context, subscription *Subscription, payment *Payment) error
+	SendPaymentFailureNotification(ctx context.Context, subscription *Subscription, payment *Payment) error
+	SendExpirationWarning(ctx context.Context, subscription *Subscription, daysUntilExpiration int) error
+	SendRenewalReminder(ctx context.Context, subscription *Subscription, daysUntilRenewal int) error
+	SendSubscriptionCancelledNotification(ctx context.Context, subscription *Subscription) error
+}
+
+// IncentiveNotifier interface for notifying incentive service of subscription changes
+type IncentiveNotifier interface {
+	OnSubscriptionCreated(ctx context.Context, subscription *Subscription) error
+	OnSubscriptionUpdated(ctx context.Context, subscription *Subscription) error
+	OnSubscriptionCancelled(ctx context.Context, subscription *Subscription) error
+	OnPaymentCompleted(ctx context.Context, subscription *Subscription, payment *Payment) error
+}
+
+// AuthorizationNotifier interface for notifying authorization service of subscription changes
+type AuthorizationNotifier interface {
+	OnSubscriptionStatusChanged(ctx context.Context, userID string, subscription *Subscription) error
+	OnSubscriptionTierChanged(ctx context.Context, userID string, oldTier, newTier SubscriptionTier) error
+}
+
+// Filter types for querying
+type SubscriptionFilters struct {
+	UserID    string
+	Status    SubscriptionStatus
+	Tier      SubscriptionTier
+	StartDate *time.Time
+	EndDate   *time.Time
+	Limit     int
+	Offset    int
+}
+
+type PaymentFilters struct {
+	SubscriptionID string
+	UserID         string
+	Status         PaymentStatus
+	StartDate      *time.Time
+	EndDate        *time.Time
+	Limit          int
+	Offset         int
+}
+
+type InvoiceFilters struct {
+	SubscriptionID string
+	UserID         string
+	Status         PaymentStatus
+	StartDate      *time.Time
+	EndDate        *time.Time
+	Limit          int
+	Offset         int
+}
+
+// NewService creates a new contract service
+func NewService(config *Config, storage SubscriptionStorage, paymentProcessor PaymentProcessor, logger zerolog.Logger) *Service {
+	return &Service{
+		BaseService:      core.NewBaseService("contract"),
+		logger:           logger.With().Str("component", "contract_service").Logger(),
+		config:           config,
+		storage:          storage,
+		paymentProcessor: paymentProcessor,
+		stopChan:         make(chan struct{}),
+		stats:            &ContractStats{},
+		lastStatsUpdate:  time.Now(),
+	}
+}
+
+// Start starts the contract service
+func (s *Service) Start(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	
+	if s.started {
+		return fmt.Errorf("contract service already started")
+	}
+	
+	if !s.config.Enabled {
+		s.logger.Info().Msg("Contract service disabled in configuration")
+		return nil
+	}
+	
+	s.logger.Info().Msg("Starting contract service")
+	
+	// Validate configuration
+	if err := s.config.Validate(); err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
+	}
+	
+	// Initialize payment processor
+	if err := s.paymentProcessor.Initialize(s.config.PaymentProcessor); err != nil {
+		return fmt.Errorf("failed to initialize payment processor: %w", err)
+	}
+	
+	// Start background workers
+	s.wg.Add(1)
+	go s.billingWorker(ctx)
+	
+	s.wg.Add(1)
+	go s.notificationWorker(ctx)
+	
+	s.wg.Add(1)
+	go s.statsWorker(ctx)
+	
+	s.started = true
+	
+	s.logger.Info().
+		Str("payment_provider", s.paymentProcessor.GetProviderName()).
+		Dur("billing_cycle", s.config.DefaultBillingCycle).
+		Dur("grace_period", s.config.GracePeriod).
+		Msg("Contract service started")
+	
+	// Mark service as healthy
+	s.SetHealthy()
+	
+	return nil
+}
+
+// Stop stops the contract service
+func (s *Service) Stop(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	
+	if !s.started {
+		return nil
+	}
+	
+	s.logger.Info().Msg("Stopping contract service")
+	
+	close(s.stopChan)
+	s.wg.Wait()
+	
+	s.started = false
+	
+	s.logger.Info().Msg("Contract service stopped")
+	return nil
+}
+
+// SetIncentiveNotifier sets the incentive service notifier
+func (s *Service) SetIncentiveNotifier(notifier IncentiveNotifier) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	
+	s.incentiveNotifier = notifier
+	s.logger.Info().Msg("Incentive notifier registered")
+}
+
+// SetAuthorizationNotifier sets the authorization service notifier
+func (s *Service) SetAuthorizationNotifier(notifier AuthorizationNotifier) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	
+	s.authNotifier = notifier
+	s.logger.Info().Msg("Authorization notifier registered")
+}
+
+// SetNotificationService sets the notification service
+func (s *Service) SetNotificationService(notifier NotificationService) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	
+	s.notifier = notifier
+	s.logger.Info().Msg("Notification service registered")
+}
+
+// CreateSubscription creates a new subscription
+func (s *Service) CreateSubscription(ctx context.Context, req SubscriptionRequest) (*Subscription, error) {
+	if !s.started || !s.config.Enabled {
+		return nil, fmt.Errorf("contract service not running")
+	}
+	
+	// Check if user already has an active subscription
+	if s.config.Security.MaxSubscriptionsPerUser > 0 {
+		existing, _ := s.storage.GetSubscriptionByUserID(ctx, req.UserID)
+		if existing != nil && existing.Status == SubscriptionActive {
+			return nil, fmt.Errorf("user already has an active subscription")
+		}
+	}
+	
+	// Get tier configuration
+	tierConfig, err := s.getTierConfig(req.Tier, req.CustomAmount)
+	if err != nil {
+		return nil, fmt.Errorf("invalid tier configuration: %w", err)
+	}
+	
+	// Create subscription
+	subscription := &Subscription{
+		ID:                generateSubscriptionID(),
+		UserID:            req.UserID,
+		UserDID:           req.UserDID,
+		Tier:              req.Tier,
+		Status:            SubscriptionPending,
+		MonthlyAmount:     tierConfig.MonthlyPrice,
+		Currency:          s.config.PaymentProcessor.Currency,
+		BillingCycle:      s.config.DefaultBillingCycle,
+		StartDate:         time.Now(),
+		PaymentMethodID:   req.PaymentMethodID,
+		ResourceLimits:    tierConfig.ResourceLimits,
+		APIRateLimits:     tierConfig.APIRateLimits,
+		Features:          tierConfig.Features,
+		Metadata:          req.Metadata,
+		CreatedAt:         time.Now(),
+		UpdatedAt:         time.Now(),
+	}
+	
+	// Set billing cycle if specified
+	if req.BillingCycle != nil {
+		subscription.BillingCycle = *req.BillingCycle
+	}
+	
+	// Calculate end date and next billing date
+	subscription.EndDate = subscription.StartDate.Add(subscription.BillingCycle)
+	subscription.NextBillingDate = subscription.EndDate
+	
+	// Handle trial period
+	if req.StartTrial && s.config.Security.AllowTrialPeriods {
+		subscription.IsTrialPeriod = true
+		trialEndDate := subscription.StartDate.Add(s.config.Security.TrialDuration)
+		subscription.TrialEndDate = &trialEndDate
+		subscription.Status = SubscriptionTrial
+		subscription.NextBillingDate = trialEndDate
+	}
+	
+	// Store subscription
+	if err := s.storage.CreateSubscription(ctx, subscription); err != nil {
+		return nil, fmt.Errorf("failed to create subscription: %w", err)
+	}
+	
+	// Create initial payment for non-trial subscriptions
+	if !subscription.IsTrialPeriod && subscription.MonthlyAmount > 0 {
+		payment := &Payment{
+			ID:                 generatePaymentID(),
+			SubscriptionID:     subscription.ID,
+			UserID:             subscription.UserID,
+			Amount:             subscription.MonthlyAmount,
+			Currency:           subscription.Currency,
+			Status:             PaymentPending,
+			PaymentProvider:    s.paymentProcessor.GetProviderName(),
+			PaymentMethodID:    subscription.PaymentMethodID,
+			BillingPeriodStart: subscription.StartDate,
+			BillingPeriodEnd:   subscription.EndDate,
+			AttemptCount:       0,
+			Metadata:           make(map[string]string),
+			CreatedAt:          time.Now(),
+			UpdatedAt:          time.Now(),
+		}
+		
+		// Process initial payment
+		if err := s.processPayment(ctx, payment); err != nil {
+			s.logger.Error().
+				Err(err).
+				Str("subscription_id", subscription.ID).
+				Msg("Failed to process initial payment")
+			
+			subscription.Status = SubscriptionSuspended
+			s.storage.UpdateSubscription(ctx, subscription)
+			return subscription, fmt.Errorf("failed to process initial payment: %w", err)
+		}
+		
+		subscription.Status = SubscriptionActive
+		subscription.LastPaymentDate = &payment.CreatedAt
+		subscription.LastPaymentAmount = payment.Amount
+		s.storage.UpdateSubscription(ctx, subscription)
+	} else {
+		subscription.Status = SubscriptionActive
+		s.storage.UpdateSubscription(ctx, subscription)
+	}
+	
+	// Notify other services
+	if s.incentiveNotifier != nil {
+		go s.incentiveNotifier.OnSubscriptionCreated(ctx, subscription)
+	}
+	
+	if s.authNotifier != nil {
+		go s.authNotifier.OnSubscriptionStatusChanged(ctx, subscription.UserID, subscription)
+	}
+	
+	s.logger.Info().
+		Str("subscription_id", subscription.ID).
+		Str("user_id", subscription.UserID).
+		Str("tier", string(subscription.Tier)).
+		Float64("amount", subscription.MonthlyAmount).
+		Bool("trial", subscription.IsTrialPeriod).
+		Msg("Created subscription")
+	
+	return subscription, nil
+}
+
+// Helper methods and background workers will be implemented in the next part...
+
+// generateSubscriptionID generates a unique subscription ID
+func generateSubscriptionID() string {
+	return fmt.Sprintf("sub_%d", time.Now().UnixNano())
+}
+
+// generatePaymentID generates a unique payment ID
+func generatePaymentID() string {
+	return fmt.Sprintf("pay_%d", time.Now().UnixNano())
+}
+
+// getTierConfig returns the configuration for a subscription tier
+func (s *Service) getTierConfig(tier SubscriptionTier, customAmount *float64) (*SubscriptionTierConfig, error) {
+	switch tier {
+	case TierFree:
+		return &s.config.TierPricing.Free, nil
+	case TierNormal:
+		return &s.config.TierPricing.Normal, nil
+	case TierAdvance:
+		return &s.config.TierPricing.Advance, nil
+	case TierUltimate:
+		return &s.config.TierPricing.Ultimate, nil
+	case TierCustom:
+		if !s.config.TierPricing.AllowCustomTiers {
+			return nil, fmt.Errorf("custom tiers not allowed")
+		}
+		if customAmount == nil {
+			return nil, fmt.Errorf("custom amount required for custom tier")
+		}
+		if *customAmount < s.config.TierPricing.MinCustomAmount || *customAmount > s.config.TierPricing.MaxCustomAmount {
+			return nil, fmt.Errorf("custom amount out of range")
+		}
+		
+		// Create custom tier config based on Ultimate tier but with custom price
+		customConfig := s.config.TierPricing.Ultimate
+		customConfig.MonthlyPrice = *customAmount
+		return &customConfig, nil
+	default:
+		return nil, fmt.Errorf("invalid subscription tier: %s", tier)
+	}
+}

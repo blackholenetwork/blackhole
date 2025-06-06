@@ -19,7 +19,7 @@ function SystemMetrics() {
         const response = await axios.get('/api/metrics');
         setMetrics(response.data);
         setLoading(false);
-        
+
         // Add to history for chart
         if (response.data['memory.alloc']) {
           setMemoryHistory(prev => {
@@ -113,14 +113,14 @@ function SystemMetrics() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#333" />
                   <XAxis dataKey="time" stroke="#666" />
                   <YAxis stroke="#666" label={{ value: 'Memory (MB)', angle: -90, position: 'insideLeft' }} />
-                  <Tooltip 
+                  <Tooltip
                     contentStyle={{ backgroundColor: '#1e1e1e', border: '1px solid #333' }}
                     labelStyle={{ color: '#fff' }}
                   />
-                  <Line 
-                    type="monotone" 
-                    dataKey="value" 
-                    stroke="#00bcd4" 
+                  <Line
+                    type="monotone"
+                    dataKey="value"
+                    stroke="#00bcd4"
                     strokeWidth={2}
                     dot={false}
                   />
@@ -144,8 +144,8 @@ function SystemMetrics() {
                       {key}
                     </Typography>
                     <Typography variant="body1">
-                      {typeof metric.value === 'number' 
-                        ? metric.unit === 'bytes' 
+                      {typeof metric.value === 'number'
+                        ? metric.unit === 'bytes'
                           ? formatBytes(metric.value)
                           : `${metric.value} ${metric.unit || ''}`
                         : metric.value

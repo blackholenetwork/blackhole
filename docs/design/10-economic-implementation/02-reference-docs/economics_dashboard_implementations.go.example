@@ -1,0 +1,928 @@
+package webserver
+
+import (
+	"time"
+
+	"github.com/blackholenetwork/blackhole/pkg/economic/incentive"
+	"github.com/gofiber/fiber/v2"
+)
+
+// handleSubscriberDashboard returns subscriber dashboard data
+func (s *server) handleSubscriberDashboard(c *fiber.Ctx) error {
+	userDID := c.Params("did")
+	if userDID == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "User DID is required",
+		})
+	}
+
+	// Get authenticated user from context
+	authenticatedUserID := c.Locals("user_id")
+	if authenticatedUserID == nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": "Authentication required",
+		})
+	}
+
+	// Check if user can access this dashboard (either their own or they have admin rights)
+	if !s.canAccessUserDashboard(c, userDID) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "Access denied to this user's dashboard",
+		})
+	}
+
+	// Get incentive service
+	incentiveService := s.getIncentiveService()
+	if incentiveService == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+			"error": "Incentive service not available",
+		})
+	}
+
+	// Get subscription information
+	subscription, err := incentiveService.GetSubscription(userDID)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error": "Subscription not found",
+		})
+	}
+
+	// Get prorated subscription if using real-time billing
+	proratedSubscriptions := incentiveService.GetProratedSubscriptions()
+	var proratedSub *ProratedSubscription
+	if sub, exists := proratedSubscriptions[userDID]; exists {
+		proratedSub = sub
+	}
+
+	// Get pool amounts for distribution breakdown
+	// poolAmounts := incentiveService.GetPoolAmounts()
+	currentRevenueRate := incentiveService.GetCurrentRevenueRate()
+
+	// Get prorated billing stats
+	// billingStats := incentiveService.GetProratedBillingStats()
+
+	// Build subscriber dashboard
+	dashboard := &SubscriberDashboard{
+		UserID:   userDID,
+		UserType: "subscriber",
+		
+		// Subscription Information
+		SubscriptionTier:     string(subscription.Tier),
+		MonthlyAmount:        subscription.MonthlyAmount,
+		StartDate:            subscription.StartDate,
+		Status:               string(subscription.Status),
+		RevenuePerSecond:     currentRevenueRate,
+		TotalSecondsActive:   0,
+		TotalAmountGenerated: 0,
+		
+		// Current Usage (placeholder - would integrate with actual usage tracking)
+		CurrentUsage: &SubscriberUsageStats{
+			StorageUsed:         0, // TODO: Integrate with storage service
+			BandwidthUsed:       0, // TODO: Integrate with bandwidth service
+			ComputeHours:        0, // TODO: Integrate with compute service
+			ContentConsumed:     0, // TODO: Integrate with content tracking
+			AppsUsed:            0, // TODO: Integrate with app tracking
+			MonthlyStorageOps:   0,
+			MonthlyContentViews: 0,
+			MonthlyAppSessions:  0,
+		},
+		
+		// Revenue Distribution Breakdown
+		DistributionBreakdown: &RevenueDistribution{
+			ContentCreators:         70.0,
+			NetworkOperations:       2.5,
+			AppDevelopers:           2.5,
+			InfrastructureProviders: 25.0,
+			MonthlyAmounts: &RevenueAmounts{
+				Total:                   subscription.MonthlyAmount,
+				ContentCreators:         subscription.MonthlyAmount * 0.70,
+				NetworkOperations:       subscription.MonthlyAmount * 0.025,
+				AppDevelopers:           subscription.MonthlyAmount * 0.025,
+				InfrastructureProviders: subscription.MonthlyAmount * 0.25,
+			},
+		},
+		
+		// Network Stats
+		NetworkStats: s.buildNetworkOverview(incentiveService),
+		
+		LastUpdated: time.Now(),
+	}
+
+	// Add prorated subscription data if available
+	if proratedSub != nil {
+		dashboard.TotalSecondsActive = proratedSub.TotalSecondsActive
+		dashboard.TotalAmountGenerated = proratedSub.TotalAmountGenerated
+		dashboard.RevenuePerSecond = proratedSub.RevenuePerSecond
+	}
+
+	return c.JSON(dashboard)
+}
+
+// handleContentCreatorDashboard returns content creator dashboard data
+func (s *server) handleContentCreatorDashboard(c *fiber.Ctx) error {
+	creatorDID := c.Params("did")
+	if creatorDID == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Creator DID is required",
+		})
+	}
+
+	// Check authentication and access
+	if !s.canAccessUserDashboard(c, creatorDID) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "Access denied to this creator's dashboard",
+		})
+	}
+
+	incentiveService := s.getIncentiveService()
+	if incentiveService == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+			"error": "Incentive service not available",
+		})
+	}
+
+	// Get active creators
+	activeCreators := incentiveService.GetActiveCreators()
+	var creatorEngagement *ContentEngagementRealTime
+	if engagement, exists := activeCreators[creatorDID]; exists {
+		creatorEngagement = engagement
+	}
+
+	// Get creator rewards
+	creatorRewards := incentiveService.GetCreatorRewardsRealTime()
+	totalRewards := creatorRewards[creatorDID]
+
+	// Get content distribution statistics
+	contentStats := incentiveService.GetRealTimeContentStats()
+
+	// Get recent distribution history
+	distributionHistory := incentiveService.GetContentDistributionHistory(10)
+	
+	// Build recent distributions summary
+	var recentDistributions []*ContentDistributionSummary
+	for _, dist := range distributionHistory {
+		if reward, exists := dist.CreatorRewards[creatorDID]; exists {
+			summary := &ContentDistributionSummary{
+				Timestamp:       dist.Timestamp,
+				PoolAmount:      dist.ContentPoolAmount,
+				CreatorReward:   reward,
+				SharePercentage: (reward / dist.ContentPoolAmount) * 100,
+				EngagementValue: 0, // Would need to track individual engagement value
+			}
+			recentDistributions = append(recentDistributions, summary)
+		}
+	}
+
+	// Build dashboard
+	dashboard := &ContentCreatorDashboard{
+		CreatorID: creatorDID,
+		UserType:  "content_creator",
+		
+		// Current Engagement
+		CurrentEngagement: &ContentEngagementStats{
+			VideoWatchTime:       0,
+			AudioListenTime:      0,
+			DocumentReadTime:     0,
+			PhotoViewTime:        0,
+			TotalEngagementValue: 0,
+			QualityMultiplier:    1.0,
+			IsActive:            false,
+		},
+		
+		// Reward Stats
+		RewardStats: &ContentRewardStats{
+			AccumulatedRewards:     totalRewards,
+			TotalRewardsToday:      s.calculateDailyRewards(creatorDID, distributionHistory),
+			TotalRewardsThisWeek:   s.calculateWeeklyRewards(creatorDID, distributionHistory),
+			TotalRewardsThisMonth:  s.calculateMonthlyRewards(creatorDID, distributionHistory),
+			CurrentPoolShare:       s.calculatePoolShare(creatorDID, contentStats.TotalEngagementValue),
+			AverageRewardPerSecond: s.calculateAverageRewardPerSecond(recentDistributions),
+		},
+		
+		// Content Performance (placeholder)
+		ContentPerformance: &ContentPerformanceStats{
+			TotalContentPieces:    0, // TODO: Integrate with content service
+			ActiveContentPieces:   0,
+			TopContentType:        "video",
+			AverageEngagementTime: 0,
+			TotalViews:            0,
+			QualityScore:          1.0,
+		},
+		
+		RecentDistributions: recentDistributions,
+		LastUpdated:         time.Now(),
+	}
+
+	// Add current engagement data if available
+	if creatorEngagement != nil {
+		dashboard.CurrentEngagement = &ContentEngagementStats{
+			VideoWatchTime:       creatorEngagement.VideoWatchTimePerSecond,
+			AudioListenTime:      creatorEngagement.AudioListenTimePerSecond,
+			DocumentReadTime:     creatorEngagement.DocumentReadTimePerSecond,
+			PhotoViewTime:        creatorEngagement.PhotoViewTimePerSecond,
+			TotalEngagementValue: creatorEngagement.TotalEngagementValue,
+			QualityMultiplier:    creatorEngagement.QualityMultiplier,
+			IsActive:            creatorEngagement.IsActive,
+		}
+	}
+
+	return c.JSON(dashboard)
+}
+
+// handleAppDeveloperDashboard returns app developer dashboard data
+func (s *server) handleAppDeveloperDashboard(c *fiber.Ctx) error {
+	developerDID := c.Params("did")
+	if developerDID == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Developer DID is required",
+		})
+	}
+
+	// Check authentication and access
+	if !s.canAccessUserDashboard(c, developerDID) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "Access denied to this developer's dashboard",
+		})
+	}
+
+	incentiveService := s.getIncentiveService()
+	if incentiveService == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+			"error": "Incentive service not available",
+		})
+	}
+
+	// Get active apps
+	activeApps := incentiveService.GetActiveApps()
+	var developerUsage *AppUsageRealTime
+	// Find app usage for this developer
+	for _, app := range activeApps {
+		if app.DeveloperID == developerDID {
+			developerUsage = app
+			break
+		}
+	}
+
+	// Get developer rewards
+	developerRewards := incentiveService.GetAppDeveloperRewardsRealTime()
+	totalRewards := developerRewards[developerDID]
+
+	// Get app developer statistics
+	appDevStats := incentiveService.GetRealTimeAppDeveloperStats()
+
+	// Get recent distribution history
+	distributionHistory := incentiveService.GetAppDeveloperDistributionHistory(10)
+	
+	// Build recent distributions summary
+	var recentDistributions []*AppDeveloperDistributionSummary
+	for _, dist := range distributionHistory {
+		if reward, exists := dist.DeveloperRewards[developerDID]; exists {
+			summary := &AppDeveloperDistributionSummary{
+				Timestamp:       dist.Timestamp,
+				PoolAmount:      dist.AppDeveloperAmount,
+				DeveloperReward: reward,
+				SharePercentage: (reward / dist.AppDeveloperAmount) * 100,
+				UsageValue:      0, // Would need to track individual usage value
+			}
+			recentDistributions = append(recentDistributions, summary)
+		}
+	}
+
+	// Build dashboard
+	dashboard := &AppDeveloperDashboard{
+		DeveloperID: developerDID,
+		UserType:    "app_developer",
+		
+		// Current Usage
+		CurrentUsage: &AppUsageStats{
+			ActiveUserTime:    0,
+			UserRetentionRate: 0.8,
+			AppRating:         4.0,
+			QualityMultiplier: 1.0,
+			TotalUsageValue:   0,
+			IsActive:          false,
+		},
+		
+		// Reward Stats
+		RewardStats: &AppDeveloperRewardStats{
+			AccumulatedRewards:     totalRewards,
+			TotalRewardsToday:      s.calculateDailyAppRewards(developerDID, distributionHistory),
+			TotalRewardsThisWeek:   s.calculateWeeklyAppRewards(developerDID, distributionHistory),
+			TotalRewardsThisMonth:  s.calculateMonthlyAppRewards(developerDID, distributionHistory),
+			CurrentPoolShare:       s.calculateAppPoolShare(developerDID, appDevStats.TotalUsageValue),
+			AverageRewardPerSecond: s.calculateAverageAppRewardPerSecond(recentDistributions),
+		},
+		
+		// App Performance
+		AppPerformance: &AppPerformanceStats{
+			TotalApps:          s.countDeveloperApps(developerDID, activeApps),
+			ActiveApps:         s.countActiveDeveloperApps(developerDID, activeApps),
+			TotalUsers:         0, // TODO: Integrate with app service
+			AverageSessionTime: 0,
+			TotalSessions:      0,
+			AverageRating:      4.0,
+			AverageRetention:   0.8,
+		},
+		
+		RecentDistributions: recentDistributions,
+		LastUpdated:         time.Now(),
+	}
+
+	// Add current usage data if available
+	if developerUsage != nil {
+		dashboard.CurrentUsage = &AppUsageStats{
+			ActiveUserTime:    developerUsage.ActiveUserTimePerSecond,
+			UserRetentionRate: developerUsage.UserRetentionRate,
+			AppRating:         developerUsage.AppRating,
+			QualityMultiplier: developerUsage.QualityMultiplier,
+			TotalUsageValue:   developerUsage.TotalUsageValue,
+			IsActive:          developerUsage.IsActive,
+		}
+	}
+
+	return c.JSON(dashboard)
+}
+
+// handleProviderDashboard returns infrastructure provider dashboard data
+func (s *server) handleProviderDashboard(c *fiber.Ctx) error {
+	providerDID := c.Params("did")
+	if providerDID == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Provider DID is required",
+		})
+	}
+
+	// Check authentication and access
+	if !s.canAccessUserDashboard(c, providerDID) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "Access denied to this provider's dashboard",
+		})
+	}
+
+	incentiveService := s.getIncentiveService()
+	if incentiveService == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+			"error": "Incentive service not available",
+		})
+	}
+
+	// Get active providers
+	activeProviders := incentiveService.GetActiveProviders()
+	var providerUsage *RealTimeProviderUsage
+	if usage, exists := activeProviders[providerDID]; exists {
+		providerUsage = usage
+	}
+
+	// Get provider rewards
+	providerRewards := incentiveService.GetProviderRewardsRealTime()
+	totalRewards := providerRewards[providerDID]
+
+	// Get infrastructure statistics
+	infraStats := incentiveService.GetRealTimeInfrastructureStats()
+
+	// Get recent distribution history
+	distributionHistory := incentiveService.GetDistributionHistory(10)
+	
+	// Build recent distributions summary
+	var recentDistributions []*ProviderDistributionSummary
+	for _, dist := range distributionHistory {
+		if reward, exists := dist.ProviderRewards[providerDID]; exists {
+			summary := &ProviderDistributionSummary{
+				Timestamp:       dist.Timestamp,
+				PoolAmount:      dist.InfrastructureAmount,
+				ProviderReward:  reward,
+				SharePercentage: (reward / dist.InfrastructureAmount) * 100,
+				MarketValue:     0, // Would need to track individual market value
+			}
+			recentDistributions = append(recentDistributions, summary)
+		}
+	}
+
+	// Build dashboard
+	dashboard := &ProviderDashboard{
+		ProviderID: providerDID,
+		UserType:   "provider",
+		
+		// Current Usage
+		CurrentUsage: &ProviderUsageStats{
+			StorageGBHours:       0,
+			BandwidthGBPerSecond: 0,
+			CPUHours:             0,
+			GPUHours:             0,
+			MemoryGBHours:        0,
+			MarketValuePerSecond: 0,
+			IsActive:             false,
+		},
+		
+		// Reward Stats
+		RewardStats: &ProviderRewardStats{
+			AccumulatedRewards:     totalRewards,
+			TotalRewardsToday:      s.calculateDailyProviderRewards(providerDID, distributionHistory),
+			TotalRewardsThisWeek:   s.calculateWeeklyProviderRewards(providerDID, distributionHistory),
+			TotalRewardsThisMonth:  s.calculateMonthlyProviderRewards(providerDID, distributionHistory),
+			CurrentPoolShare:       s.calculateProviderPoolShare(providerDID, infraStats.TotalMarketValuePerSecond),
+			AverageRewardPerSecond: s.calculateAverageProviderRewardPerSecond(recentDistributions),
+		},
+		
+		// Resource Performance (placeholder)
+		ResourcePerformance: &ResourcePerformanceStats{
+			TotalStorageProvided:   0, // TODO: Integrate with storage service
+			TotalBandwidthProvided: 0, // TODO: Integrate with bandwidth service
+			TotalComputeHours:      0, // TODO: Integrate with compute service
+			UptimePercentage:       99.5,
+			TotalOperations:        0,
+			SuccessRate:            99.8,
+		},
+		
+		RecentDistributions: recentDistributions,
+		LastUpdated:         time.Now(),
+	}
+
+	// Add current usage data if available
+	if providerUsage != nil {
+		dashboard.CurrentUsage = &ProviderUsageStats{
+			StorageGBHours:       providerUsage.StorageGBHoursPerSecond,
+			BandwidthGBPerSecond: providerUsage.BandwidthGBPerSecond,
+			CPUHours:             providerUsage.CPUHoursPerSecond,
+			GPUHours:             providerUsage.GPUHoursPerSecond,
+			MemoryGBHours:        providerUsage.MemoryGBHoursPerSecond,
+			MarketValuePerSecond: providerUsage.MarketValuePerSecond,
+			IsActive:             providerUsage.IsActive,
+		}
+	}
+
+	return c.JSON(dashboard)
+}
+
+// handleFreeUserDashboard returns free user dashboard data
+func (s *server) handleFreeUserDashboard(c *fiber.Ctx) error {
+	userDID := c.Params("did")
+	if userDID == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "User DID is required",
+		})
+	}
+
+	// Check authentication and access
+	if !s.canAccessUserDashboard(c, userDID) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "Access denied to this user's dashboard",
+		})
+	}
+
+	// Build free user dashboard
+	dashboard := &FreeUserDashboard{
+		UserID:   userDID,
+		UserType: "free_user",
+		
+		// Current Usage (placeholder - would integrate with actual usage tracking)
+		CurrentUsage: &FreeUserUsageStats{
+			StorageUsed:         0, // TODO: Integrate with storage service
+			BandwidthUsed:       0, // TODO: Integrate with bandwidth service
+			ComputeHours:        0, // TODO: Integrate with compute service
+			ContentConsumed:     0, // TODO: Integrate with content tracking
+			AppsUsed:            0, // TODO: Integrate with app tracking
+			MonthlyOperations:   0,
+			MonthlyContentViews: 0,
+			MonthlyAppSessions:  0,
+		},
+		
+		// Quota Information
+		QuotaInformation: &QuotaInfo{
+			StorageQuota:         1024 * 1024 * 1024,     // 1GB
+			BandwidthQuota:       10 * 1024 * 1024 * 1024, // 10GB
+			ComputeQuota:         1.0,                     // 1 hour
+			StorageUsedPercent:   0,
+			BandwidthUsedPercent: 0,
+			ComputeUsedPercent:   0,
+			ResetDate:            time.Now().AddDate(0, 1, 0), // Next month
+		},
+		
+		// Upgrade Options
+		UpgradeOptions: &UpgradeOptions{
+			AvailableTiers: []SubscriptionTierInfo{
+				{
+					TierName:       "Normal",
+					MonthlyPrice:   25.0,
+					StorageLimit:   "100GB",
+					BandwidthLimit: "1TB",
+					ComputeLimit:   "10 hours",
+					Features:       []string{"Basic support", "Standard bandwidth", "Content access"},
+				},
+				{
+					TierName:       "Advance",
+					MonthlyPrice:   50.0,
+					StorageLimit:   "500GB",
+					BandwidthLimit: "5TB",
+					ComputeLimit:   "50 hours",
+					Features:       []string{"Priority support", "High bandwidth", "Premium content", "App development tools"},
+				},
+				{
+					TierName:       "Ultimate",
+					MonthlyPrice:   100.0,
+					StorageLimit:   "Unlimited",
+					BandwidthLimit: "Unlimited",
+					ComputeLimit:   "Unlimited",
+					Features:       []string{"24/7 support", "Unlimited resources", "Enterprise features", "Full API access"},
+				},
+			},
+			RecommendedTier:  "Normal",
+			EstimatedSavings: 0,
+		},
+		
+		LastUpdated: time.Now(),
+	}
+
+	return c.JSON(dashboard)
+}
+
+// handleNetworkOverview returns network overview data
+func (s *server) handleNetworkOverview(c *fiber.Ctx) error {
+	incentiveService := s.getIncentiveService()
+	if incentiveService == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+			"error": "Incentive service not available",
+		})
+	}
+
+	overview := s.buildNetworkOverview(incentiveService)
+	return c.JSON(overview)
+}
+
+// Helper function to get incentive service
+func (s *server) getIncentiveService() *incentive.Service {
+	// Check if orchestrator is available and get incentive service
+	if s.orchestrator != nil {
+		// Try to get the incentive service from orchestrator
+		// In a real implementation, this would be:
+		// if orchestrator, ok := s.orchestrator.(core.ServiceOrchestrator); ok {
+		//     return orchestrator.GetService("incentive").(*incentive.Service)
+		// }
+	}
+	
+	// TODO: For now, return nil to indicate service not available
+	// This should be properly injected during server initialization
+	s.logger.Debug().Msg("Incentive service not available - orchestrator integration needed")
+	return nil
+}
+
+// Helper function to build network overview
+func (s *server) buildNetworkOverview(incentiveService *incentive.Service) *NetworkOverview {
+	if incentiveService == nil {
+		return &NetworkOverview{
+			TotalActiveUsers:     0,
+			TotalSubscribers:     0,
+			TotalProviders:       0,
+			TotalContentCreators: 0,
+			TotalAppDevelopers:   0,
+			CurrentRevenueRate:   0,
+			TotalDistributedToday: 0,
+			ActiveDistribution: &ActiveDistributionBreakdown{
+				ContentPool:        0,
+				NetworkOpsPool:     0,
+				AppDeveloperPool:   0,
+				InfrastructurePool: 0,
+				UnusedFunds:        0,
+			},
+		}
+	}
+
+	// Get pool amounts
+	poolAmounts := incentiveService.GetPoolAmounts()
+	currentRevenueRate := incentiveService.GetCurrentRevenueRate()
+	
+	// Get statistics
+	contentStats := incentiveService.GetRealTimeContentStats()
+	appDevStats := incentiveService.GetRealTimeAppDeveloperStats()
+	infraStats := incentiveService.GetRealTimeInfrastructureStats()
+
+	return &NetworkOverview{
+		TotalActiveUsers:     0, // TODO: Calculate from all services
+		TotalSubscribers:     len(incentiveService.GetProratedSubscriptions()),
+		TotalProviders:       len(incentiveService.GetActiveProviders()),
+		TotalContentCreators: contentStats.ActiveCreators,
+		TotalAppDevelopers:   appDevStats.ActiveDevelopers,
+		CurrentRevenueRate:   currentRevenueRate,
+		TotalDistributedToday: contentStats.TotalDistributedToday + appDevStats.TotalDistributedToday + infraStats.TotalDistributedToday,
+		ActiveDistribution: &ActiveDistributionBreakdown{
+			ContentPool:        poolAmounts["content"],
+			NetworkOpsPool:     poolAmounts["network_ops"],
+			AppDeveloperPool:   poolAmounts["app_developer"],
+			InfrastructurePool: poolAmounts["infrastructure"],
+			UnusedFunds:        poolAmounts["unused"],
+		},
+	}
+}
+
+// Calculation helper functions (placeholder implementations)
+func (s *server) calculateDailyRewards(creatorID string, distributions []*ContentDistribution) float64 {
+	today := time.Now().Truncate(24 * time.Hour)
+	total := 0.0
+	for _, dist := range distributions {
+		if dist.Timestamp.After(today) {
+			if reward, exists := dist.CreatorRewards[creatorID]; exists {
+				total += reward
+			}
+		}
+	}
+	return total
+}
+
+func (s *server) calculateWeeklyRewards(creatorID string, distributions []*ContentDistribution) float64 {
+	weekAgo := time.Now().AddDate(0, 0, -7)
+	total := 0.0
+	for _, dist := range distributions {
+		if dist.Timestamp.After(weekAgo) {
+			if reward, exists := dist.CreatorRewards[creatorID]; exists {
+				total += reward
+			}
+		}
+	}
+	return total
+}
+
+func (s *server) calculateMonthlyRewards(creatorID string, distributions []*ContentDistribution) float64 {
+	monthAgo := time.Now().AddDate(0, -1, 0)
+	total := 0.0
+	for _, dist := range distributions {
+		if dist.Timestamp.After(monthAgo) {
+			if reward, exists := dist.CreatorRewards[creatorID]; exists {
+				total += reward
+			}
+		}
+	}
+	return total
+}
+
+func (s *server) calculatePoolShare(creatorID string, totalEngagementValue float64) float64 {
+	// This would calculate current pool share percentage
+	// Placeholder implementation
+	return 0.0
+}
+
+func (s *server) calculateAverageRewardPerSecond(distributions []*ContentDistributionSummary) float64 {
+	if len(distributions) == 0 {
+		return 0.0
+	}
+	total := 0.0
+	for _, dist := range distributions {
+		total += dist.CreatorReward
+	}
+	return total / float64(len(distributions))
+}
+
+// Similar calculation functions for app developers and providers
+func (s *server) calculateDailyAppRewards(developerID string, distributions []*AppDeveloperDistribution) float64 {
+	today := time.Now().Truncate(24 * time.Hour)
+	total := 0.0
+	for _, dist := range distributions {
+		if dist.Timestamp.After(today) {
+			if reward, exists := dist.DeveloperRewards[developerID]; exists {
+				total += reward
+			}
+		}
+	}
+	return total
+}
+
+func (s *server) calculateWeeklyAppRewards(developerID string, distributions []*AppDeveloperDistribution) float64 {
+	weekAgo := time.Now().AddDate(0, 0, -7)
+	total := 0.0
+	for _, dist := range distributions {
+		if dist.Timestamp.After(weekAgo) {
+			if reward, exists := dist.DeveloperRewards[developerID]; exists {
+				total += reward
+			}
+		}
+	}
+	return total
+}
+
+func (s *server) calculateMonthlyAppRewards(developerID string, distributions []*AppDeveloperDistribution) float64 {
+	monthAgo := time.Now().AddDate(0, -1, 0)
+	total := 0.0
+	for _, dist := range distributions {
+		if dist.Timestamp.After(monthAgo) {
+			if reward, exists := dist.DeveloperRewards[developerID]; exists {
+				total += reward
+			}
+		}
+	}
+	return total
+}
+
+func (s *server) calculateAppPoolShare(developerID string, totalUsageValue float64) float64 {
+	return 0.0 // Placeholder
+}
+
+func (s *server) calculateAverageAppRewardPerSecond(distributions []*AppDeveloperDistributionSummary) float64 {
+	if len(distributions) == 0 {
+		return 0.0
+	}
+	total := 0.0
+	for _, dist := range distributions {
+		total += dist.DeveloperReward
+	}
+	return total / float64(len(distributions))
+}
+
+func (s *server) countDeveloperApps(developerID string, activeApps map[string]*AppUsageRealTime) int {
+	count := 0
+	for _, app := range activeApps {
+		if app.DeveloperID == developerID {
+			count++
+		}
+	}
+	return count
+}
+
+func (s *server) countActiveDeveloperApps(developerID string, activeApps map[string]*AppUsageRealTime) int {
+	count := 0
+	for _, app := range activeApps {
+		if app.DeveloperID == developerID && app.IsActive {
+			count++
+		}
+	}
+	return count
+}
+
+// Provider calculation functions
+func (s *server) calculateDailyProviderRewards(providerID string, distributions []*RealTimeDistribution) float64 {
+	today := time.Now().Truncate(24 * time.Hour)
+	total := 0.0
+	for _, dist := range distributions {
+		if dist.Timestamp.After(today) {
+			if reward, exists := dist.ProviderRewards[providerID]; exists {
+				total += reward
+			}
+		}
+	}
+	return total
+}
+
+func (s *server) calculateWeeklyProviderRewards(providerID string, distributions []*RealTimeDistribution) float64 {
+	weekAgo := time.Now().AddDate(0, 0, -7)
+	total := 0.0
+	for _, dist := range distributions {
+		if dist.Timestamp.After(weekAgo) {
+			if reward, exists := dist.ProviderRewards[providerID]; exists {
+				total += reward
+			}
+		}
+	}
+	return total
+}
+
+func (s *server) calculateMonthlyProviderRewards(providerID string, distributions []*RealTimeDistribution) float64 {
+	monthAgo := time.Now().AddDate(0, -1, 0)
+	total := 0.0
+	for _, dist := range distributions {
+		if dist.Timestamp.After(monthAgo) {
+			if reward, exists := dist.ProviderRewards[providerID]; exists {
+				total += reward
+			}
+		}
+	}
+	return total
+}
+
+func (s *server) calculateProviderPoolShare(providerID string, totalMarketValue float64) float64 {
+	return 0.0 // Placeholder
+}
+
+func (s *server) calculateAverageProviderRewardPerSecond(distributions []*ProviderDistributionSummary) float64 {
+	if len(distributions) == 0 {
+		return 0.0
+	}
+	total := 0.0
+	for _, dist := range distributions {
+		total += dist.ProviderReward
+	}
+	return total / float64(len(distributions))
+}
+
+// Type aliases for better readability - these reference the actual incentive service types
+type (
+	ProratedSubscription         = incentive.ProratedSubscription
+	ProratedBillingStats         = incentive.ProratedBillingStats
+	ContentEngagementRealTime    = incentive.ContentEngagementRealTime
+	RealTimeContentStats         = incentive.RealTimeContentStats
+	ContentDistribution          = incentive.ContentDistribution
+	AppUsageRealTime             = incentive.AppUsageRealTime
+	RealTimeAppDeveloperStats    = incentive.RealTimeAppDeveloperStats
+	AppDeveloperDistribution     = incentive.AppDeveloperDistribution
+	RealTimeProviderUsage        = incentive.RealTimeProviderUsage
+	RealTimeInfrastructureStats  = incentive.RealTimeInfrastructureStats
+	RealTimeDistribution         = incentive.RealTimeDistribution
+	Subscription                 = incentive.Subscription
+)
+
+// canAccessUserDashboard checks if the authenticated user can access the requested user's dashboard
+func (s *server) canAccessUserDashboard(c *fiber.Ctx, targetDID string) bool {
+	// Get authenticated user DID from context
+	authenticatedUserID := c.Locals("user_id")
+	if authenticatedUserID == nil {
+		return false
+	}
+
+	authenticatedDID, ok := authenticatedUserID.(string)
+	if !ok {
+		return false
+	}
+
+	// Users can always access their own dashboard
+	if authenticatedDID == targetDID {
+		return true
+	}
+
+	// Check if user has admin privileges (this would be determined by the auth service)
+	userRole := c.Locals("user_role")
+	if userRole != nil {
+		if role, ok := userRole.(string); ok && (role == "admin" || role == "moderator") {
+			return true
+		}
+	}
+
+	// For now, only allow access to own dashboard
+	return false
+}
+
+// handlePersonalDashboard returns the authenticated user's dashboard based on their type
+func (s *server) handlePersonalDashboard(c *fiber.Ctx) error {
+	// Get authenticated user DID from context
+	authenticatedUserID := c.Locals("user_id")
+	if authenticatedUserID == nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": "Authentication required",
+		})
+	}
+
+	userDID, ok := authenticatedUserID.(string)
+	if !ok {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Invalid user DID format",
+		})
+	}
+
+	// Determine user type and redirect to appropriate dashboard
+	userType := s.determineUserType(userDID)
+	
+	switch userType {
+	case "subscriber":
+		// Set the DID parameter and call subscriber dashboard
+		c.Params("did", userDID)
+		return s.handleSubscriberDashboard(c)
+	case "content_creator":
+		c.Params("did", userDID)
+		return s.handleContentCreatorDashboard(c)
+	case "app_developer":
+		c.Params("did", userDID)
+		return s.handleAppDeveloperDashboard(c)
+	case "provider":
+		c.Params("did", userDID)
+		return s.handleProviderDashboard(c)
+	case "free_user":
+		c.Params("did", userDID)
+		return s.handleFreeUserDashboard(c)
+	default:
+		// Default to free user dashboard
+		c.Params("did", userDID)
+		return s.handleFreeUserDashboard(c)
+	}
+}
+
+// determineUserType determines the user type based on their DID and activity
+func (s *server) determineUserType(userDID string) string {
+	incentiveService := s.getIncentiveService()
+	if incentiveService == nil {
+		return "free_user"
+	}
+
+	// Check if user has a subscription
+	if subscription, err := incentiveService.GetSubscription(userDID); err == nil && subscription != nil {
+		return "subscriber"
+	}
+
+	// Check if user is an active content creator
+	activeCreators := incentiveService.GetActiveCreators()
+	if _, exists := activeCreators[userDID]; exists {
+		return "content_creator"
+	}
+
+	// Check if user is an app developer
+	activeApps := incentiveService.GetActiveApps()
+	for _, app := range activeApps {
+		if app.DeveloperID == userDID {
+			return "app_developer"
+		}
+	}
+
+	// Check if user is an infrastructure provider
+	activeProviders := incentiveService.GetActiveProviders()
+	if _, exists := activeProviders[userDID]; exists {
+		return "provider"
+	}
+
+	// Default to free user
+	return "free_user"
+}

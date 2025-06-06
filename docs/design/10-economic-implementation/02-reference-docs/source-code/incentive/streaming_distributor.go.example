@@ -1,0 +1,443 @@
+package incentive
+
+import (
+	"context"
+	"sync"
+	"time"
+
+	"github.com/rs/zerolog"
+)
+
+// StreamingDistributor handles real-time payment distribution to providers
+type StreamingDistributor struct {
+	mu     sync.RWMutex
+	logger zerolog.Logger
+	config *Config
+	
+	// Payment accumulation
+	providerBalances     map[string]*ProviderBalance
+	contentCreatorBalances map[string]*CreatorBalance
+	networkOpsBalance    float64
+	
+	// Pool management
+	accumulatedPool      float64
+	lastDistribution     time.Time
+	totalDistributedToday float64
+	
+	// Payment processing
+	paymentProcessor     PaymentProcessor
+	paymentQueue         chan PaymentInstruction
+	
+	// Processing control
+	started              bool
+	stopChan             chan struct{}
+	wg                   sync.WaitGroup
+	
+	// Configuration
+	minPayoutThreshold   float64   // Minimum amount before payout
+	payoutInterval       time.Duration // How often to process payouts
+}
+
+// ProviderBalance tracks accumulated earnings for a provider
+type ProviderBalance struct {
+	ProviderID          string    `json:"provider_id"`
+	AccumulatedEarnings float64   `json:"accumulated_earnings"`
+	LastPayout          time.Time `json:"last_payout"`
+	TotalEarned         float64   `json:"total_earned"`
+	PayoutCount         int       `json:"payout_count"`
+	LastUpdated         time.Time `json:"last_updated"`
+}
+
+// CreatorBalance tracks accumulated earnings for a content creator
+type CreatorBalance struct {
+	CreatorID           string    `json:"creator_id"`
+	AccumulatedEarnings float64   `json:"accumulated_earnings"`
+	LastPayout          time.Time `json:"last_payout"`
+	TotalEarned         float64   `json:"total_earned"`
+	PayoutCount         int       `json:"payout_count"`
+	LastUpdated         time.Time `json:"last_updated"`
+}
+
+// PaymentInstruction represents a pending payment
+type PaymentInstruction struct {
+	RecipientID   string    `json:"recipient_id"`
+	RecipientType string    `json:"recipient_type"` // "provider", "creator", "network_ops"
+	Amount        float64   `json:"amount"`
+	Timestamp     time.Time `json:"timestamp"`
+	Description   string    `json:"description"`
+}
+
+// PaymentProcessor interface for handling actual payments
+type PaymentProcessor interface {
+	ProcessPayment(instruction PaymentInstruction) error
+	GetPaymentStatus(paymentID string) PaymentStatus
+	GetBalance(recipientID string) (float64, error)
+}
+
+// PaymentStatus represents the status of a payment
+type PaymentStatus string
+
+const (
+	PaymentPending   PaymentStatus = "pending"
+	PaymentCompleted PaymentStatus = "completed"
+	PaymentFailed    PaymentStatus = "failed"
+)
+
+// NewStreamingDistributor creates a new streaming payment distributor
+func NewStreamingDistributor(config *Config, logger zerolog.Logger) *StreamingDistributor {
+	return &StreamingDistributor{
+		logger:                 logger.With().Str("component", "streaming_distributor").Logger(),
+		config:                 config,
+		providerBalances:       make(map[string]*ProviderBalance),
+		contentCreatorBalances: make(map[string]*CreatorBalance),
+		paymentQueue:           make(chan PaymentInstruction, 1000),
+		stopChan:               make(chan struct{}),
+		minPayoutThreshold:     1.0,        // $1 minimum payout
+		payoutInterval:         time.Minute, // Process payouts every minute
+	}
+}
+
+// Start begins streaming distribution processing
+func (sd *StreamingDistributor) Start(ctx context.Context) error {
+	sd.mu.Lock()
+	defer sd.mu.Unlock()
+	
+	if sd.started {
+		return nil
+	}
+	
+	sd.logger.Info().Msg("Starting streaming distributor")
+	
+	// Start payment processor worker
+	sd.wg.Add(1)
+	go sd.paymentWorker(ctx)
+	
+	// Start payout processor worker
+	sd.wg.Add(1)
+	go sd.payoutWorker(ctx)
+	
+	sd.started = true
+	return nil
+}
+
+// Stop halts streaming distribution processing
+func (sd *StreamingDistributor) Stop(ctx context.Context) error {
+	sd.mu.Lock()
+	defer sd.mu.Unlock()
+	
+	if !sd.started {
+		return nil
+	}
+	
+	sd.logger.Info().Msg("Stopping streaming distributor")
+	
+	close(sd.stopChan)
+	sd.wg.Wait()
+	
+	sd.started = false
+	return nil
+}
+
+// DistributePayments processes a distribution result and accumulates earnings
+func (sd *StreamingDistributor) DistributePayments(distribution *DistributionResult) error {
+	sd.mu.Lock()
+	defer sd.mu.Unlock()
+	
+	now := time.Now()
+	
+	// Accumulate provider rewards
+	for providerID, amount := range distribution.ProviderRewards {
+		if amount > 0 {
+			sd.accumulateProviderEarnings(providerID, amount, now)
+		}
+	}
+	
+	// Accumulate content creator rewards
+	for creatorID, amount := range distribution.ContentCreatorRewards {
+		if amount > 0 {
+			sd.accumulateCreatorEarnings(creatorID, amount, now)
+		}
+	}
+	
+	// Accumulate network ops rewards
+	if distribution.NetworkOpsReward > 0 {
+		sd.networkOpsBalance += distribution.NetworkOpsReward
+	}
+	
+	sd.lastDistribution = now
+	sd.totalDistributedToday += distribution.TotalRevenue
+	
+	sd.logger.Debug().
+		Float64("total_revenue", distribution.TotalRevenue).
+		Int("providers", len(distribution.ProviderRewards)).
+		Int("creators", len(distribution.ContentCreatorRewards)).
+		Float64("network_ops", distribution.NetworkOpsReward).
+		Msg("Distributed payments to balances")
+	
+	return nil
+}
+
+// AccumulateToPool adds revenue to the accumulated pool when no providers are active
+func (sd *StreamingDistributor) AccumulateToPool(amount float64) {
+	sd.mu.Lock()
+	defer sd.mu.Unlock()
+	
+	sd.accumulatedPool += amount
+	
+	sd.logger.Debug().
+		Float64("amount", amount).
+		Float64("total_pool", sd.accumulatedPool).
+		Msg("Accumulated revenue to pool")
+}
+
+// accumulateProviderEarnings adds earnings to a provider's balance
+func (sd *StreamingDistributor) accumulateProviderEarnings(providerID string, amount float64, timestamp time.Time) {
+	balance, exists := sd.providerBalances[providerID]
+	if !exists {
+		balance = &ProviderBalance{
+			ProviderID:  providerID,
+			LastUpdated: timestamp,
+		}
+		sd.providerBalances[providerID] = balance
+	}
+	
+	balance.AccumulatedEarnings += amount
+	balance.TotalEarned += amount
+	balance.LastUpdated = timestamp
+	
+	// Queue payment if threshold is reached
+	if balance.AccumulatedEarnings >= sd.minPayoutThreshold {
+		sd.queuePayment(PaymentInstruction{
+			RecipientID:   providerID,
+			RecipientType: "provider",
+			Amount:        balance.AccumulatedEarnings,
+			Timestamp:     timestamp,
+			Description:   "Real-time infrastructure reward",
+		})
+		
+		// Reset accumulated earnings after queuing payment
+		balance.AccumulatedEarnings = 0
+		balance.PayoutCount++
+		balance.LastPayout = timestamp
+	}
+}
+
+// accumulateCreatorEarnings adds earnings to a content creator's balance
+func (sd *StreamingDistributor) accumulateCreatorEarnings(creatorID string, amount float64, timestamp time.Time) {
+	balance, exists := sd.contentCreatorBalances[creatorID]
+	if !exists {
+		balance = &CreatorBalance{
+			CreatorID:   creatorID,
+			LastUpdated: timestamp,
+		}
+		sd.contentCreatorBalances[creatorID] = balance
+	}
+	
+	balance.AccumulatedEarnings += amount
+	balance.TotalEarned += amount
+	balance.LastUpdated = timestamp
+	
+	// Queue payment if threshold is reached
+	if balance.AccumulatedEarnings >= sd.minPayoutThreshold {
+		sd.queuePayment(PaymentInstruction{
+			RecipientID:   creatorID,
+			RecipientType: "creator",
+			Amount:        balance.AccumulatedEarnings,
+			Timestamp:     timestamp,
+			Description:   "Real-time content creator reward",
+		})
+		
+		// Reset accumulated earnings after queuing payment
+		balance.AccumulatedEarnings = 0
+		balance.PayoutCount++
+		balance.LastPayout = timestamp
+	}
+}
+
+// queuePayment adds a payment to the processing queue
+func (sd *StreamingDistributor) queuePayment(instruction PaymentInstruction) {
+	select {
+	case sd.paymentQueue <- instruction:
+		sd.logger.Debug().
+			Str("recipient_id", instruction.RecipientID).
+			Str("type", instruction.RecipientType).
+			Float64("amount", instruction.Amount).
+			Msg("Queued payment for processing")
+	default:
+		sd.logger.Warn().
+			Str("recipient_id", instruction.RecipientID).
+			Float64("amount", instruction.Amount).
+			Msg("Payment queue full, dropping payment")
+	}
+}
+
+// paymentWorker processes queued payments
+func (sd *StreamingDistributor) paymentWorker(ctx context.Context) {
+	defer sd.wg.Done()
+	
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-sd.stopChan:
+			return
+		case instruction := <-sd.paymentQueue:
+			sd.processPayment(instruction)
+		}
+	}
+}
+
+// payoutWorker handles periodic payouts for small accumulated amounts
+func (sd *StreamingDistributor) payoutWorker(ctx context.Context) {
+	defer sd.wg.Done()
+	
+	ticker := time.NewTicker(sd.payoutInterval)
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-sd.stopChan:
+			return
+		case <-ticker.C:
+			sd.processSmallPayouts()
+		}
+	}
+}
+
+// processPayment handles individual payment processing
+func (sd *StreamingDistributor) processPayment(instruction PaymentInstruction) {
+	if sd.paymentProcessor == nil {
+		sd.logger.Warn().
+			Str("recipient_id", instruction.RecipientID).
+			Float64("amount", instruction.Amount).
+			Msg("No payment processor available, payment skipped")
+		return
+	}
+	
+	if err := sd.paymentProcessor.ProcessPayment(instruction); err != nil {
+		sd.logger.Error().
+			Err(err).
+			Str("recipient_id", instruction.RecipientID).
+			Float64("amount", instruction.Amount).
+			Msg("Failed to process payment")
+		return
+	}
+	
+	sd.logger.Info().
+		Str("recipient_id", instruction.RecipientID).
+		Str("type", instruction.RecipientType).
+		Float64("amount", instruction.Amount).
+		Msg("Payment processed successfully")
+}
+
+// processSmallPayouts handles accumulated amounts below threshold
+func (sd *StreamingDistributor) processSmallPayouts() {
+	sd.mu.Lock()
+	defer sd.mu.Unlock()
+	
+	now := time.Now()
+	smallPayoutThreshold := sd.minPayoutThreshold / 10 // Pay out at 10% of normal threshold
+	
+	// Process small provider payouts
+	for providerID, balance := range sd.providerBalances {
+		if balance.AccumulatedEarnings >= smallPayoutThreshold {
+			sd.queuePayment(PaymentInstruction{
+				RecipientID:   providerID,
+				RecipientType: "provider",
+				Amount:        balance.AccumulatedEarnings,
+				Timestamp:     now,
+				Description:   "Small payout - accumulated earnings",
+			})
+			
+			balance.AccumulatedEarnings = 0
+			balance.PayoutCount++
+			balance.LastPayout = now
+		}
+	}
+	
+	// Process small creator payouts
+	for creatorID, balance := range sd.contentCreatorBalances {
+		if balance.AccumulatedEarnings >= smallPayoutThreshold {
+			sd.queuePayment(PaymentInstruction{
+				RecipientID:   creatorID,
+				RecipientType: "creator",
+				Amount:        balance.AccumulatedEarnings,
+				Timestamp:     now,
+				Description:   "Small payout - accumulated earnings",
+			})
+			
+			balance.AccumulatedEarnings = 0
+			balance.PayoutCount++
+			balance.LastPayout = now
+		}
+	}
+}
+
+// SetPaymentProcessor sets the payment processor for handling payments
+func (sd *StreamingDistributor) SetPaymentProcessor(processor PaymentProcessor) {
+	sd.mu.Lock()
+	defer sd.mu.Unlock()
+	
+	sd.paymentProcessor = processor
+	sd.logger.Info().Msg("Payment processor registered")
+}
+
+// GetLastDistribution returns the timestamp of the last distribution
+func (sd *StreamingDistributor) GetLastDistribution() time.Time {
+	sd.mu.RLock()
+	defer sd.mu.RUnlock()
+	
+	return sd.lastDistribution
+}
+
+// GetTotalDistributedToday returns the total amount distributed today
+func (sd *StreamingDistributor) GetTotalDistributedToday() float64 {
+	sd.mu.RLock()
+	defer sd.mu.RUnlock()
+	
+	return sd.totalDistributedToday
+}
+
+// GetProviderBalances returns current provider balances
+func (sd *StreamingDistributor) GetProviderBalances() map[string]*ProviderBalance {
+	sd.mu.RLock()
+	defer sd.mu.RUnlock()
+	
+	// Return a copy to avoid concurrent access
+	result := make(map[string]*ProviderBalance)
+	for providerID, balance := range sd.providerBalances {
+		result[providerID] = &ProviderBalance{
+			ProviderID:          balance.ProviderID,
+			AccumulatedEarnings: balance.AccumulatedEarnings,
+			LastPayout:          balance.LastPayout,
+			TotalEarned:         balance.TotalEarned,
+			PayoutCount:         balance.PayoutCount,
+			LastUpdated:         balance.LastUpdated,
+		}
+	}
+	
+	return result
+}
+
+// GetCreatorBalances returns current creator balances
+func (sd *StreamingDistributor) GetCreatorBalances() map[string]*CreatorBalance {
+	sd.mu.RLock()
+	defer sd.mu.RUnlock()
+	
+	// Return a copy to avoid concurrent access
+	result := make(map[string]*CreatorBalance)
+	for creatorID, balance := range sd.contentCreatorBalances {
+		result[creatorID] = &CreatorBalance{
+			CreatorID:           balance.CreatorID,
+			AccumulatedEarnings: balance.AccumulatedEarnings,
+			LastPayout:          balance.LastPayout,
+			TotalEarned:         balance.TotalEarned,
+			PayoutCount:         balance.PayoutCount,
+			LastUpdated:         balance.LastUpdated,
+		}
+	}
+	
+	return result
+}

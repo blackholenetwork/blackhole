@@ -1,0 +1,284 @@
+package storage
+
+import (
+	"context"
+	"io"
+	"time"
+	
+	"github.com/blackholenetwork/blackhole/pkg/core"
+)
+
+// ChunkSize is the standard chunk size (256KB) compatible with IPFS
+const ChunkSize = 256 * 1024 // 256KB
+
+// BlockSize is the number of chunks per erasure coding block
+const BlockSize = 10 // 2.56MB per block
+
+// Type aliases for transition (ChunkID still needed throughout codebase)
+type ChunkID = ChunkCID  // Alias for transition
+
+
+// Service defines the interface for the storage service (CID-based)
+type Service interface {
+	core.Service
+	
+	// Pure content operations (no metadata required)
+	Store(ctx context.Context, reader io.Reader) (ContentCID, error)
+	Retrieve(ctx context.Context, cid ContentCID) (io.ReadCloser, error)
+	Delete(ctx context.Context, cid ContentCID) error
+	HasContent(ctx context.Context, cid ContentCID) bool
+	GetContentInfo(ctx context.Context, cid ContentCID) (ContentInfo, error)
+	
+	// Chunk operations (content-based)
+	StoreChunk(ctx context.Context, chunk *ContentBasedChunk) error
+	RetrieveChunk(ctx context.Context, chunkCID ChunkCID) (*ContentBasedChunk, error)
+	HasChunk(ctx context.Context, chunkCID ChunkCID) bool
+	ListChunks(ctx context.Context) ([]ChunkCID, error)
+	
+	// Erasure coding operations
+	EncodeBlock(ctx context.Context, chunks [][]byte) (*EncodedBlock, error)
+	DecodeBlock(ctx context.Context, block *EncodedBlock) ([][]byte, error)
+	
+	// Parity operations (CID-based)
+	GenerateParity(ctx context.Context, cid ContentCID, count int) ([]ChunkCID, error)
+	GetParityLevel(ctx context.Context, cid ContentCID) (ParityInfo, error)
+	
+	// Storage management
+	GetStorageStats() StorageStats
+	GetAvailableSpace() uint64
+	SetStorageLimit(limit uint64) error
+	
+	// Demand monitoring (CID-based)
+	RecordAccess(ctx context.Context, cid ContentCID, chunkCID ChunkCID)
+	GetDemandMetrics(ctx context.Context, cid ContentCID) DemandMetrics
+	
+	// Virtual bucket system operations (CID-based)
+	GetChunkStorageLocation(chunkCID ChunkCID) (StorageLocation, bool)
+	FindChunkNodes(chunkCID ChunkCID) ([]*NodeInfo, error)
+	ClaimMorePositions(ctx context.Context, count int, strategy string) ([]Position, error)
+	GetBucketSystemStats() BucketSystemStats
+	
+	// Virtual Filesystem operations
+	GetVFS() VirtualFilesystemInterface
+	GetPrivateVFS() PrivateVFSInterface
+	
+	// Low-level chunk operations for VFS
+	StoreChunkInBucket(bucketID int, chunkID string, data []byte) error
+	RetrieveChunkFromBucket(bucketID int, chunkID string) ([]byte, error)
+}
+
+// VirtualFilesystemInterface defines the interface for filesystem operations
+type VirtualFilesystemInterface interface {
+	// Core operations
+	WriteFile(ctx context.Context, path string, data []byte, metadata map[string]string) error
+	ReadFile(ctx context.Context, path string) ([]byte, error)
+	ListDir(ctx context.Context, path string) ([]VFSFileInfo, error)
+	Delete(ctx context.Context, path string) error
+	
+	// File information
+	Exists(ctx context.Context, path string) bool
+	Stat(ctx context.Context, path string) (*VFSFileInfo, error)
+	
+	// Lifecycle
+	Start(ctx context.Context) error
+	Stop(ctx context.Context) error
+}
+
+// PrivateVFSInterface defines the interface for privacy-focused filesystem operations
+type PrivateVFSInterface interface {
+	VirtualFilesystemInterface
+	
+	// Namespace management
+	GenerateUserSecret() (string, error)
+	LoadUserSecret(secret string) error
+	GetUserBase() string
+	InitializeUserSpace(ctx context.Context) error
+	
+	// Privacy-aware operations
+	WriteFileToNamespace(ctx context.Context, path string, data []byte, metadata map[string]string) error
+	ReadFileFromNamespace(ctx context.Context, path string) ([]byte, error)
+	ListDirectoryInNamespace(ctx context.Context, path string) ([]VFSFileInfo, error)
+	
+	// Sharing and permissions
+	SharePath(ctx context.Context, path string, targetDID string, permission string) error
+	AddSharedNamespace(ownerDID string, basePath string) error
+	
+	// Namespace utilities
+	GetUserPrivatePath(relativePath string) string
+	CreateNamespace(ctx context.Context, entityDID string, entitySecret string, namespaceType string) (string, error)
+	DiscoverPublicContent(ctx context.Context, contentType string) ([]VFSFileInfo, error)
+	
+	// Security
+	ValidateNamespaceAccess(ctx context.Context, path string, operation string) error
+	ComputeNamespaceFromSecret(did string, secret string) string
+	
+	// Directory management
+	CreateDirectoryExplicit(ctx context.Context, dirPath string, recursive bool) error
+	GetDirectoryCreationStats(ctx context.Context, basePath string) (DirectoryStats, error)
+	
+	// Recursive deletion
+	GetDeletionPlan(ctx context.Context, path string, options DeletionOptions) (*DeletionPlan, error)
+	ExecuteDeletionPlan(ctx context.Context, plan *DeletionPlan, confirmationCode string, options DeletionOptions) (*DeletionResult, error)
+	DeleteRecursive(ctx context.Context, path string, options DeletionOptions) (*DeletionResult, error)
+}
+
+
+// EncodedBlock represents an erasure coded block (CID-based)
+type EncodedBlock struct {
+	ContentCID   ContentCID  `json:"content_cid"`   // File this block belongs to
+	BlockIndex   int         `json:"block_index"`   // Block number within file
+	DataChunks   []ChunkCID  `json:"data_chunks"`   // Original data chunk CIDs
+	ParityChunks []ChunkCID  `json:"parity_chunks"` // Generated parity chunk CIDs
+	DataShards   int         `json:"data_shards"`   // Number of data shards (k)
+	ParityShards int         `json:"parity_shards"` // Number of parity shards (m)
+}
+
+// ParityInfo contains information about parity levels (CID-based)
+type ParityInfo struct {
+	ContentCID     ContentCID     `json:"content_cid"`     // Content this parity info describes
+	DataChunks     int            `json:"data_chunks"`     // Number of data chunks
+	ParityChunks   int            `json:"parity_chunks"`   // Number of parity chunks
+	CurrentLevel   string         `json:"current_level"`   // Current redundancy (e.g., "10+3")
+	TargetLevel    string         `json:"target_level"`    // Target redundancy level
+	Distribution   map[string]int `json:"distribution"`    // Geographic distribution
+}
+
+// DemandMetrics tracks access patterns
+type DemandMetrics struct {
+	AccessRate      float64 // Requests per minute
+	TrendDirection  string  // "increasing", "stable", "decreasing"
+	TrendMagnitude  float64 // Percentage change
+	GeographicHeat  map[string]float64 // Region -> demand
+	NodeStress      int     // Number of overloaded nodes
+	LastUpdated     int64
+}
+
+// StorageStats provides storage statistics
+type StorageStats struct {
+	TotalSpace      uint64
+	UsedSpace       uint64
+	AvailableSpace  uint64
+	ChunkCount      int
+	FileCount       int
+	ParityChunks    int
+	DataChunks      int
+}
+
+// ErasureConfig defines erasure coding parameters
+type ErasureConfig struct {
+	// Baseline configuration
+	BaselineDataShards   int // k = 10
+	BaselineParityShards int // m = 3
+	
+	// Adaptive thresholds
+	LowDemandParity    int // 3 parity shards
+	MediumDemandParity int // 10 parity shards
+	HighDemandParity   int // 50 parity shards
+	ViralDemandParity  int // 100 parity shards
+	MaxParityShards    int // 100 (computational limit)
+	
+	// Demand thresholds
+	MediumDemandThreshold float64 // Access rate for medium
+	HighDemandThreshold   float64 // Access rate for high
+	ViralDemandThreshold  float64 // Access rate for viral
+}
+
+// ReactiveConfig defines reactive parity generation parameters
+type ReactiveConfig struct {
+	// Decision loop intervals
+	MinCheckInterval int // 30 seconds
+	MaxCheckInterval int // 90 seconds
+	
+	// Contribution limits
+	MaxContributionPerNode int // 5 parity chunks per decision
+	MinDeficitToGenerate   int // Don't generate if deficit < 2
+	
+	// Demand triggers
+	TrendThreshold       float64 // 50% increase triggers generation
+	GeographicThreshold  int     // 100 requests from new region
+	NodeStressThreshold  float64 // 80% capacity triggers generation
+	MinAvailableChunks   int     // 15 chunks minimum
+}
+
+// DirectoryStats contains statistics about directory structures
+type DirectoryStats struct {
+	BasePath     string            `json:"base_path"`
+	TotalDirs    int               `json:"total_dirs"`
+	MaxDepth     int               `json:"max_depth"`
+	CreatedBy    map[string]int    `json:"created_by"`
+	LastModified time.Time         `json:"last_modified"`
+}
+
+// DeletionOptions controls how recursive deletion is performed
+type DeletionOptions struct {
+	Recursive        bool              `json:"recursive"`          // Enable recursive deletion
+	Force           bool              `json:"force"`              // Skip confirmations (dangerous)
+	DryRun          bool              `json:"dry_run"`            // Preview without actually deleting
+	CleanupContent  bool              `json:"cleanup_content"`    // Remove unreferenced CIDs
+	MaxDepth        int               `json:"max_depth"`          // Maximum recursion depth (safety)
+	MaxItems        int               `json:"max_items"`          // Maximum items to delete (safety)
+	BackupBeforeDelete bool           `json:"backup_before"`      // Create backup before deletion
+	ProgressCallback func(DeletionProgress) `json:"-"`          // Progress reporting callback
+}
+
+// DeletionPlan contains a detailed plan of what will be deleted
+type DeletionPlan struct {
+	RootPath          string                `json:"root_path"`
+	TotalFiles        int                   `json:"total_files"`
+	TotalDirectories  int                   `json:"total_directories"`
+	TotalSize         int64                 `json:"total_size"`
+	MaxDepth          int                   `json:"max_depth"`
+	Items             []DeletionItem        `json:"items"`
+	Warnings          []string              `json:"warnings"`
+	RequiresConfirmation bool               `json:"requires_confirmation"`
+	ConfirmationCode  string                `json:"confirmation_code"`
+	CreatedAt         time.Time             `json:"created_at"`
+	EstimatedDuration time.Duration         `json:"estimated_duration"`
+}
+
+// DeletionItem represents a single item to be deleted
+type DeletionItem struct {
+	Path        string    `json:"path"`
+	Type        string    `json:"type"`        // "file" or "directory"
+	Size        int64     `json:"size"`
+	ContentHash string    `json:"content_hash,omitempty"`
+	LastModified time.Time `json:"last_modified"`
+	CreatedBy   string    `json:"created_by"`
+	Depth       int       `json:"depth"`
+	HasChildren bool      `json:"has_children,omitempty"`
+	Permissions string    `json:"permissions"`
+}
+
+// DeletionProgress reports progress during deletion operations
+type DeletionProgress struct {
+	Phase          string        `json:"phase"`           // "scanning", "deleting", "cleanup"
+	ProcessedItems int           `json:"processed_items"`
+	TotalItems     int           `json:"total_items"`
+	CurrentItem    string        `json:"current_item"`
+	BytesDeleted   int64         `json:"bytes_deleted"`
+	ErrorCount     int           `json:"error_count"`
+	StartTime      time.Time     `json:"start_time"`
+	ElapsedTime    time.Duration `json:"elapsed_time"`
+	EstimatedRemaining time.Duration `json:"estimated_remaining"`
+}
+
+// DeletionResult contains the results of a deletion operation
+type DeletionResult struct {
+	Success         bool                  `json:"success"`
+	DeletedFiles    int                   `json:"deleted_files"`
+	DeletedDirs     int                   `json:"deleted_dirs"`
+	BytesDeleted    int64                 `json:"bytes_deleted"`
+	Duration        time.Duration         `json:"duration"`
+	Errors          []DeletionError       `json:"errors"`
+	ContentCleaned  []string              `json:"content_cleaned"`  // CIDs that were cleaned up
+	BackupLocation  string                `json:"backup_location,omitempty"`
+	Warnings        []string              `json:"warnings,omitempty"`
+}
+
+// DeletionError represents an error during deletion
+type DeletionError struct {
+	Path        string `json:"path"`
+	Error       string `json:"error"`
+	Code        string `json:"code"`
+	Recoverable bool   `json:"recoverable"`
+}

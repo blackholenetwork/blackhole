@@ -18,16 +18,16 @@ Every plugin must implement the base `Plugin` interface:
 type Plugin interface {
     // Info returns metadata about the plugin
     Info() Info
-    
+
     // Init initializes the plugin with configuration
     Init(ctx context.Context, config Config) error
-    
+
     // Start starts the plugin
     Start(ctx context.Context) error
-    
+
     // Stop gracefully shuts down the plugin
     Stop(ctx context.Context) error
-    
+
     // Health returns the current health status
     Health() Health
 }
@@ -83,7 +83,7 @@ func NewMyPlugin() *MyPlugin {
         Dependencies: []string{},
         Capabilities: []string{"custom"},
     }
-    
+
     return &MyPlugin{
         BasePlugin: plugin.NewBasePlugin(info),
     }
@@ -94,7 +94,7 @@ func (mp *MyPlugin) Start(ctx context.Context) error {
     if err := mp.BasePlugin.Start(ctx); err != nil {
         return err
     }
-    
+
     // Your start logic
     return nil
 }
@@ -267,7 +267,7 @@ func NewStoragePlugin() *StoragePlugin {
         Dependencies: []string{"security", "networking"},
         Capabilities: []string{string(plugin.CapabilityStorage)},
     }
-    
+
     return &StoragePlugin{
         BasePlugin: plugin.NewBasePlugin(info),
     }
@@ -277,16 +277,16 @@ func (sp *StoragePlugin) Init(ctx context.Context, config plugin.Config) error {
     if err := sp.BasePlugin.Init(ctx, config); err != nil {
         return err
     }
-    
+
     // Initialize data store
     sp.store = NewDataStore(
         sp.GetConfigString("path", "/data"),
         sp.GetConfigInt("max_size", 1024*1024*1024),
     )
-    
+
     // Initialize metrics
     sp.metrics = NewMetrics()
-    
+
     return nil
 }
 
@@ -294,11 +294,11 @@ func (sp *StoragePlugin) Start(ctx context.Context) error {
     if err := sp.BasePlugin.Start(ctx); err != nil {
         return err
     }
-    
+
     // Start background tasks
     go sp.garbageCollector(ctx)
     go sp.metricsCollector(ctx)
-    
+
     // Publish ready event
     sp.PublishEvent(plugin.Event{
         Type:   "storage.ready",
@@ -308,9 +308,9 @@ func (sp *StoragePlugin) Start(ctx context.Context) error {
             "used":     sp.store.Used(),
         },
     })
-    
+
     sp.SetHealth(plugin.HealthStatusHealthy, "Storage plugin started")
-    
+
     return nil
 }
 

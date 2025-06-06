@@ -1,0 +1,277 @@
+package storage
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+// Permission checking methods for PrivateVFS
+
+// checkReadPermission checks if the user can read from the given path
+func (pvfs *PrivateVFS) checkReadPermission(ctx context.Context, path string) error {
+	// Public paths are readable by everyone
+	if pvfs.IsPublicPath(path) {
+		return nil
+	}
+	
+	// User's own private space is always accessible
+	if pvfs.IsUserPath(path) {
+		return nil
+	}
+	
+	// Check if it's a shared path
+	if pvfs.isSharedPath(path) {
+		return nil
+	}
+	
+	// Otherwise, access denied
+	return fmt.Errorf("no read permission for path: %s", path)
+}
+
+// checkWritePermission checks if the user can write to the given path
+func (pvfs *PrivateVFS) checkWritePermission(ctx context.Context, path string) error {
+	// Cannot write to public system directories (only specific public areas allow writes)
+	if strings.HasPrefix(path, "/system/") || strings.HasPrefix(path, "/governance/") {
+		return fmt.Errorf("cannot write to system directory: %s", path)
+	}
+	
+	// Cannot write directly to /private/ root - must use secret-based paths
+	if path == "/private/" || (strings.HasPrefix(path, "/private/") && !pvfs.IsUserPath(path) && !pvfs.hasWritePermissionToShared(path)) {
+		return fmt.Errorf("cannot write to /private/ without proper secret-based access: %s", path)
+	}
+	
+	// Can write to public schemas and public directories
+	if strings.HasPrefix(path, "/schemas/") || strings.HasPrefix(path, "/public/") {
+		return nil
+	}
+	
+	// User can always write to their own private space
+	if pvfs.IsUserPath(path) {
+		return nil
+	}
+	
+	// Check if user has write permission to shared space
+	if pvfs.hasWritePermissionToShared(path) {
+		return nil
+	}
+	
+	// Otherwise, access denied
+	return fmt.Errorf("no write permission for path: %s", path)
+}
+
+// isSharedPath checks if a path is in a shared namespace that the user has access to
+func (pvfs *PrivateVFS) isSharedPath(path string) bool {
+	for _, sharedBase := range pvfs.sharedBases {
+		if strings.HasPrefix(path, sharedBase) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasWritePermissionToShared checks if user has write permission to a shared path
+func (pvfs *PrivateVFS) hasWritePermissionToShared(path string) bool {
+	// For now, assume if user has access to shared path, they have write permission
+	// In a full implementation, this would check specific permissions in directory metadata
+	return pvfs.isSharedPath(path)
+}
+
+// SharePath allows the user to share a path from their private space with other users
+func (pvfs *PrivateVFS) SharePath(ctx context.Context, path string, targetDID string, permission string) error {
+	// Verify the path is in user's private space
+	if !pvfs.IsUserPath(path) {
+		return fmt.Errorf("can only share paths from your private space: %s", path)
+	}
+	
+	// Validate permission level
+	if permission != "read" && permission != "write" && permission != "admin" {
+		return fmt.Errorf("invalid permission level: %s", permission)
+	}
+	
+	// Get directory path
+	dirPath := path
+	if !strings.HasSuffix(dirPath, "/") {
+		dirPath = filepath.Dir(path) + "/"
+	}
+	
+	// Load directory metadata
+	metadata, err := pvfs.loadDirectoryMetadata(ctx, dirPath)
+	if err != nil {
+		return fmt.Errorf("directory not found: %w", err)
+	}
+	
+	// Add permission for target DID
+	metadata.Permissions[targetDID] = PermissionInfo{
+		Level:     permission,
+		GrantedBy: pvfs.userDID,
+		GrantedAt: time.Now(),
+	}
+	metadata.Updated = time.Now()
+	
+	// Store updated metadata
+	if err := pvfs.storeDirectoryMetadata(ctx, dirPath, metadata); err != nil {
+		return fmt.Errorf("failed to update directory permissions: %w", err)
+	}
+	
+	pvfs.logger.Info().
+		Str("path", path).
+		Str("target_did", targetDID).
+		Str("permission", permission).
+		Msg("Shared path with user")
+	
+	return nil
+}
+
+// AddSharedNamespace adds a shared namespace that the user has been given access to
+func (pvfs *PrivateVFS) AddSharedNamespace(ownerDID string, basePath string) error {
+	pvfs.sharedBases[ownerDID] = basePath
+	
+	pvfs.logger.Info().
+		Str("owner_did", ownerDID).
+		Str("base_path", basePath).
+		Msg("Added shared namespace")
+	
+	return nil
+}
+
+// GetUserPrivatePath returns a path within the user's private namespace
+func (pvfs *PrivateVFS) GetUserPrivatePath(relativePath string) string {
+	if pvfs.userBase == "" {
+		return ""
+	}
+	
+	// Clean up relative path
+	relativePath = strings.TrimPrefix(relativePath, "/")
+	
+	return pvfs.userBase + relativePath
+}
+
+// CreateNamespace creates a new private namespace for an entity (user, app, org)
+func (pvfs *PrivateVFS) CreateNamespace(ctx context.Context, entityDID string, entitySecret string, namespaceType string) (string, error) {
+	// Compute namespace base
+	namespaceBase := pvfs.computePrivateBase(entityDID, entitySecret)
+	
+	// Create namespace info
+	namespaceInfo := &NamespaceInfo{
+		Type:        namespaceType, // "user", "app", "org"
+		BasePath:    namespaceBase,
+		OwnerDID:    entityDID,
+		Description: fmt.Sprintf("%s namespace for %s", namespaceType, entityDID),
+		CreatedAt:   time.Now(),
+	}
+	
+	// Store namespace info in a well-known location (for debugging/admin)
+	namespaceInfoPath := namespaceBase + ".vfs_namespace.json"
+	namespaceData, err := json.Marshal(namespaceInfo)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal namespace info: %w", err)
+	}
+	
+	bucketID, chunkID := pvfs.getPathLocation(namespaceInfoPath)
+	if err := pvfs.storage.StoreChunkInBucket(bucketID, chunkID, namespaceData); err != nil {
+		return "", fmt.Errorf("failed to store namespace info: %w", err)
+	}
+	
+	// Create root directory for namespace
+	rootMetadata := &DirectoryMetadata{
+		Path:      namespaceBase,
+		Type:      "directory",
+		Updated:   time.Now(),
+		CreatedBy: entityDID,
+		Permissions: map[string]PermissionInfo{
+			entityDID: {
+				Level:     "admin",
+				GrantedBy: entityDID,
+				GrantedAt: time.Now(),
+			},
+		},
+		Entries: make(map[string]EntryInfo),
+	}
+	
+	if err := pvfs.storeDirectoryMetadata(ctx, namespaceBase, rootMetadata); err != nil {
+		return "", fmt.Errorf("failed to create namespace root directory: %w", err)
+	}
+	
+	pvfs.logger.Info().
+		Str("entity_did", entityDID).
+		Str("namespace_type", namespaceType).
+		Str("namespace_base", namespaceBase).
+		Msg("Created new namespace")
+	
+	return namespaceBase, nil
+}
+
+// DiscoverPublicContent discovers content in public namespaces
+func (pvfs *PrivateVFS) DiscoverPublicContent(ctx context.Context, contentType string) ([]VFSFileInfo, error) {
+	var allContent []VFSFileInfo
+	
+	// Search public directories for the requested content type
+	for _, publicBase := range pvfs.publicBases {
+		if contentType == "schemas" && strings.HasPrefix(publicBase, "/schemas/") {
+			content, err := pvfs.ListDirectoryInNamespace(ctx, publicBase)
+			if err != nil {
+				pvfs.logger.Warn().Err(err).Str("path", publicBase).Msg("Failed to list public directory")
+				continue
+			}
+			allContent = append(allContent, content...)
+		}
+	}
+	
+	return allContent, nil
+}
+
+// GetSecretForDID returns the secret for a DID (for testing/sharing)
+func (pvfs *PrivateVFS) GetSecretForDID(did string) (string, bool) {
+	secret, exists := pvfs.knownSecrets[did]
+	return secret, exists
+}
+
+// AddKnownSecret adds a known secret for a DID (for testing/sharing)
+func (pvfs *PrivateVFS) AddKnownSecret(did string, secret string) {
+	pvfs.knownSecrets[did] = secret
+}
+
+// ComputeNamespaceFromSecret computes what someone's namespace would be given their DID and secret
+func (pvfs *PrivateVFS) ComputeNamespaceFromSecret(did string, secret string) string {
+	return pvfs.computePrivateBase(did, secret)
+}
+
+// ValidateNamespaceAccess validates that a user can access a specific namespace path
+func (pvfs *PrivateVFS) ValidateNamespaceAccess(ctx context.Context, path string, operation string) error {
+	switch operation {
+	case "read":
+		return pvfs.checkReadPermission(ctx, path)
+	case "write":
+		return pvfs.checkWritePermission(ctx, path)
+	default:
+		return fmt.Errorf("unknown operation: %s", operation)
+	}
+}
+
+// GetNamespaceInfo returns information about a namespace (if accessible)
+func (pvfs *PrivateVFS) GetNamespaceInfo(ctx context.Context, namespacePath string) (*NamespaceInfo, error) {
+	// Check if user has access to this namespace
+	if err := pvfs.checkReadPermission(ctx, namespacePath); err != nil {
+		return nil, err
+	}
+	
+	// Try to load namespace info
+	namespaceInfoPath := namespacePath + ".vfs_namespace.json"
+	bucketID, chunkID := pvfs.getPathLocation(namespaceInfoPath)
+	
+	data, err := pvfs.storage.RetrieveChunkFromBucket(bucketID, chunkID)
+	if err != nil {
+		return nil, fmt.Errorf("namespace info not found: %w", err)
+	}
+	
+	var namespaceInfo NamespaceInfo
+	if err := json.Unmarshal(data, &namespaceInfo); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal namespace info: %w", err)
+	}
+	
+	return &namespaceInfo, nil
+}

@@ -1,0 +1,150 @@
+package core
+
+import (
+	"context"
+	"time"
+)
+
+// EconomicTracker interface allows economic systems to receive resource usage events
+// This maintains layer separation while enabling economic integration
+type EconomicTracker interface {
+	// TrackResourceUsage records resource usage for economic calculations
+	TrackResourceUsage(ctx context.Context, event ResourceUsageEvent) error
+	
+	// TrackContentActivity records content-related activity
+	TrackContentActivity(ctx context.Context, event ContentActivityEvent) error
+}
+
+// ResourceUsageEvent represents a resource usage event for economic tracking
+type ResourceUsageEvent struct {
+	// Resource details
+	ResourceType  ResourceType  `json:"resource_type"`   // storage, bandwidth, compute
+	Operation     string        `json:"operation"`       // put, get, stream, execute
+	Amount        float64       `json:"amount"`          // bytes, cpu-hours, etc.
+	Unit          string        `json:"unit"`            // GB, hours, etc.
+	Duration      time.Duration `json:"duration"`        // how long resource was used
+	
+	// Provider information
+	ProviderID    string        `json:"provider_id"`     // who provided the resource
+	NodeID        string        `json:"node_id"`         // which node
+	
+	// User information  
+	UserID        string        `json:"user_id"`         // who requested the resource
+	
+	// Economic context
+	IsChargeable  bool          `json:"is_chargeable"`   // follows payment logic rules
+	OperationType string        `json:"operation_type"`  // user_request, system_task, protocol
+	ServiceName   string        `json:"service_name"`    // which service initiated
+	
+	// Metadata
+	JobID         string            `json:"job_id,omitempty"`
+	ContentID     string            `json:"content_id,omitempty"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
+	Timestamp     time.Time         `json:"timestamp"`
+}
+
+// ContentActivityEvent represents content creation/consumption for economic tracking
+type ContentActivityEvent struct {
+	// Content details
+	ContentID     string  `json:"content_id"`
+	ContentType   string  `json:"content_type"`    // video, audio, image, document
+	CreatorID     string  `json:"creator_id"`      // content creator
+	
+	// Activity details
+	ActivityType  string  `json:"activity_type"`   // view, like, share, comment
+	ViewerID      string  `json:"viewer_id"`       // who interacted
+	DataConsumed  int64   `json:"data_consumed"`   // bytes consumed for viewing
+	
+	// Quality metrics
+	ViewDuration  time.Duration `json:"view_duration"`
+	EngagementType string       `json:"engagement_type"` // like, share, comment
+	QualityScore   float64      `json:"quality_score"`   // resolution, bitrate, etc.
+	
+	// Metadata
+	Timestamp     time.Time         `json:"timestamp"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
+}
+
+// PaymentLogicChecker determines if operations are chargeable based on payment logic
+type PaymentLogicChecker interface {
+	// IsChargeableOperation determines if an operation should be charged for
+	IsChargeableOperation(resourceType ResourceType, operation string) bool
+	
+	// GetOperationType categorizes the operation type for pricing
+	GetOperationType(operation string, metadata map[string]string) string
+}
+
+// DefaultPaymentLogicChecker implements the payment logic from the docs
+type DefaultPaymentLogicChecker struct{}
+
+// NewDefaultPaymentLogicChecker creates a new payment logic checker
+func NewDefaultPaymentLogicChecker() *DefaultPaymentLogicChecker {
+	return &DefaultPaymentLogicChecker{}
+}
+
+// IsChargeableOperation implements payment logic rules
+func (p *DefaultPaymentLogicChecker) IsChargeableOperation(resourceType ResourceType, operation string) bool {
+	switch resourceType {
+	case ResourceTypeStorage:
+		// Storage operations that consume physical resources
+		switch operation {
+		case "put", "get", "replicate", "stream":
+			return true // Consumes storage/bandwidth resources
+		case "exists", "hash", "metadata", "list":
+			return false // Metadata operations are free
+		default:
+			return false // Conservative default
+		}
+		
+	case ResourceTypeBandwidth:
+		// Bandwidth operations for user-requested data
+		switch operation {
+		case "upload", "download", "stream", "relay":
+			return true // User-requested data transfer
+		case "ping", "discovery", "dht_lookup", "consensus":
+			return false // Protocol coordination
+		default:
+			return false
+		}
+		
+	case ResourceTypeCompute:
+		// Compute operations for user-requested processing
+		switch operation {
+		case "execute", "ai_inference", "ml_training", "video_processing":
+			return true // User-requested computation
+		case "validation", "hash_verification", "signature_check":
+			return false // Protocol validation
+		default:
+			return false
+		}
+		
+	case ResourceTypeMemory:
+		// Memory follows same rules as compute
+		return p.IsChargeableOperation(ResourceTypeCompute, operation)
+		
+	default:
+		return false // Unknown resource types default to free
+	}
+}
+
+// GetOperationType categorizes operations for economic tracking
+func (p *DefaultPaymentLogicChecker) GetOperationType(operation string, metadata map[string]string) string {
+	// Check if explicitly marked as system task
+	if metadata["system_task"] == "true" {
+		return "system_task"
+	}
+	
+	// Check if it's protocol overhead
+	protocolOps := map[string]bool{
+		"ping": true, "discovery": true, "dht_lookup": true, 
+		"consensus": true, "validation": true, "hash_verification": true,
+		"signature_check": true, "exists": true, "metadata": true,
+	}
+	
+	if protocolOps[operation] {
+		return "protocol"
+	}
+	
+	// Default to user request
+	return "user_request"
+}

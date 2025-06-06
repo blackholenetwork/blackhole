@@ -1,0 +1,125 @@
+package storage
+
+import (
+	"context"
+	"io"
+	"time"
+	
+	"github.com/blackholenetwork/blackhole/pkg/core"
+)
+
+// CIDService defines the interface for pure content-based storage (metadata-free)
+type CIDService interface {
+	core.Service
+	
+	// Pure content operations (no metadata required)
+	Store(ctx context.Context, reader io.Reader) (ContentCID, error)
+	Retrieve(ctx context.Context, cid ContentCID) (io.ReadCloser, error)
+	Delete(ctx context.Context, cid ContentCID) error
+	HasContent(ctx context.Context, cid ContentCID) bool
+	
+	// Minimal info derivable from CID and system state
+	GetContentInfo(ctx context.Context, cid ContentCID) (ContentInfo, error)
+}
+
+// Enhanced CID Service with optional user metadata (separate from content)
+type EnhancedCIDService interface {
+	CIDService
+	
+	// Optional user metadata operations (stored separately from content)
+	StoreWithMetadata(ctx context.Context, reader io.Reader, userMeta UserMetadata) (ContentCID, error)
+	GetUserMetadata(ctx context.Context, cid ContentCID, userID string) (UserMetadata, error)
+	SetUserMetadata(ctx context.Context, cid ContentCID, userID string, meta UserMetadata) error
+	ListUserFiles(ctx context.Context, userID string) ([]UserFileReference, error)
+}
+
+// UserMetadata represents optional user-provided metadata (not part of content identity)
+type UserMetadata struct {
+	Filename   string                 `json:"filename,omitempty"`
+	Tags       []string               `json:"tags,omitempty"`
+	Properties map[string]interface{} `json:"properties,omitempty"`
+	Notes      string                 `json:"notes,omitempty"`
+}
+
+// UserFileReference links user metadata to content
+type UserFileReference struct {
+	CID        ContentCID   `json:"cid"`
+	UserID     string       `json:"user_id"`
+	Metadata   UserMetadata `json:"metadata"`
+	UploadedAt time.Time    `json:"uploaded_at"`
+}
+
+// ComparisonExample shows the difference between approaches
+type ComparisonExample struct {
+	// OLD WAY (Metadata-based FileID)
+	OldFileID   string       `json:"old_file_id"`   // "a1b2c3d4e5f6..." (metadata+timestamp hash)
+	OldMetadata string       `json:"old_metadata"`  // "Stored filename, size, etc."
+	
+	// NEW WAY (Content-based CID) 
+	NewCID      ContentCID   `json:"new_cid"`       // "bafybei..." (content hash)
+	NewMetadata *UserMetadata `json:"new_metadata,omitempty"` // Optional user metadata
+}
+
+// Benefits demonstrates the advantages of the CID approach
+type Benefits struct {
+	Deduplication    string `json:"deduplication"`     // "Identical content stored once"
+	ContentVerity    string `json:"content_verity"`    // "CID proves authenticity"
+	IPFSCompatible   string `json:"ipfs_compatible"`   // "Works with IPFS ecosystem"
+	ZeroMetadata     string `json:"zero_metadata"`     // "No required metadata storage"
+	DeterministicPos string `json:"deterministic_pos"` // "Same content → same positions"
+}
+
+// Migration shows how to transition from old to new system
+type Migration struct {
+	Phase1 string `json:"phase_1"` // "Implement CID system alongside existing"
+	Phase2 string `json:"phase_2"` // "Start using CIDs for new uploads"
+	Phase3 string `json:"phase_3"` // "Migrate existing files to CID format"
+	Phase4 string `json:"phase_4"` // "Remove old metadata system"
+}
+
+// Example usage patterns
+type UsageExamples struct {
+	// Minimal usage (zero metadata)
+	MinimalStore    string `json:"minimal_store"`    // "cid := Store(fileContent)"
+	MinimalRetrieve string `json:"minimal_retrieve"` // "content := Retrieve(cid)"
+	
+	// Enhanced usage (with user metadata)
+	EnhancedStore    string `json:"enhanced_store"`    // "cid := StoreWithMetadata(content, userMeta)"
+	EnhancedRetrieve string `json:"enhanced_retrieve"` // "content, meta := RetrieveWithMetadata(cid, userID)"
+}
+
+// System Capabilities with pure CID approach
+type CIDSystemCapabilities struct {
+	// What we can derive from content alone
+	FileSize        string `json:"file_size"`        // "len(content)"
+	ChunkCount      string `json:"chunk_count"`      // "calculated from size"
+	BlockCount      string `json:"block_count"`      // "calculated from chunks"
+	ContentType     string `json:"content_type"`     // "detected from content"
+	ChunkCIDs       string `json:"chunk_cids"`       // "deterministic from content"
+	StoragePositions string `json:"storage_positions"` // "deterministic from chunk CIDs"
+	
+	// What we need minimal tracking for (optional)
+	AccessPatterns  string `json:"access_patterns"`  // "for demand-based optimization"
+	NetworkHealth   string `json:"network_health"`   // "for position health monitoring"
+	
+	// What becomes user responsibility
+	FileNaming      string `json:"file_naming"`      // "user manages their own filename mappings"
+	Organization    string `json:"organization"`     // "user manages tags and folders"
+	Sharing         string `json:"sharing"`          // "user manages access control lists"
+}
+
+// Performance Implications
+type PerformanceImplications struct {
+	Positives struct {
+		Deduplication   string `json:"deduplication"`   // "Massive storage savings"
+		NoMetadataIO    string `json:"no_metadata_io"`  // "No metadata read/write operations"
+		CacheFriendly   string `json:"cache_friendly"`  // "Popular content naturally cached"
+		PredictableLoad string `json:"predictable_load"` // "Same content → same positions"
+	} `json:"positives"`
+	
+	Considerations struct {
+		CIDGeneration string `json:"cid_generation"` // "Must read full content to generate CID"
+		ChunkDiscovery string `json:"chunk_discovery"` // "Need sophisticated chunk finding for retrieval"
+		MinimalIndices string `json:"minimal_indices"` // "May need some indices for large-scale operation"
+	} `json:"considerations"`
+}

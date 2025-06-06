@@ -238,7 +238,7 @@ GET    /api/v1/network/peers  # Peer list
 - 1000 files per node limit
 - 100GB total storage per node
 
-### Functionality  
+### Functionality
 - No partial file retrieval
 - No file search/indexing
 - No metadata beyond CID

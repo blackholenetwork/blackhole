@@ -1,0 +1,47 @@
+[Unit]
+Description=Blackhole Network - Decentralized Infrastructure Platform
+Documentation=https://github.com/yourusername/blackholenetwork
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=blackhole
+Group=blackhole
+ExecStart=/usr/bin/blackhole --config /etc/blackhole/config.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=blackhole
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/blackhole /var/log/blackhole
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=512
+MemoryLimit=2G
+CPUQuota=80%
+
+# Environment
+Environment="GOMAXPROCS=0"
+Environment="BLACKHOLE_HOME=/var/lib/blackhole"
+
+[Install]
+WantedBy=multi-user.target

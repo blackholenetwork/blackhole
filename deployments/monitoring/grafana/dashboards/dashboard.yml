@@ -1,0 +1,18 @@
+# Grafana Dashboard Configuration
+apiVersion: 1
+
+providers:
+  - name: 'Blackhole Network Dashboards'
+    orgId: 1
+    folder: 'Blackhole Network'
+    folderUid: blackhole-folder
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards/json
+      foldersFromFilesStructure: true
+
+# The actual dashboard JSON would be in a separate file
+# This is the provisioning configuration that tells Grafana where to find dashboards

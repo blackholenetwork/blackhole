@@ -1,0 +1,344 @@
+package storage
+
+import (
+	"fmt"
+	"time"
+)
+
+// PositionClaimingEngine handles the logic for position claiming strategies
+type PositionClaimingEngine struct {
+	nodeManager *NodeManager
+}
+
+// NewPositionClaimingEngine creates a new position claiming engine
+func NewPositionClaimingEngine(nodeManager *NodeManager) *PositionClaimingEngine {
+	return &PositionClaimingEngine{
+		nodeManager: nodeManager,
+	}
+}
+
+// CreateDefaultStrategies returns predefined position claiming strategies
+func CreateDefaultStrategies() map[StrategyType]PositionStrategy {
+	return map[StrategyType]PositionStrategy{
+		ConservativeStrategy: {
+			Type:                 ConservativeStrategy,
+			StoragePerPosition:   10 * 1024 * 1024 * 1024, // 10GB per position
+			MaxPositions:         1000,                     // Conservative limit
+			FillRateThreshold:    0.6,                      // Stop claiming at 60% full
+			ExpansionRate:        50,                       // Add 50 positions at a time
+			ConservativeBuffer:   2.0,                      // 100% extra capacity buffer
+		},
+		AggressiveStrategy: {
+			Type:                 AggressiveStrategy,
+			StoragePerPosition:   1 * 1024 * 1024 * 1024, // 1GB per position
+			MaxPositions:         10000,                   // Higher limit
+			FillRateThreshold:    0.9,                     // Stop claiming at 90% full
+			ExpansionRate:        200,                     // Add 200 positions at a time
+			ConservativeBuffer:   1.1,                     // 10% extra capacity buffer
+		},
+		DynamicStrategy: {
+			Type:                 DynamicStrategy,
+			StoragePerPosition:   5 * 1024 * 1024 * 1024, // 5GB per position (adaptive)
+			MaxPositions:         5000,                    // Moderate limit
+			FillRateThreshold:    0.8,                     // Stop claiming at 80% full
+			ExpansionRate:        100,                     // Add 100 positions at a time
+			ConservativeBuffer:   1.5,                     // 50% extra capacity buffer (adaptive)
+		},
+		ReputationStrategy: {
+			Type:                 ReputationStrategy,
+			StoragePerPosition:   3 * 1024 * 1024 * 1024, // 3GB per position
+			MaxPositions:         0,                       // No fixed limit (reputation-based)
+			FillRateThreshold:    0.75,                    // Stop claiming at 75% full
+			ExpansionRate:        0,                       // Reputation-based expansion
+			ConservativeBuffer:   1.3,                     // 30% extra capacity buffer
+		},
+	}
+}
+
+// OptimizeStrategy adjusts a node's strategy based on its performance and network conditions
+func (pce *PositionClaimingEngine) OptimizeStrategy(nodeID NodeID) (*PositionStrategy, error) {
+	node, reputation, err := pce.nodeManager.GetNodeStats(nodeID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get node stats: %w", err)
+	}
+
+	currentStrategy := node.PositionStrategy
+	optimizedStrategy := currentStrategy // Start with current strategy
+
+	// Analyze node performance
+	if reputation != nil {
+		// If node has high reputation, allow more aggressive claiming
+		if reputation.TotalScore > 0.8 {
+			optimizedStrategy = pce.promoteStrategy(currentStrategy)
+		} else if reputation.TotalScore < 0.3 {
+			// Poor reputation - make more conservative
+			optimizedStrategy = pce.demoteStrategy(currentStrategy)
+		}
+
+		// Adjust based on success rate
+		if reputation.SuccessRate < 0.8 {
+			// Low success rate - reduce claiming rate
+			optimizedStrategy.ExpansionRate = int(float64(optimizedStrategy.ExpansionRate) * 0.5)
+			optimizedStrategy.ConservativeBuffer *= 1.2 // Increase buffer
+		}
+
+		// Adjust based on response time
+		if reputation.ResponseTime > 500*time.Millisecond {
+			// Slow response - be more conservative
+			optimizedStrategy.StoragePerPosition = int64(float64(optimizedStrategy.StoragePerPosition) * 1.5)
+		}
+	}
+
+	// Analyze current fill rate
+	usedStorage := node.StorageCapacity - node.AvailableStorage
+	fillRate := float64(usedStorage) / float64(node.StorageCapacity)
+
+	// Dynamic adjustments based on fill rate
+	if fillRate > optimizedStrategy.FillRateThreshold {
+		// Approaching capacity - stop claiming
+		optimizedStrategy.MaxPositions = len(node.ClaimedPositions) // Don't claim more
+	} else if fillRate < 0.3 {
+		// Very low utilization - claim more aggressively
+		optimizedStrategy.ExpansionRate = int(float64(optimizedStrategy.ExpansionRate) * 1.5)
+	}
+
+	return &optimizedStrategy, nil
+}
+
+// promoteStrategy moves to a more aggressive strategy
+func (pce *PositionClaimingEngine) promoteStrategy(current PositionStrategy) PositionStrategy {
+	switch current.Type {
+	case ConservativeStrategy:
+		// Conservative -> Dynamic
+		return CreateDefaultStrategies()[DynamicStrategy]
+	case DynamicStrategy:
+		// Dynamic -> Aggressive
+		return CreateDefaultStrategies()[AggressiveStrategy]
+	case ReputationStrategy:
+		// Reputation stays reputation but with better parameters
+		improved := current
+		improved.MaxPositions = int(float64(improved.MaxPositions) * 1.5)
+		improved.ExpansionRate = int(float64(improved.ExpansionRate) * 1.3)
+		return improved
+	default:
+		return current // Aggressive stays aggressive
+	}
+}
+
+// demoteStrategy moves to a more conservative strategy
+func (pce *PositionClaimingEngine) demoteStrategy(current PositionStrategy) PositionStrategy {
+	switch current.Type {
+	case AggressiveStrategy:
+		// Aggressive -> Dynamic
+		return CreateDefaultStrategies()[DynamicStrategy]
+	case DynamicStrategy:
+		// Dynamic -> Conservative
+		return CreateDefaultStrategies()[ConservativeStrategy]
+	case ReputationStrategy:
+		// Reputation becomes more conservative
+		demoted := current
+		demoted.MaxPositions = int(float64(demoted.MaxPositions) * 0.7)
+		demoted.ConservativeBuffer *= 1.5
+		return demoted
+	default:
+		return current // Conservative stays conservative
+	}
+}
+
+// CalculateOptimalClaiming determines the optimal number of positions to claim
+func (pce *PositionClaimingEngine) CalculateOptimalClaiming(nodeID NodeID) (*ClaimingRecommendation, error) {
+	node, reputation, err := pce.nodeManager.GetNodeStats(nodeID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get node stats: %w", err)
+	}
+
+	strategy := node.PositionStrategy
+	currentPositions := len(node.ClaimedPositions)
+	usedStorage := node.StorageCapacity - node.AvailableStorage
+	fillRate := float64(usedStorage) / float64(node.StorageCapacity)
+
+	recommendation := &ClaimingRecommendation{
+		NodeID:           nodeID,
+		CurrentPositions: currentPositions,
+		CurrentFillRate:  fillRate,
+		Strategy:         strategy,
+	}
+
+	// Calculate recommended positions based on strategy
+	switch strategy.Type {
+	case ConservativeStrategy:
+		recommendation = pce.calculateConservativeClaiming(node, reputation, recommendation)
+	case AggressiveStrategy:
+		recommendation = pce.calculateAggressiveClaiming(node, reputation, recommendation)
+	case DynamicStrategy:
+		recommendation = pce.calculateDynamicClaiming(node, reputation, recommendation)
+	case ReputationStrategy:
+		recommendation = pce.calculateReputationClaiming(node, reputation, recommendation)
+	}
+
+	return recommendation, nil
+}
+
+// ClaimingRecommendation provides recommendations for position claiming
+type ClaimingRecommendation struct {
+	NodeID                  NodeID           `json:"node_id"`
+	CurrentPositions        int              `json:"current_positions"`
+	RecommendedPositions    int              `json:"recommended_positions"`
+	PositionsToClaim        int              `json:"positions_to_claim"`
+	CurrentFillRate         float64          `json:"current_fill_rate"`
+	PredictedFillRate       float64          `json:"predicted_fill_rate"`
+	Strategy                PositionStrategy `json:"strategy"`
+	Reasoning               string           `json:"reasoning"`
+	RiskLevel               RiskLevel        `json:"risk_level"`
+	ExpectedStorageNeeded   int64            `json:"expected_storage_needed"`
+	RecommendedAction       ActionType       `json:"recommended_action"`
+}
+
+type RiskLevel string
+type ActionType string
+
+const (
+	LowRisk    RiskLevel = "low"
+	MediumRisk RiskLevel = "medium"
+	HighRisk   RiskLevel = "high"
+
+	ClaimMore   ActionType = "claim_more"
+	ClaimNormal ActionType = "claim_normal"
+	StopClaiming ActionType = "stop_claiming"
+	Optimize    ActionType = "optimize_strategy"
+)
+
+func (pce *PositionClaimingEngine) calculateConservativeClaiming(node *NodeDetails, reputation *NodeReputation, rec *ClaimingRecommendation) *ClaimingRecommendation {
+	// Conservative: Large buffer, slow expansion
+	availableWithBuffer := int64(float64(node.AvailableStorage) / node.PositionStrategy.ConservativeBuffer)
+	targetPositions := int(availableWithBuffer / node.PositionStrategy.StoragePerPosition)
+	
+	rec.RecommendedPositions = min(targetPositions, node.PositionStrategy.MaxPositions)
+	rec.PositionsToClaim = max(0, rec.RecommendedPositions - rec.CurrentPositions)
+	rec.RiskLevel = LowRisk
+	rec.ExpectedStorageNeeded = int64(rec.PositionsToClaim) * node.PositionStrategy.StoragePerPosition
+	
+	if rec.CurrentFillRate > node.PositionStrategy.FillRateThreshold {
+		rec.RecommendedAction = StopClaiming
+		rec.Reasoning = "Fill rate exceeds conservative threshold - stopping new claims"
+	} else if rec.PositionsToClaim > 0 {
+		rec.RecommendedAction = ClaimNormal
+		rec.Reasoning = "Conservative claiming with large safety buffer"
+	} else {
+		rec.RecommendedAction = Optimize
+		rec.Reasoning = "No new positions needed - consider optimizing strategy"
+	}
+	
+	return rec
+}
+
+func (pce *PositionClaimingEngine) calculateAggressiveClaiming(node *NodeDetails, reputation *NodeReputation, rec *ClaimingRecommendation) *ClaimingRecommendation {
+	// Aggressive: Small buffer, fast expansion
+	availableWithBuffer := int64(float64(node.AvailableStorage) / node.PositionStrategy.ConservativeBuffer)
+	targetPositions := int(availableWithBuffer / node.PositionStrategy.StoragePerPosition)
+	
+	rec.RecommendedPositions = min(targetPositions, node.PositionStrategy.MaxPositions)
+	rec.PositionsToClaim = max(0, rec.RecommendedPositions - rec.CurrentPositions)
+	rec.RiskLevel = HighRisk
+	rec.ExpectedStorageNeeded = int64(rec.PositionsToClaim) * node.PositionStrategy.StoragePerPosition
+	
+	if rec.CurrentFillRate > node.PositionStrategy.FillRateThreshold {
+		rec.RecommendedAction = StopClaiming
+		rec.Reasoning = "Fill rate exceeds aggressive threshold - immediate stop"
+	} else if rec.PositionsToClaim > 0 {
+		rec.RecommendedAction = ClaimMore
+		rec.Reasoning = "Aggressive claiming to maximize utilization"
+	} else {
+		rec.RecommendedAction = ClaimMore
+		rec.Reasoning = "Maintain aggressive expansion"
+	}
+	
+	return rec
+}
+
+func (pce *PositionClaimingEngine) calculateDynamicClaiming(node *NodeDetails, reputation *NodeReputation, rec *ClaimingRecommendation) *ClaimingRecommendation {
+	// Dynamic: Adjust based on current conditions
+	var storagePerPosition int64
+	var riskLevel RiskLevel
+	
+	// Adjust storage per position based on fill rate
+	if rec.CurrentFillRate < 0.4 {
+		storagePerPosition = 2 * 1024 * 1024 * 1024 // 2GB - more aggressive when empty
+		riskLevel = MediumRisk
+	} else if rec.CurrentFillRate < 0.7 {
+		storagePerPosition = 5 * 1024 * 1024 * 1024 // 5GB - normal
+		riskLevel = LowRisk
+	} else {
+		storagePerPosition = 10 * 1024 * 1024 * 1024 // 10GB - conservative when filling
+		riskLevel = LowRisk
+	}
+	
+	availableWithBuffer := int64(float64(node.AvailableStorage) / node.PositionStrategy.ConservativeBuffer)
+	targetPositions := int(availableWithBuffer / storagePerPosition)
+	
+	rec.RecommendedPositions = min(targetPositions, node.PositionStrategy.MaxPositions)
+	rec.PositionsToClaim = max(0, rec.RecommendedPositions - rec.CurrentPositions)
+	rec.RiskLevel = riskLevel
+	rec.ExpectedStorageNeeded = int64(rec.PositionsToClaim) * storagePerPosition
+	
+	// Dynamic decision making
+	if rec.CurrentFillRate > 0.8 {
+		rec.RecommendedAction = StopClaiming
+		rec.Reasoning = "High fill rate - pausing claims for safety"
+	} else if rec.CurrentFillRate < 0.3 {
+		rec.RecommendedAction = ClaimMore
+		rec.Reasoning = "Low utilization - increasing claim rate"
+	} else {
+		rec.RecommendedAction = ClaimNormal
+		rec.Reasoning = "Balanced utilization - normal claiming rate"
+	}
+	
+	return rec
+}
+
+func (pce *PositionClaimingEngine) calculateReputationClaiming(node *NodeDetails, reputation *NodeReputation, rec *ClaimingRecommendation) *ClaimingRecommendation {
+	// Reputation-based: Limits based on reputation score
+	if reputation == nil {
+		rec.RecommendedAction = StopClaiming
+		rec.Reasoning = "No reputation data available"
+		rec.RiskLevel = HighRisk
+		return rec
+	}
+	
+	// Calculate max positions based on reputation
+	var maxPositions int
+	if reputation.TotalScore >= 0.9 {
+		maxPositions = 100000 // Network veteran
+		rec.RiskLevel = LowRisk
+	} else if reputation.TotalScore >= 0.7 {
+		maxPositions = 10000 // High reputation
+		rec.RiskLevel = LowRisk
+	} else if reputation.TotalScore >= 0.5 {
+		maxPositions = 1000 // Proven reliability
+		rec.RiskLevel = MediumRisk
+	} else {
+		maxPositions = 100 // New/poor reputation
+		rec.RiskLevel = HighRisk
+	}
+	
+	availableWithBuffer := int64(float64(node.AvailableStorage) / node.PositionStrategy.ConservativeBuffer)
+	targetPositions := int(availableWithBuffer / node.PositionStrategy.StoragePerPosition)
+	targetPositions = min(targetPositions, maxPositions)
+	
+	rec.RecommendedPositions = targetPositions
+	rec.PositionsToClaim = max(0, rec.RecommendedPositions - rec.CurrentPositions)
+	rec.ExpectedStorageNeeded = int64(rec.PositionsToClaim) * node.PositionStrategy.StoragePerPosition
+	
+	if rec.CurrentPositions >= maxPositions {
+		rec.RecommendedAction = StopClaiming
+		rec.Reasoning = fmt.Sprintf("Reached reputation limit (%d positions for score %.2f)", maxPositions, reputation.TotalScore)
+	} else if rec.PositionsToClaim > 0 {
+		rec.RecommendedAction = ClaimNormal
+		rec.Reasoning = fmt.Sprintf("Claiming within reputation limits (score: %.2f)", reputation.TotalScore)
+	} else {
+		rec.RecommendedAction = Optimize
+		rec.Reasoning = "Consider improving reputation to claim more positions"
+	}
+	
+	return rec
+}

@@ -204,7 +204,7 @@
 ```
 Unit Tests: Every function
 Integration Tests: Every API
-E2E Tests: User workflows  
+E2E Tests: User workflows
 Stress Tests: Weekly
 Chaos Tests: Before release
 ```

@@ -65,11 +65,11 @@ type SessionConfig struct {
     Secure   bool // true in production
     HttpOnly bool // always true
     SameSite string // "strict"
-    
+
     // Rotation
     RotateOnLogin bool // true
     MaxAge        time.Duration // 24 hours
-    
+
     // Tracking
     TrackIP       bool // true
     TrackUA       bool // true
@@ -114,7 +114,7 @@ var Roles = map[string]Role{
         },
     },
     "admin": {
-        Name: "admin", 
+        Name: "admin",
         Permissions: []Permission{
             PermFileRead,
             PermFileWrite,
@@ -148,12 +148,12 @@ func CanAccessFile(user *User, file *File) bool {
     if file.OwnerID == user.ID {
         return true
     }
-    
+
     // Check sharing permissions
     if file.IsPublic {
         return true
     }
-    
+
     // Check explicit grants
     return file.HasGrant(user.ID)
 }
@@ -209,7 +209,7 @@ func GetFileByName(name string) (*File, error) {
     // ✅ Safe
     query := "SELECT * FROM files WHERE name = ?"
     return db.QueryRow(query, name)
-    
+
     // ❌ Never do this
     // query := fmt.Sprintf("SELECT * FROM files WHERE name = '%s'", name)
 }
@@ -220,14 +220,14 @@ func SafeJoinPath(base, userPath string) (string, error) {
     if strings.Contains(cleaned, "..") {
         return "", ErrInvalidPath
     }
-    
+
     joined := filepath.Join(base, cleaned)
-    
+
     // Ensure still within base
     if !strings.HasPrefix(joined, base) {
         return "", ErrInvalidPath
     }
-    
+
     return joined, nil
 }
 ```
@@ -248,17 +248,17 @@ func EncryptFile(data []byte, key []byte) ([]byte, error) {
     if err != nil {
         return nil, err
     }
-    
+
     gcm, err := cipher.NewGCM(block)
     if err != nil {
         return nil, err
     }
-    
+
     nonce := make([]byte, gcm.NonceSize())
     if _, err := rand.Read(nonce); err != nil {
         return nil, err
     }
-    
+
     return gcm.Seal(nonce, nonce, data, nil), nil
 }
 ```
@@ -324,32 +324,32 @@ func SecurityHeaders() fiber.Handler {
         // Prevent XSS
         c.Set("X-XSS-Protection", "1; mode=block")
         c.Set("X-Content-Type-Options", "nosniff")
-        
+
         // Prevent clickjacking
         c.Set("X-Frame-Options", "DENY")
-        
+
         // HTTPS enforcement
         c.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-        
+
         // Content Security Policy
-        c.Set("Content-Security-Policy", 
+        c.Set("Content-Security-Policy",
             "default-src 'self'; " +
             "script-src 'self' 'unsafe-inline'; " +
             "style-src 'self' 'unsafe-inline'; " +
             "img-src 'self' data: https:; " +
             "font-src 'self'; " +
             "connect-src 'self' wss://;")
-        
+
         // Referrer policy
         c.Set("Referrer-Policy", "strict-origin-when-cross-origin")
-        
+
         // Permissions policy
-        c.Set("Permissions-Policy", 
+        c.Set("Permissions-Policy",
             "geolocation=(), " +
             "microphone=(), " +
             "camera=(), " +
             "payment=()")
-        
+
         return c.Next()
     }
 }
@@ -390,7 +390,7 @@ const (
 func LogSecurityEvent(event SecurityEvent) {
     // Never log sensitive data
     sanitized := sanitizeEvent(event)
-    
+
     // Write to secure audit log
     auditLogger.Info("security event",
         "type", sanitized.EventType,
@@ -458,13 +458,13 @@ type ConnectionLimits struct {
 func AdaptiveRateLimit(c *fiber.Ctx) error {
     // Check system load
     load := getSystemLoad()
-    
+
     // Tighten limits under high load
     if load > 0.8 {
         limits.MaxRequestsPerSecond = 5
         limits.MaxConnectionsPerIP = 50
     }
-    
+
     return nil
 }
 ```
@@ -505,12 +505,12 @@ func AuthenticateUser(username, password string) error {
         // Don't reveal if user exists
         return ErrInvalidCredentials
     }
-    
+
     if !comparePassword(user.Password, password) {
         // Same error for wrong password
         return ErrInvalidCredentials
     }
-    
+
     return nil
 }
 ```
@@ -557,22 +557,22 @@ golang.org/x/crypto/nacl    // NaCl crypto
 // Kill switch for emergencies
 func EmergencyShutdown(reason string) {
     log.Fatal("EMERGENCY SHUTDOWN", "reason", reason)
-    
+
     // 1. Stop accepting new requests
     server.Shutdown()
-    
+
     // 2. Invalidate all sessions
     sessions.InvalidateAll()
-    
+
     // 3. Rotate all keys
     keys.RotateAll()
-    
+
     // 4. Alert administrators
     alerts.SendEmergency(reason)
-    
+
     // 5. Preserve audit logs
     audit.Backup()
-    
+
     os.Exit(1)
 }
 ```

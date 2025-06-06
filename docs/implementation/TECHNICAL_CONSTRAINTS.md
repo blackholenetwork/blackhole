@@ -199,7 +199,7 @@ if !VerifySignature(data, signature, peerKey) {
 // Allowed
 logrus.Info("File stored", "size", fileSize)
 
-// NOT Allowed  
+// NOT Allowed
 analytics.Track("FileUploaded", userID, fileName)
 ```
 
@@ -279,7 +279,7 @@ for retries := 0; retries < 5; retries++ {
 
 **Principles**:
 - Obvious over clever
-- Explicit over implicit  
+- Explicit over implicit
 - Simple over sophisticated
 - Tested over assumed
 
@@ -319,7 +319,7 @@ func TestStorage(t *testing.T) {
         {"empty file", File{}, ErrEmptyFile},
         {"large file", largeFile, nil},
     }
-    
+
     for _, tt := range tests {
         t.Run(tt.name, func(t *testing.T) {
             got := Store(tt.file)

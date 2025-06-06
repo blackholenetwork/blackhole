@@ -1,0 +1,296 @@
+package incentive
+
+import (
+	"time"
+)
+
+// SubscriptionTier is defined in config.go
+
+// ResourceType represents the type of resource contribution
+type ResourceType string
+
+const (
+	ResourceStorage   ResourceType = "storage"   // ~8.75% of pool (25/100 * 35%)
+	ResourceBandwidth ResourceType = "bandwidth" // ~10% of pool (25/100 * 40%) 
+	ResourceCompute   ResourceType = "compute"   // ~6.25% of pool (25/100 * 25%)
+	ResourceContent   ResourceType = "content"   // 70% of pool (fixed allocation)
+	ResourceNetworkOps ResourceType = "network_ops" // 2.5% of pool
+	ResourceAppDev    ResourceType = "app_dev"    // 2.5% of pool (new)
+)
+
+// DistributionConfig defines how the subscription pool is distributed
+type DistributionConfig struct {
+	StoragePercentage    float64 `json:"storage_percentage"`    // ~8.75% (25% * 35%)
+	BandwidthPercentage  float64 `json:"bandwidth_percentage"`  // ~10% (25% * 40%)
+	ComputePercentage    float64 `json:"compute_percentage"`    // ~6.25% (25% * 25%)
+	ContentPercentage    float64 `json:"content_percentage"`    // 70% fixed
+	NetworkOpsPercentage float64 `json:"network_ops_percentage"` // 2.5% fixed
+	AppDeveloperPercentage float64 `json:"app_developer_percentage"` // 2.5% fixed
+	// No free tier subsidy - users either pay or are subsidized by providers
+}
+
+// BillingCycle represents a monthly billing and distribution cycle
+type BillingCycle struct {
+	ID              string    `json:"id"`
+	StartDate       time.Time `json:"start_date"`
+	EndDate         time.Time `json:"end_date"`
+	Status          CycleStatus `json:"status"`
+	TotalPoolAmount float64   `json:"total_pool_amount"`     // Total subscriptions collected
+	DistributedAmount float64 `json:"distributed_amount"`   // Amount distributed to providers
+	FreeTierSubsidy float64   `json:"free_tier_subsidy"`    // Amount reserved for free tier
+	CreatedAt       time.Time `json:"created_at"`
+	CompletedAt     *time.Time `json:"completed_at,omitempty"`
+}
+
+// CycleStatus represents billing cycle status
+type CycleStatus string
+
+const (
+	CycleStatusActive      CycleStatus = "active"      // Currently collecting/tracking
+	CycleStatusCalculating CycleStatus = "calculating" // Computing distributions
+	CycleStatusDistributing CycleStatus = "distributing" // Sending payments
+	CycleStatusCompleted   CycleStatus = "completed"   // Cycle finished
+	CycleStatusFailed      CycleStatus = "failed"      // Distribution failed
+)
+
+// Subscription represents a user's subscription
+type Subscription struct {
+	UserID       string           `json:"user_id"`
+	Tier         SubscriptionTier `json:"tier"`
+	MonthlyAmount float64         `json:"monthly_amount"`
+	StartDate    time.Time        `json:"start_date"`
+	EndDate      *time.Time       `json:"end_date,omitempty"`
+	Status       SubscriptionStatus `json:"status"`
+	CreatedAt    time.Time        `json:"created_at"`
+	UpdatedAt    time.Time        `json:"updated_at"`
+}
+
+// SubscriptionStatus represents subscription state
+type SubscriptionStatus string
+
+const (
+	SubscriptionActive   SubscriptionStatus = "active"
+	SubscriptionSuspended SubscriptionStatus = "suspended"
+	SubscriptionCancelled SubscriptionStatus = "cancelled"
+	SubscriptionExpired   SubscriptionStatus = "expired"
+)
+
+// UsageContribution represents a provider's resource contribution
+type UsageContribution struct {
+	ProviderID    string       `json:"provider_id"`
+	BillingCycleID string      `json:"billing_cycle_id"`
+	ResourceType  ResourceType `json:"resource_type"`
+	Amount        float64      `json:"amount"`       // Actual amount contributed
+	Unit          string       `json:"unit"`         // GB-hours, TB, CPU-hours, etc.
+	StartTime     time.Time    `json:"start_time"`
+	EndTime       time.Time    `json:"end_time"`
+	VerificationProof string   `json:"verification_proof"` // Cryptographic proof
+	RecordedAt    time.Time    `json:"recorded_at"`
+}
+
+// ProviderReward represents calculated rewards for a provider
+type ProviderReward struct {
+	ProviderID     string                     `json:"provider_id"`
+	BillingCycleID string                     `json:"billing_cycle_id"`
+	TotalReward    float64                    `json:"total_reward"`
+	Breakdown      map[ResourceType]float64   `json:"breakdown"`    // Reward per resource type
+	Contributions  map[ResourceType]float64   `json:"contributions"` // Actual contributions
+	SharePercentage map[ResourceType]float64  `json:"share_percentage"` // % of network total
+	CalculatedAt   time.Time                  `json:"calculated_at"`
+	PaidAt         *time.Time                 `json:"paid_at,omitempty"`
+	Status         RewardStatus               `json:"status"`
+}
+
+// RewardStatus represents payment status
+type RewardStatus string
+
+const (
+	RewardPending    RewardStatus = "pending"
+	RewardProcessing RewardStatus = "processing"
+	RewardPaid       RewardStatus = "paid"
+	RewardFailed     RewardStatus = "failed"
+)
+
+// NetworkContribution represents total network contributions for a cycle
+type NetworkContribution struct {
+	BillingCycleID string                   `json:"billing_cycle_id"`
+	Totals         map[ResourceType]float64 `json:"totals"`          // Total network contribution per resource
+	ProviderCount  map[ResourceType]int     `json:"provider_count"`  // Number of providers per resource
+	LastUpdated    time.Time                `json:"last_updated"`
+}
+
+// RewardCalculation represents the calculation parameters for a billing cycle
+type RewardCalculation struct {
+	BillingCycleID      string                   `json:"billing_cycle_id"`
+	TotalPool           float64                  `json:"total_pool"`
+	MarketPricingConfig MarketPricingConfig      `json:"market_pricing_config"`
+	NetworkContribution NetworkContribution      `json:"network_contribution"`
+	ProviderRewards     []ProviderReward         `json:"provider_rewards"`
+	CalculatedAt        time.Time                `json:"calculated_at"`
+	Status              CalculationStatus        `json:"status"`
+}
+
+// CalculationStatus represents reward calculation status
+type CalculationStatus string
+
+const (
+	CalculationPending   CalculationStatus = "pending"
+	CalculationRunning   CalculationStatus = "running"
+	CalculationCompleted CalculationStatus = "completed"
+	CalculationFailed    CalculationStatus = "failed"
+)
+
+// ContentContribution represents content creator contributions
+type ContentContribution struct {
+	CreatorID        string    `json:"creator_id"`
+	ContentID        string    `json:"content_id"`
+	ContentType      string    `json:"content_type"`      // video, audio, image, document
+	ViewCount        int64     `json:"view_count"`
+	DataTransferred  int64     `json:"data_transferred"`  // bytes consumed by views
+	EngagementScore  float64   `json:"engagement_score"`  // likes, shares, comments weighted
+	QualityScore     float64   `json:"quality_score"`     // resolution, bitrate, etc.
+	ContentPoints    float64   `json:"content_points"`    // calculated contribution points
+	BillingCycleID   string    `json:"billing_cycle_id"`
+	Timestamp        time.Time `json:"timestamp"`
+	VerificationProof string   `json:"verification_proof"`
+}
+
+// CreatorReward represents rewards for content creators
+type CreatorReward struct {
+	CreatorID        string                     `json:"creator_id"`
+	BillingCycleID   string                     `json:"billing_cycle_id"`
+	TotalReward      float64                    `json:"total_reward"`
+	ContentBreakdown map[string]float64         `json:"content_breakdown"`    // contentID -> reward
+	TotalViews       int64                      `json:"total_views"`
+	TotalEngagement  float64                    `json:"total_engagement"`
+	QualityBonus     float64                    `json:"quality_bonus"`
+	SharePercentage  float64                    `json:"share_percentage"`     // % of total content pool
+	CalculatedAt     time.Time                  `json:"calculated_at"`
+	PaidAt           *time.Time                 `json:"paid_at,omitempty"`
+	Status           RewardStatus               `json:"status"`
+}
+
+// ContentPurchase represents a user purchasing content (becoming an investor)
+type ContentPurchase struct {
+	PurchaseID     string    `json:"purchase_id"`
+	UserID         string    `json:"user_id"`
+	CreatorID      string    `json:"creator_id"`
+	ContentID      string    `json:"content_id"`
+	PurchasePrice  float64   `json:"purchase_price"`
+	PurchaseDate   time.Time `json:"purchase_date"`
+	OwnershipShare float64   `json:"ownership_share"`  // Percentage of this content owned
+	Status         PurchaseStatus `json:"status"`
+}
+
+// PurchaseStatus represents purchase state
+type PurchaseStatus string
+
+const (
+	PurchaseActive    PurchaseStatus = "active"
+	PurchaseSold      PurchaseStatus = "sold"      // Sold on secondary market
+	PurchaseRevoked   PurchaseStatus = "revoked"   // Revoked by creator
+)
+
+// ContentInvestment represents a user's investment in a creator
+type ContentInvestment struct {
+	InvestmentID    string    `json:"investment_id"`
+	UserID          string    `json:"user_id"`
+	CreatorID       string    `json:"creator_id"`
+	TotalInvested   float64   `json:"total_invested"`    // Total amount invested
+	CurrentShare    float64   `json:"current_share"`     // Current percentage of creator revenue
+	ContentCount    int       `json:"content_count"`     // Number of content pieces owned
+	CreatedAt       time.Time `json:"created_at"`
+	LastUpdate      time.Time `json:"last_update"`
+}
+
+// Tip represents a direct tip to a creator
+type Tip struct {
+	TipID       string    `json:"tip_id"`
+	UserID      string    `json:"user_id"`
+	CreatorID   string    `json:"creator_id"`
+	ContentID   string    `json:"content_id,omitempty"` // Optional: tip for specific content
+	Amount      float64   `json:"amount"`
+	Message     string    `json:"message,omitempty"`
+	TipDate     time.Time `json:"tip_date"`
+}
+
+// SecondaryMarketListing represents content for sale on secondary market
+type SecondaryMarketListing struct {
+	ListingID     string        `json:"listing_id"`
+	PurchaseID    string        `json:"purchase_id"`      // Original purchase being sold
+	SellerID      string        `json:"seller_id"`
+	CreatorID     string        `json:"creator_id"`
+	ContentID     string        `json:"content_id"`
+	ListingPrice  float64       `json:"listing_price"`
+	OwnershipShare float64      `json:"ownership_share"`
+	ListedAt      time.Time     `json:"listed_at"`
+	Status        ListingStatus `json:"status"`
+}
+
+// ListingStatus represents secondary market listing state
+type ListingStatus string
+
+const (
+	ListingActive    ListingStatus = "active"
+	ListingSold      ListingStatus = "sold"
+	ListingCancelled ListingStatus = "cancelled"
+	ListingExpired   ListingStatus = "expired"
+)
+
+// SecondaryMarketSale represents a completed secondary market transaction
+type SecondaryMarketSale struct {
+	SaleID         string    `json:"sale_id"`
+	ListingID      string    `json:"listing_id"`
+	PurchaseID     string    `json:"purchase_id"`     // Original purchase
+	SellerID       string    `json:"seller_id"`
+	BuyerID        string    `json:"buyer_id"`
+	CreatorID      string    `json:"creator_id"`
+	ContentID      string    `json:"content_id"`
+	SalePrice      float64   `json:"sale_price"`
+	CreatorRoyalty float64   `json:"creator_royalty"`  // Creator's cut
+	InvestorSplit  float64   `json:"investor_split"`   // Split among investors
+	SaleDate       time.Time `json:"sale_date"`
+}
+
+// InvestorRevenue represents revenue distributed to investors
+type InvestorRevenue struct {
+	RevenueID       string            `json:"revenue_id"`
+	BillingCycleID  string            `json:"billing_cycle_id"`
+	InvestmentID    string            `json:"investment_id"`
+	UserID          string            `json:"user_id"`
+	CreatorID       string            `json:"creator_id"`
+	RevenueBreakdown map[string]float64 `json:"revenue_breakdown"` // source -> amount
+	TotalRevenue    float64           `json:"total_revenue"`
+	SharePercentage float64           `json:"share_percentage"`
+	CalculatedAt    time.Time         `json:"calculated_at"`
+	PaidAt          *time.Time        `json:"paid_at,omitempty"`
+	Status          RewardStatus      `json:"status"`
+}
+
+// IncentiveStats represents service statistics
+type IncentiveStats struct {
+	ActiveSubscriptions  int                      `json:"active_subscriptions"`
+	TotalProviders       int                      `json:"total_providers"`
+	TotalCreators        int                      `json:"total_creators"`
+	TotalInvestors       int                      `json:"total_investors"`     // NEW
+	CurrentCycle         *BillingCycle            `json:"current_cycle"`
+	MonthlyPoolAmount    float64                  `json:"monthly_pool_amount"`
+	AverageProviderReward float64                 `json:"average_provider_reward"`
+	AverageCreatorReward  float64                 `json:"average_creator_reward"`
+	AverageInvestorReturn float64                 `json:"average_investor_return"` // NEW
+	ResourceDistribution map[ResourceType]float64 `json:"resource_distribution"`
+	ContentEconomy       ContentEconomyStats      `json:"content_economy"`     // NEW
+	LastDistribution     *time.Time               `json:"last_distribution,omitempty"`
+}
+
+// ContentEconomyStats represents content economy specific statistics
+type ContentEconomyStats struct {
+	TotalContentPurchases   int     `json:"total_content_purchases"`
+	TotalInvestmentVolume   float64 `json:"total_investment_volume"`
+	TotalTipsVolume         float64 `json:"total_tips_volume"`
+	SecondaryMarketVolume   float64 `json:"secondary_market_volume"`
+	ActiveListings          int     `json:"active_listings"`
+	AverageContentPrice     float64 `json:"average_content_price"`
+	AverageRoyaltyRate      float64 `json:"average_royalty_rate"`
+	TopCreatorsByRevenue    []string `json:"top_creators_by_revenue"`
+}

@@ -1,0 +1,731 @@
+package incentive
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+)
+
+// BillingEventFilter defines filters for querying billing events
+type BillingEventFilter struct {
+	UserID           string
+	ProviderID       string
+	ResourceType     string
+	Operation        string
+	BillingCycleID   string
+	StartDate        time.Time
+	EndDate          time.Time
+	IsChargeable     *bool
+	MinAmount        *float64
+	MaxAmount        *float64
+	Currency         string
+	ComplianceLevel  string
+	Limit            int
+	Offset           int
+	SortBy           string // "date", "amount", "sequence"
+	SortOrder        string // "asc", "desc"
+}
+
+// AuditTrailFilter defines filters for querying audit trails
+type AuditTrailFilter struct {
+	EventType        string
+	Entity           string
+	EntityID         string
+	Action           string
+	ActorType        string
+	ActorID          string
+	ComplianceLevel  string
+	DataClassification string
+	StartDate        time.Time
+	EndDate          time.Time
+	Limit            int
+	Offset           int
+	SortBy           string // "date", "compliance_level"
+	SortOrder        string // "asc", "desc"
+}
+
+// BillingReport represents a billing report for users or providers
+type BillingReport struct {
+	ReportID         string                    `json:"report_id"`
+	ReportType       string                    `json:"report_type"`        // user_bill, provider_statement, cycle_summary
+	GeneratedFor     string                    `json:"generated_for"`      // user_id or provider_id
+	BillingCycleID   string                    `json:"billing_cycle_id"`
+	PeriodStart      time.Time                 `json:"period_start"`
+	PeriodEnd        time.Time                 `json:"period_end"`
+	
+	// Summary totals
+	TotalEvents      int64                     `json:"total_events"`
+	TotalCost        float64                   `json:"total_cost"`
+	Currency         string                    `json:"currency"`
+	
+	// Breakdown by resource type
+	ResourceBreakdown map[string]*ResourceUsageSummary `json:"resource_breakdown"`
+	
+	// Event details (optional, for detailed reports)
+	Events           []*BillingEvent           `json:"events,omitempty"`
+	
+	// Compliance and audit
+	AuditTrailIDs    []string                  `json:"audit_trail_ids"`
+	ComplianceFlags  []string                  `json:"compliance_flags"`
+	
+	// Report metadata
+	GeneratedAt      time.Time                 `json:"generated_at"`
+	GeneratedBy      string                    `json:"generated_by"`      // node_id
+	ReportHash       string                    `json:"report_hash"`       // integrity verification
+}
+
+// ResourceUsageSummary summarizes usage for a specific resource type
+type ResourceUsageSummary struct {
+	ResourceType     string    `json:"resource_type"`
+	TotalAmount      float64   `json:"total_amount"`
+	Unit             string    `json:"unit"`
+	TotalCost        float64   `json:"total_cost"`
+	EventCount       int64     `json:"event_count"`
+	AverageUnitCost  float64   `json:"average_unit_cost"`
+	PeakUsageDate    time.Time `json:"peak_usage_date"`
+	PeakUsageAmount  float64   `json:"peak_usage_amount"`
+}
+
+// QueryBillingEvents retrieves billing events based on filter criteria
+func (p *EconomicPersistenceLayer) QueryBillingEvents(ctx context.Context, filter BillingEventFilter) ([]*BillingEvent, error) {
+	events := make([]*BillingEvent, 0)
+	
+	// Determine query strategy based on filter
+	queryPaths := p.buildBillingEventQueryPaths(filter)
+	
+	for _, queryPath := range queryPaths {
+		pathEvents, err := p.queryEventsFromPath(ctx, queryPath, filter)
+		if err != nil {
+			p.logger.Warn().
+				Err(err).
+				Str("query_path", queryPath).
+				Msg("Failed to query events from path")
+			continue
+		}
+		events = append(events, pathEvents...)
+	}
+	
+	// Apply additional filtering
+	filteredEvents := p.applyBillingEventFilters(events, filter)
+	
+	// Sort results
+	p.sortBillingEvents(filteredEvents, filter.SortBy, filter.SortOrder)
+	
+	// Apply pagination
+	if filter.Limit > 0 {
+		start := filter.Offset
+		end := start + filter.Limit
+		if start < len(filteredEvents) {
+			if end > len(filteredEvents) {
+				end = len(filteredEvents)
+			}
+			filteredEvents = filteredEvents[start:end]
+		} else {
+			filteredEvents = []*BillingEvent{}
+		}
+	}
+	
+	return filteredEvents, nil
+}
+
+// QueryAuditTrail retrieves audit trail entries based on filter criteria
+func (p *EconomicPersistenceLayer) QueryAuditTrail(ctx context.Context, filter AuditTrailFilter) ([]*AuditTrailEntry, error) {
+	entries := make([]*AuditTrailEntry, 0)
+	
+	// Determine query strategy based on filter
+	queryPaths := p.buildAuditTrailQueryPaths(filter)
+	
+	for _, queryPath := range queryPaths {
+		pathEntries, err := p.queryAuditEntriesFromPath(ctx, queryPath, filter)
+		if err != nil {
+			p.logger.Warn().
+				Err(err).
+				Str("query_path", queryPath).
+				Msg("Failed to query audit entries from path")
+			continue
+		}
+		entries = append(entries, pathEntries...)
+	}
+	
+	// Apply additional filtering
+	filteredEntries := p.applyAuditTrailFilters(entries, filter)
+	
+	// Sort results
+	p.sortAuditTrailEntries(filteredEntries, filter.SortBy, filter.SortOrder)
+	
+	// Apply pagination
+	if filter.Limit > 0 {
+		start := filter.Offset
+		end := start + filter.Limit
+		if start < len(filteredEntries) {
+			if end > len(filteredEntries) {
+				end = len(filteredEntries)
+			}
+			filteredEntries = filteredEntries[start:end]
+		} else {
+			filteredEntries = []*AuditTrailEntry{}
+		}
+	}
+	
+	return filteredEntries, nil
+}
+
+// GenerateUserBillingReport generates a comprehensive billing report for a user
+func (p *EconomicPersistenceLayer) GenerateUserBillingReport(ctx context.Context, userID, billingCycleID string) (*BillingReport, error) {
+	// Query all billing events for user in the cycle
+	filter := BillingEventFilter{
+		UserID:         userID,
+		BillingCycleID: billingCycleID,
+		IsChargeable:   boolPtr(true), // Only chargeable events for billing
+		SortBy:         "date",
+		SortOrder:      "asc",
+	}
+	
+	events, err := p.QueryBillingEvents(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query billing events for user %s: %w", userID, err)
+	}
+	
+	// Calculate cycle period
+	var periodStart, periodEnd time.Time
+	if len(events) > 0 {
+		periodStart = events[0].CompletedAt
+		periodEnd = events[len(events)-1].CompletedAt
+	}
+	
+	// Calculate totals and breakdown
+	totalCost := 0.0
+	resourceBreakdown := make(map[string]*ResourceUsageSummary)
+	auditTrailIDs := make([]string, 0)
+	
+	for _, event := range events {
+		totalCost += event.TotalCost
+		auditTrailIDs = append(auditTrailIDs, event.AuditTrailID)
+		
+		// Update resource breakdown
+		if summary, exists := resourceBreakdown[event.ResourceType]; exists {
+			summary.TotalAmount += event.Amount
+			summary.TotalCost += event.TotalCost
+			summary.EventCount++
+			summary.AverageUnitCost = summary.TotalCost / summary.TotalAmount
+			
+			// Update peak usage
+			if event.Amount > summary.PeakUsageAmount {
+				summary.PeakUsageAmount = event.Amount
+				summary.PeakUsageDate = event.CompletedAt
+			}
+		} else {
+			resourceBreakdown[event.ResourceType] = &ResourceUsageSummary{
+				ResourceType:    event.ResourceType,
+				TotalAmount:     event.Amount,
+				Unit:            event.Unit,
+				TotalCost:       event.TotalCost,
+				EventCount:      1,
+				AverageUnitCost: event.TotalCost / event.Amount,
+				PeakUsageDate:   event.CompletedAt,
+				PeakUsageAmount: event.Amount,
+			}
+		}
+	}
+	
+	// Create report
+	report := &BillingReport{
+		ReportID:          p.generateReportID("user_bill", userID),
+		ReportType:        "user_bill",
+		GeneratedFor:      userID,
+		BillingCycleID:    billingCycleID,
+		PeriodStart:       periodStart,
+		PeriodEnd:         periodEnd,
+		TotalEvents:       int64(len(events)),
+		TotalCost:         totalCost,
+		Currency:          "USD", // TODO: Make configurable
+		ResourceBreakdown: resourceBreakdown,
+		Events:            events,
+		AuditTrailIDs:     auditTrailIDs,
+		ComplianceFlags:   []string{"SOX_COMPLIANT", "GDPR_COMPLIANT"},
+		GeneratedAt:       time.Now(),
+		GeneratedBy:       p.nodeID,
+	}
+	
+	// Generate report hash for integrity
+	report.ReportHash = p.generateReportHash(report)
+	
+	// Store the report
+	if err := p.storeBillingReport(ctx, report); err != nil {
+		p.logger.Error().
+			Err(err).
+			Str("report_id", report.ReportID).
+			Msg("Failed to store billing report")
+	}
+	
+	return report, nil
+}
+
+// GenerateProviderStatementReport generates a statement report for a provider
+func (p *EconomicPersistenceLayer) GenerateProviderStatementReport(ctx context.Context, providerID, billingCycleID string) (*BillingReport, error) {
+	// Query all billing events where this provider served resources
+	filter := BillingEventFilter{
+		ProviderID:     providerID,
+		BillingCycleID: billingCycleID,
+		IsChargeable:   boolPtr(true), // Only chargeable events
+		SortBy:         "date",
+		SortOrder:      "asc",
+	}
+	
+	events, err := p.QueryBillingEvents(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query billing events for provider %s: %w", providerID, err)
+	}
+	
+	// Calculate cycle period
+	var periodStart, periodEnd time.Time
+	if len(events) > 0 {
+		periodStart = events[0].CompletedAt
+		periodEnd = events[len(events)-1].CompletedAt
+	}
+	
+	// Calculate totals and breakdown (from provider perspective)
+	totalRevenue := 0.0
+	resourceBreakdown := make(map[string]*ResourceUsageSummary)
+	auditTrailIDs := make([]string, 0)
+	
+	for _, event := range events {
+		totalRevenue += event.TotalCost // Revenue for the provider
+		auditTrailIDs = append(auditTrailIDs, event.AuditTrailID)
+		
+		// Update resource breakdown
+		if summary, exists := resourceBreakdown[event.ResourceType]; exists {
+			summary.TotalAmount += event.Amount
+			summary.TotalCost += event.TotalCost
+			summary.EventCount++
+			summary.AverageUnitCost = summary.TotalCost / summary.TotalAmount
+		} else {
+			resourceBreakdown[event.ResourceType] = &ResourceUsageSummary{
+				ResourceType:    event.ResourceType,
+				TotalAmount:     event.Amount,
+				Unit:            event.Unit,
+				TotalCost:       event.TotalCost,
+				EventCount:      1,
+				AverageUnitCost: event.TotalCost / event.Amount,
+			}
+		}
+	}
+	
+	// Create provider statement
+	report := &BillingReport{
+		ReportID:          p.generateReportID("provider_statement", providerID),
+		ReportType:        "provider_statement",
+		GeneratedFor:      providerID,
+		BillingCycleID:    billingCycleID,
+		PeriodStart:       periodStart,
+		PeriodEnd:         periodEnd,
+		TotalEvents:       int64(len(events)),
+		TotalCost:         totalRevenue, // For providers, this is revenue
+		Currency:          "USD",
+		ResourceBreakdown: resourceBreakdown,
+		Events:            events,
+		AuditTrailIDs:     auditTrailIDs,
+		ComplianceFlags:   []string{"PROVIDER_VERIFIED", "REWARD_ELIGIBLE"},
+		GeneratedAt:       time.Now(),
+		GeneratedBy:       p.nodeID,
+	}
+	
+	report.ReportHash = p.generateReportHash(report)
+	
+	// Store the report
+	if err := p.storeBillingReport(ctx, report); err != nil {
+		p.logger.Error().
+			Err(err).
+			Str("report_id", report.ReportID).
+			Msg("Failed to store provider statement")
+	}
+	
+	return report, nil
+}
+
+// Helper methods for building query paths and filtering
+
+func (p *EconomicPersistenceLayer) buildBillingEventQueryPaths(filter BillingEventFilter) []string {
+	paths := make([]string, 0)
+	
+	// Choose most efficient query path based on filter
+	if filter.UserID != "" {
+		// Query by user is usually most efficient for user bills
+		if !filter.StartDate.IsZero() && !filter.EndDate.IsZero() {
+			// Query specific date range for user
+			current := filter.StartDate
+			for current.Before(filter.EndDate) || current.Equal(filter.EndDate) {
+				datePath := current.Format("2006/01/02")
+				paths = append(paths, filepath.Join(p.billingEventsPath, "by_user", filter.UserID, datePath))
+				current = current.AddDate(0, 0, 1)
+			}
+		} else {
+			// Query all dates for user (less efficient)
+			paths = append(paths, filepath.Join(p.billingEventsPath, "by_user", filter.UserID))
+		}
+	} else if filter.ProviderID != "" {
+		// Query by provider for provider statements
+		if !filter.StartDate.IsZero() && !filter.EndDate.IsZero() {
+			current := filter.StartDate
+			for current.Before(filter.EndDate) || current.Equal(filter.EndDate) {
+				datePath := current.Format("2006/01/02")
+				paths = append(paths, filepath.Join(p.billingEventsPath, "by_provider", filter.ProviderID, datePath))
+				current = current.AddDate(0, 0, 1)
+			}
+		} else {
+			paths = append(paths, filepath.Join(p.billingEventsPath, "by_provider", filter.ProviderID))
+		}
+	} else if filter.BillingCycleID != "" {
+		// Query by billing cycle
+		paths = append(paths, filepath.Join(p.billingEventsPath, "by_cycle", filter.BillingCycleID))
+	} else if filter.ResourceType != "" {
+		// Query by resource type
+		if !filter.StartDate.IsZero() && !filter.EndDate.IsZero() {
+			current := filter.StartDate
+			for current.Before(filter.EndDate) || current.Equal(filter.EndDate) {
+				datePath := current.Format("2006/01/02")
+				paths = append(paths, filepath.Join(p.billingEventsPath, "by_resource_type", filter.ResourceType, datePath))
+				current = current.AddDate(0, 0, 1)
+			}
+		} else {
+			paths = append(paths, filepath.Join(p.billingEventsPath, "by_resource_type", filter.ResourceType))
+		}
+	} else if !filter.StartDate.IsZero() && !filter.EndDate.IsZero() {
+		// Query by date range only
+		current := filter.StartDate
+		for current.Before(filter.EndDate) || current.Equal(filter.EndDate) {
+			datePath := current.Format("2006/01/02")
+			paths = append(paths, filepath.Join(p.billingEventsPath, "by_date", datePath))
+			current = current.AddDate(0, 0, 1)
+		}
+	} else {
+		// Fallback: query recent events (last 30 days)
+		for i := 0; i < 30; i++ {
+			date := time.Now().AddDate(0, 0, -i)
+			datePath := date.Format("2006/01/02")
+			paths = append(paths, filepath.Join(p.billingEventsPath, "by_date", datePath))
+		}
+	}
+	
+	return paths
+}
+
+func (p *EconomicPersistenceLayer) buildAuditTrailQueryPaths(filter AuditTrailFilter) []string {
+	paths := make([]string, 0)
+	
+	if filter.Entity != "" {
+		if !filter.StartDate.IsZero() && !filter.EndDate.IsZero() {
+			current := filter.StartDate
+			for current.Before(filter.EndDate) || current.Equal(filter.EndDate) {
+				datePath := current.Format("2006/01/02")
+				paths = append(paths, filepath.Join(p.auditTrailsPath, "by_entity", filter.Entity, datePath))
+				current = current.AddDate(0, 0, 1)
+			}
+		} else {
+			paths = append(paths, filepath.Join(p.auditTrailsPath, "by_entity", filter.Entity))
+		}
+	} else if filter.ActorID != "" {
+		if !filter.StartDate.IsZero() && !filter.EndDate.IsZero() {
+			current := filter.StartDate
+			for current.Before(filter.EndDate) || current.Equal(filter.EndDate) {
+				datePath := current.Format("2006/01/02")
+				paths = append(paths, filepath.Join(p.auditTrailsPath, "by_actor", filter.ActorID, datePath))
+				current = current.AddDate(0, 0, 1)
+			}
+		} else {
+			paths = append(paths, filepath.Join(p.auditTrailsPath, "by_actor", filter.ActorID))
+		}
+	} else if !filter.StartDate.IsZero() && !filter.EndDate.IsZero() {
+		current := filter.StartDate
+		for current.Before(filter.EndDate) || current.Equal(filter.EndDate) {
+			datePath := current.Format("2006/01/02")
+			paths = append(paths, filepath.Join(p.auditTrailsPath, "by_date", datePath))
+			current = current.AddDate(0, 0, 1)
+		}
+	}
+	
+	return paths
+}
+
+func (p *EconomicPersistenceLayer) queryEventsFromPath(ctx context.Context, queryPath string, filter BillingEventFilter) ([]*BillingEvent, error) {
+	events := make([]*BillingEvent, 0)
+	
+	// List files in the query path
+	files, err := p.vfs.ListDir(ctx, queryPath)
+	if err != nil {
+		return events, err // Empty result for non-existent paths
+	}
+	
+	// Read each event file
+	for _, file := range files {
+		if !strings.HasSuffix(file.Path, ".json") {
+			continue // Skip non-JSON files
+		}
+		
+		// Read event data
+		eventData, err := p.vfs.ReadFile(ctx, file.Path)
+		if err != nil {
+			p.logger.Warn().
+				Err(err).
+				Str("file_path", file.Path).
+				Msg("Failed to read billing event file")
+			continue
+		}
+		
+		// Parse event
+		var event BillingEvent
+		if err := json.Unmarshal(eventData, &event); err != nil {
+			p.logger.Warn().
+				Err(err).
+				Str("file_path", file.Path).
+				Msg("Failed to parse billing event")
+			continue
+		}
+		
+		events = append(events, &event)
+	}
+	
+	return events, nil
+}
+
+func (p *EconomicPersistenceLayer) queryAuditEntriesFromPath(ctx context.Context, queryPath string, filter AuditTrailFilter) ([]*AuditTrailEntry, error) {
+	entries := make([]*AuditTrailEntry, 0)
+	
+	// List files in the query path
+	files, err := p.vfs.ListDir(ctx, queryPath)
+	if err != nil {
+		return entries, err
+	}
+	
+	// Read each audit entry file
+	for _, file := range files {
+		if !strings.HasSuffix(file.Path, ".json") {
+			continue
+		}
+		
+		// Read audit data
+		auditData, err := p.vfs.ReadFile(ctx, file.Path)
+		if err != nil {
+			p.logger.Warn().
+				Err(err).
+				Str("file_path", file.Path).
+				Msg("Failed to read audit trail file")
+			continue
+		}
+		
+		// Parse audit entry
+		var entry AuditTrailEntry
+		if err := json.Unmarshal(auditData, &entry); err != nil {
+			p.logger.Warn().
+				Err(err).
+				Str("file_path", file.Path).
+				Msg("Failed to parse audit trail entry")
+			continue
+		}
+		
+		entries = append(entries, &entry)
+	}
+	
+	return entries, nil
+}
+
+// Apply additional filtering that couldn't be done by path selection
+func (p *EconomicPersistenceLayer) applyBillingEventFilters(events []*BillingEvent, filter BillingEventFilter) []*BillingEvent {
+	filtered := make([]*BillingEvent, 0)
+	
+	for _, event := range events {
+		// Date range filter
+		if !filter.StartDate.IsZero() && event.CompletedAt.Before(filter.StartDate) {
+			continue
+		}
+		if !filter.EndDate.IsZero() && event.CompletedAt.After(filter.EndDate) {
+			continue
+		}
+		
+		// Amount range filter
+		if filter.MinAmount != nil && event.TotalCost < *filter.MinAmount {
+			continue
+		}
+		if filter.MaxAmount != nil && event.TotalCost > *filter.MaxAmount {
+			continue
+		}
+		
+		// Chargeable filter
+		if filter.IsChargeable != nil && event.IsChargeable != *filter.IsChargeable {
+			continue
+		}
+		
+		// Operation filter
+		if filter.Operation != "" && event.Operation != filter.Operation {
+			continue
+		}
+		
+		// Currency filter
+		if filter.Currency != "" && event.Currency != filter.Currency {
+			continue
+		}
+		
+		filtered = append(filtered, event)
+	}
+	
+	return filtered
+}
+
+func (p *EconomicPersistenceLayer) applyAuditTrailFilters(entries []*AuditTrailEntry, filter AuditTrailFilter) []*AuditTrailEntry {
+	filtered := make([]*AuditTrailEntry, 0)
+	
+	for _, entry := range entries {
+		// Date range filter
+		if !filter.StartDate.IsZero() && entry.RecordedAt.Before(filter.StartDate) {
+			continue
+		}
+		if !filter.EndDate.IsZero() && entry.RecordedAt.After(filter.EndDate) {
+			continue
+		}
+		
+		// Event type filter
+		if filter.EventType != "" && entry.EventType != filter.EventType {
+			continue
+		}
+		
+		// Action filter
+		if filter.Action != "" && entry.Action != filter.Action {
+			continue
+		}
+		
+		// Actor type filter
+		if filter.ActorType != "" && entry.ActorType != filter.ActorType {
+			continue
+		}
+		
+		// Compliance level filter
+		if filter.ComplianceLevel != "" && entry.ComplianceLevel != filter.ComplianceLevel {
+			continue
+		}
+		
+		// Data classification filter
+		if filter.DataClassification != "" && entry.DataClassification != filter.DataClassification {
+			continue
+		}
+		
+		filtered = append(filtered, entry)
+	}
+	
+	return filtered
+}
+
+// Sorting functions
+func (p *EconomicPersistenceLayer) sortBillingEvents(events []*BillingEvent, sortBy, sortOrder string) {
+	if sortBy == "" {
+		sortBy = "date"
+	}
+	if sortOrder == "" {
+		sortOrder = "desc"
+	}
+	
+	sort.Slice(events, func(i, j int) bool {
+		var less bool
+		
+		switch sortBy {
+		case "date":
+			less = events[i].CompletedAt.Before(events[j].CompletedAt)
+		case "amount":
+			less = events[i].TotalCost < events[j].TotalCost
+		case "sequence":
+			less = events[i].SequenceNumber < events[j].SequenceNumber
+		default:
+			less = events[i].CompletedAt.Before(events[j].CompletedAt)
+		}
+		
+		if sortOrder == "desc" {
+			return !less
+		}
+		return less
+	})
+}
+
+func (p *EconomicPersistenceLayer) sortAuditTrailEntries(entries []*AuditTrailEntry, sortBy, sortOrder string) {
+	if sortBy == "" {
+		sortBy = "date"
+	}
+	if sortOrder == "" {
+		sortOrder = "desc"
+	}
+	
+	sort.Slice(entries, func(i, j int) bool {
+		var less bool
+		
+		switch sortBy {
+		case "date":
+			less = entries[i].RecordedAt.Before(entries[j].RecordedAt)
+		case "compliance_level":
+			// Order: MINIMAL < STANDARD < DETAILED < FORENSIC
+			levels := map[string]int{"minimal": 1, "standard": 2, "detailed": 3, "forensic": 4}
+			less = levels[strings.ToLower(entries[i].ComplianceLevel)] < levels[strings.ToLower(entries[j].ComplianceLevel)]
+		default:
+			less = entries[i].RecordedAt.Before(entries[j].RecordedAt)
+		}
+		
+		if sortOrder == "desc" {
+			return !less
+		}
+		return less
+	})
+}
+
+// Helper functions
+func (p *EconomicPersistenceLayer) generateReportID(reportType, entityID string) string {
+	return fmt.Sprintf("report_%s_%s_%d", reportType, entityID[:8], time.Now().UnixNano())
+}
+
+func (p *EconomicPersistenceLayer) generateReportHash(report *BillingReport) string {
+	// Create deterministic hash of report content
+	hashData := fmt.Sprintf("%s|%s|%s|%d|%f|%s",
+		report.ReportType,
+		report.GeneratedFor,
+		report.BillingCycleID,
+		report.TotalEvents,
+		report.TotalCost,
+		report.GeneratedAt.Format(time.RFC3339Nano),
+	)
+	
+	hash := sha256.Sum256([]byte(hashData))
+	return hex.EncodeToString(hash[:])
+}
+
+func (p *EconomicPersistenceLayer) storeBillingReport(ctx context.Context, report *BillingReport) error {
+	// Serialize report
+	reportData, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal billing report: %w", err)
+	}
+	
+	// Prepare metadata
+	metadata := map[string]string{
+		"report_id":       report.ReportID,
+		"report_type":     report.ReportType,
+		"generated_for":   report.GeneratedFor,
+		"billing_cycle":   report.BillingCycleID,
+		"total_events":    fmt.Sprintf("%d", report.TotalEvents),
+		"total_cost":      fmt.Sprintf("%.6f", report.TotalCost),
+		"currency":        report.Currency,
+		"generated_at":    report.GeneratedAt.Format(time.RFC3339),
+		"report_hash":     report.ReportHash,
+		"node_id":         p.nodeID,
+	}
+	
+	// Storage paths
+	datePath := report.GeneratedAt.Format("2006/01/02")
+	
+	// Primary storage
+	primaryPath := filepath.Join(p.reportsPath, report.ReportType, datePath, fmt.Sprintf("%s.json", report.ReportID))
+	
+	// Store report
+	return p.vfs.WriteFile(ctx, primaryPath, reportData, metadata)
+}

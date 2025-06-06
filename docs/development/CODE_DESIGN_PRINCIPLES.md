@@ -155,7 +155,7 @@ func ProcessFile(path string) error {
         log.Printf("Warning: %v", err)
         // Continue anyway...
     }
-    
+
     // Will panic later when file is nil
     defer file.Close()
     // ...
@@ -168,17 +168,17 @@ func ProcessFile(path string) error {
         return fmt.Errorf("open file: %w", err)
     }
     defer file.Close()
-    
+
     // Validate early
     stat, err := file.Stat()
     if err != nil {
         return fmt.Errorf("stat file: %w", err)
     }
-    
+
     if stat.Size() == 0 {
         return errors.New("file is empty")
     }
-    
+
     // Now safe to process
     return process(file)
 }
@@ -226,11 +226,11 @@ func EnsureUserExists(user User) error {
     if err == nil {
         return nil  // Already exists, nothing to do
     }
-    
+
     if !errors.Is(err, ErrNotFound) {
         return err  // Real error
     }
-    
+
     return db.CreateUser(user)  // Only create if not exists
 }
 ```
@@ -241,7 +241,7 @@ func EnsureUserExists(user User) error {
 // ❌ AVOID: Modifying existing code for new features
 func CalculatePrice(product Product) float64 {
     price := product.BasePrice
-    
+
     switch product.Type {
     case "book":
         price *= 0.9  // 10% discount
@@ -250,7 +250,7 @@ func CalculatePrice(product Product) float64 {
     case "food":        // Adding new type requires modifying this
         price *= 0.8
     }
-    
+
     return price
 }
 
@@ -284,7 +284,7 @@ func SaveUser(user *User) error {
     // Surprising: modifies input
     user.UpdatedAt = time.Now()
     user.Version++
-    
+
     return db.Save(user)
 }
 
@@ -293,7 +293,7 @@ func SaveUser(user User) (User, error) {
     // Clear: returns modified copy
     user.UpdatedAt = time.Now()
     user.Version++
-    
+
     err := db.Save(user)
     return user, err
 }
@@ -371,12 +371,12 @@ func NewClient(opts ...Option) *Client {
         timeout: 30 * time.Second,
         retries: 3,
     }
-    
+
     // Apply options
     for _, opt := range opts {
         opt(c)
     }
-    
+
     return c
 }
 

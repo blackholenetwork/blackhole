@@ -85,14 +85,14 @@ func Wrap(err error, message string) *Error {
     if err == nil {
         return nil
     }
-    
+
     // If already our error, add context
     var appErr *Error
     if errors.As(err, &appErr) {
         appErr.Message = fmt.Sprintf("%s: %s", message, appErr.Message)
         return appErr
     }
-    
+
     // Wrap external error
     return &Error{
         Code:     "INTERNAL_ERROR",
@@ -114,7 +114,7 @@ func (h *Handler) GetFile(c *fiber.Ctx) error {
     if err != nil {
         return h.handleError(c, err)
     }
-    
+
     return c.JSON(file)
 }
 
@@ -127,17 +127,17 @@ func (h *Handler) handleError(c *fiber.Ctx, err error) error {
             Category: CategoryInternal,
             Message:  "An internal error occurred",
         }
-        
+
         // Log the real error
-        log.Error("Unhandled error", 
+        log.Error("Unhandled error",
             "error", err,
             "request_id", c.Locals("request_id"),
         )
     }
-    
+
     // Map to HTTP status
     status := categoryToHTTPStatus(appErr.Category)
-    
+
     return c.Status(status).JSON(ErrorResponse{
         Error: appErr,
         RequestID: c.Locals("request_id").(string),
@@ -171,7 +171,7 @@ func (s *Storage) StoreFile(ctx context.Context, data []byte) (string, error) {
     if len(data) == 0 {
         return "", ValidationError("data", "cannot be empty")
     }
-    
+
     // Try to store
     id, err := s.writeToDatabase(ctx, data)
     if err != nil {
@@ -182,7 +182,7 @@ func (s *Storage) StoreFile(ctx context.Context, data []byte) (string, error) {
                 "operation": "store_file",
             })
     }
-    
+
     // Update index
     if err := s.updateIndex(ctx, id); err != nil {
         // Non-critical error - log but don't fail
@@ -191,7 +191,7 @@ func (s *Storage) StoreFile(ctx context.Context, data []byte) (string, error) {
             "file_id", id,
         )
     }
-    
+
     return id, nil
 }
 ```
@@ -202,13 +202,13 @@ func (s *Storage) StoreFile(ctx context.Context, data []byte) (string, error) {
 // Retry with backoff for transient errors
 func (c *Client) RequestWithRetry(ctx context.Context, req Request) (Response, error) {
     var lastErr error
-    
+
     for attempt := 0; attempt < maxRetries; attempt++ {
         resp, err := c.doRequest(ctx, req)
         if err == nil {
             return resp, nil
         }
-        
+
         // Check if retryable
         var appErr *Error
         if errors.As(err, &appErr) {
@@ -216,12 +216,12 @@ func (c *Client) RequestWithRetry(ctx context.Context, req Request) (Response, e
                 return Response{}, err
             }
         }
-        
+
         lastErr = err
-        
+
         // Exponential backoff
         delay := time.Duration(math.Pow(2, float64(attempt))) * time.Second
-        
+
         select {
         case <-time.After(delay):
             continue
@@ -229,7 +229,7 @@ func (c *Client) RequestWithRetry(ctx context.Context, req Request) (Response, e
             return Response{}, ctx.Err()
         }
     }
-    
+
     return Response{}, Wrap(lastErr, "max retries exceeded")
 }
 
@@ -253,18 +253,18 @@ func SafeGo(fn func()) {
             if r := recover(); r != nil {
                 err := fmt.Errorf("panic recovered: %v", r)
                 stack := debug.Stack()
-                
+
                 log.Error("Panic in goroutine",
                     "error", err,
                     "stack", string(stack),
                 )
-                
+
                 // Send to monitoring
                 metrics.PanicCount.Inc()
                 alerts.SendPanic(err, stack)
             }
         }()
-        
+
         fn()
     }()
 }
@@ -288,7 +288,7 @@ var (
 func ErrorTracking() fiber.Handler {
     return func(c *fiber.Ctx) error {
         err := c.Next()
-        
+
         if err != nil {
             var appErr *Error
             if errors.As(err, &appErr) {
@@ -298,7 +298,7 @@ func ErrorTracking() fiber.Handler {
                 ).Inc()
             }
         }
-        
+
         return err
     }
 }
@@ -348,7 +348,7 @@ func TestErrorHandling(t *testing.T) {
             wantCat:  CategoryInternal,
         },
     }
-    
+
     for _, tt := range tests {
         t.Run(tt.name, func(t *testing.T) {
             var appErr *Error

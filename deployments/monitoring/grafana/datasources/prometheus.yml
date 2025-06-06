@@ -1,0 +1,85 @@
+# Grafana Datasource Configuration for Prometheus
+apiVersion: 1
+
+datasources:
+  # Prometheus datasource
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    orgId: 1
+    uid: prometheus-uid
+    url: http://prometheus:9090
+    isDefault: true
+    version: 1
+    editable: true
+    jsonData:
+      httpMethod: POST
+      manageAlerts: true
+      prometheusType: Prometheus
+      prometheusVersion: 2.40.0
+      timeInterval: 15s
+      cacheLevel: 'High'
+      incrementalQuerying: true
+      incrementalQueryOverlapWindow: 10m
+      disableMetricsLookup: false
+      exemplarTraceIdDestinations:
+        - datasourceUid: tempo-uid
+          name: trace_id
+
+  # Loki datasource for logs (optional)
+  - name: Loki
+    type: loki
+    access: proxy
+    orgId: 1
+    uid: loki-uid
+    url: http://loki:3100
+    version: 1
+    editable: true
+    jsonData:
+      derivedFields:
+        - datasourceUid: tempo-uid
+          matcherRegex: "trace_id=(\\w+)"
+          name: TraceID
+          url: "$${__value.raw}"
+
+  # Tempo datasource for traces (optional)
+  - name: Tempo
+    type: tempo
+    access: proxy
+    orgId: 1
+    uid: tempo-uid
+    url: http://tempo:3200
+    version: 1
+    editable: true
+    jsonData:
+      nodeGraph:
+        enabled: true
+      search:
+        hide: false
+      lokiSearch:
+        datasourceUid: loki-uid
+      tracesToLogs:
+        datasourceUid: loki-uid
+        filterByTraceID: true
+        filterBySpanID: true
+        mapTagNamesEnabled: true
+        mappedTags:
+          - key: service.name
+            value: service
+
+  # AlertManager datasource
+  - name: AlertManager
+    type: alertmanager
+    access: proxy
+    orgId: 1
+    uid: alertmanager-uid
+    url: http://alertmanager:9093
+    version: 1
+    editable: true
+    jsonData:
+      implementation: prometheus
+
+# Delete datasources that are no longer in this file
+deleteDatasources:
+  - name: Old-Prometheus
+    orgId: 1

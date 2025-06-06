@@ -1,0 +1,765 @@
+package incentive
+
+import (
+	"context"
+	"fmt"
+	"math"
+	"sync"
+	"time"
+
+	"github.com/rs/zerolog"
+)
+
+// ContentEconomyManager manages content purchases, investments, and secondary market
+type ContentEconomyManager struct {
+	mu              sync.RWMutex
+	logger          zerolog.Logger
+	config          *Config
+	pool            *SubscriptionPool
+	
+	// Content purchases and investments
+	purchases       map[string]*ContentPurchase      // purchaseID -> purchase
+	investments     map[string]*ContentInvestment    // investmentID -> investment
+	creatorInvestors map[string][]*ContentInvestment // creatorID -> investors
+	
+	// Tips
+	tips            map[string][]*Tip                // creatorID -> tips
+	
+	// Secondary market
+	listings        map[string]*SecondaryMarketListing // listingID -> listing
+	sales           map[string]*SecondaryMarketSale    // saleID -> sale
+	activeListing   map[string]*SecondaryMarketListing // purchaseID -> active listing
+	
+	// Revenue tracking
+	investorRevenues map[string][]*InvestorRevenue    // userID -> revenues
+	
+	started         bool
+	stopChan        chan struct{}
+	wg              sync.WaitGroup
+}
+
+// NewContentEconomyManager creates a new content economy manager
+func NewContentEconomyManager(config *Config, pool *SubscriptionPool, logger zerolog.Logger) *ContentEconomyManager {
+	return &ContentEconomyManager{
+		logger:           logger.With().Str("component", "content_economy").Logger(),
+		config:           config,
+		pool:             pool,
+		purchases:        make(map[string]*ContentPurchase),
+		investments:      make(map[string]*ContentInvestment),
+		creatorInvestors: make(map[string][]*ContentInvestment),
+		tips:             make(map[string][]*Tip),
+		listings:         make(map[string]*SecondaryMarketListing),
+		sales:            make(map[string]*SecondaryMarketSale),
+		activeListing:    make(map[string]*SecondaryMarketListing),
+		investorRevenues: make(map[string][]*InvestorRevenue),
+		stopChan:         make(chan struct{}),
+	}
+}
+
+// Start begins the content economy management
+func (cem *ContentEconomyManager) Start(ctx context.Context) error {
+	cem.mu.Lock()
+	defer cem.mu.Unlock()
+	
+	if cem.started {
+		return fmt.Errorf("content economy manager already started")
+	}
+	
+	cem.logger.Info().Msg("Starting content economy manager")
+	
+	cem.started = true
+	
+	// Start background workers
+	cem.wg.Add(2)
+	go cem.listingExpirationWorker(ctx)
+	go cem.revenueDistributionWorker(ctx)
+	
+	cem.logger.Info().
+		Float64("investor_split", cem.config.ContentCreator.InvestorSplit*100).
+		Float64("creator_royalty_rate", cem.config.ContentEconomy.CreatorRoyaltyRate*100).
+		Float64("min_content_price", cem.config.ContentEconomy.MinContentPrice).
+		Float64("max_content_price", cem.config.ContentEconomy.MaxContentPrice).
+		Msg("Content economy manager started")
+	
+	return nil
+}
+
+// Stop stops the content economy management
+func (cem *ContentEconomyManager) Stop(ctx context.Context) error {
+	cem.mu.Lock()
+	defer cem.mu.Unlock()
+	
+	if !cem.started {
+		return nil
+	}
+	
+	cem.logger.Info().Msg("Stopping content economy manager")
+	
+	close(cem.stopChan)
+	cem.wg.Wait()
+	
+	cem.started = false
+	
+	cem.logger.Info().Msg("Content economy manager stopped")
+	return nil
+}
+
+// CONTENT PURCHASE SYSTEM
+
+// PurchaseContent allows a user to purchase content and become an investor
+func (cem *ContentEconomyManager) PurchaseContent(userID, creatorID, contentID string, price float64) (*ContentPurchase, error) {
+	cem.mu.Lock()
+	defer cem.mu.Unlock()
+	
+	if !cem.started {
+		return nil, fmt.Errorf("content economy manager not running")
+	}
+	
+	// Validate price
+	if price < cem.config.ContentEconomy.MinContentPrice || price > cem.config.ContentEconomy.MaxContentPrice {
+		return nil, fmt.Errorf("price %f outside allowed range [%f, %f]", 
+			price, cem.config.ContentEconomy.MinContentPrice, cem.config.ContentEconomy.MaxContentPrice)
+	}
+	
+	// Create purchase
+	purchaseID := cem.generatePurchaseID()
+	purchase := &ContentPurchase{
+		PurchaseID:     purchaseID,
+		UserID:         userID,
+		CreatorID:      creatorID,
+		ContentID:      contentID,
+		PurchasePrice:  price,
+		PurchaseDate:   time.Now(),
+		OwnershipShare: 1.0, // Full ownership initially
+		Status:         PurchaseActive,
+	}
+	
+	cem.purchases[purchaseID] = purchase
+	
+	// Update or create investment
+	if err := cem.updateInvestment(userID, creatorID, price); err != nil {
+		return nil, fmt.Errorf("failed to update investment: %w", err)
+	}
+	
+	cem.logger.Info().
+		Str("user_id", userID).
+		Str("creator_id", creatorID).
+		Str("content_id", contentID).
+		Float64("price", price).
+		Str("purchase_id", purchaseID).
+		Msg("Content purchased")
+	
+	return purchase, nil
+}
+
+// updateInvestment updates a user's investment in a creator
+func (cem *ContentEconomyManager) updateInvestment(userID, creatorID string, additionalAmount float64) error {
+	// Find existing investment
+	var investment *ContentInvestment
+	investmentID := fmt.Sprintf("%s_%s", userID, creatorID)
+	
+	investment = cem.investments[investmentID]
+	if investment == nil {
+		// Create new investment
+		investment = &ContentInvestment{
+			InvestmentID:  investmentID,
+			UserID:        userID,
+			CreatorID:     creatorID,
+			TotalInvested: 0,
+			CurrentShare:  0,
+			ContentCount:  0,
+			CreatedAt:     time.Now(),
+		}
+		cem.investments[investmentID] = investment
+		
+		// Add to creator's investor list
+		cem.creatorInvestors[creatorID] = append(cem.creatorInvestors[creatorID], investment)
+	}
+	
+	// Update investment
+	investment.TotalInvested += additionalAmount
+	investment.ContentCount++
+	investment.LastUpdate = time.Now()
+	
+	// Recalculate shares for all investors of this creator
+	return cem.recalculateInvestorShares(creatorID)
+}
+
+// recalculateInvestorShares recalculates investor shares for a creator
+func (cem *ContentEconomyManager) recalculateInvestorShares(creatorID string) error {
+	investors := cem.creatorInvestors[creatorID]
+	if len(investors) == 0 {
+		return nil
+	}
+	
+	// Check investor limit
+	if len(investors) > cem.config.ContentEconomy.MaxInvestorsPerCreator {
+		return fmt.Errorf("creator %s has reached maximum investor limit (%d)", 
+			creatorID, cem.config.ContentEconomy.MaxInvestorsPerCreator)
+	}
+	
+	// Calculate total invested
+	var totalInvested float64
+	for _, investment := range investors {
+		totalInvested += investment.TotalInvested
+	}
+	
+	if totalInvested == 0 {
+		return nil
+	}
+	
+	// Distribute shares proportionally
+	for _, investment := range investors {
+		investment.CurrentShare = (investment.TotalInvested / totalInvested) * cem.config.ContentCreator.InvestorSplit
+	}
+	
+	cem.logger.Debug().
+		Str("creator_id", creatorID).
+		Int("investor_count", len(investors)).
+		Float64("total_invested", totalInvested).
+		Msg("Investor shares recalculated")
+	
+	return nil
+}
+
+// TIPPING SYSTEM
+
+// SendTip sends a tip to a creator
+func (cem *ContentEconomyManager) SendTip(userID, creatorID string, amount float64, contentID, message string) (*Tip, error) {
+	cem.mu.Lock()
+	defer cem.mu.Unlock()
+	
+	if !cem.started {
+		return nil, fmt.Errorf("content economy manager not running")
+	}
+	
+	// Validate tip amount
+	if amount < cem.config.ContentEconomy.MinTipAmount || amount > cem.config.ContentEconomy.MaxTipAmount {
+		return nil, fmt.Errorf("tip amount %f outside allowed range [%f, %f]", 
+			amount, cem.config.ContentEconomy.MinTipAmount, cem.config.ContentEconomy.MaxTipAmount)
+	}
+	
+	// Create tip
+	tip := &Tip{
+		TipID:     cem.generateTipID(),
+		UserID:    userID,
+		CreatorID: creatorID,
+		ContentID: contentID,
+		Amount:    amount,
+		Message:   message,
+		TipDate:   time.Now(),
+	}
+	
+	cem.tips[creatorID] = append(cem.tips[creatorID], tip)
+	
+	// Process tip distribution (creator gets portion, investors get portion)
+	cem.processTipDistribution(tip)
+	
+	cem.logger.Info().
+		Str("user_id", userID).
+		Str("creator_id", creatorID).
+		Str("content_id", contentID).
+		Float64("amount", amount).
+		Str("tip_id", tip.TipID).
+		Msg("Tip sent")
+	
+	return tip, nil
+}
+
+// processTipDistribution distributes tip between creator and investors
+func (cem *ContentEconomyManager) processTipDistribution(tip *Tip) {
+	investorShare := tip.Amount * cem.config.ContentEconomy.TipInvestorShare
+	creatorShare := tip.Amount - investorShare
+	
+	// Distribute investor share among all investors
+	investors := cem.creatorInvestors[tip.CreatorID]
+	if len(investors) > 0 && investorShare > 0 {
+		for _, investment := range investors {
+			if investment.CurrentShare > 0 {
+				investorAmount := investorShare * (investment.CurrentShare / cem.config.ContentCreator.InvestorSplit)
+				
+				// Record investor revenue
+				cem.recordInvestorRevenue(investment.UserID, tip.CreatorID, "tip", investorAmount)
+			}
+		}
+	}
+	
+	cem.logger.Debug().
+		Str("tip_id", tip.TipID).
+		Float64("creator_share", creatorShare).
+		Float64("investor_share", investorShare).
+		Int("investor_count", len(investors)).
+		Msg("Tip distributed")
+}
+
+// SECONDARY MARKET
+
+// ListContentForSale lists purchased content on the secondary market
+func (cem *ContentEconomyManager) ListContentForSale(purchaseID string, sellerID string, price float64) (*SecondaryMarketListing, error) {
+	cem.mu.Lock()
+	defer cem.mu.Unlock()
+	
+	if !cem.started {
+		return nil, fmt.Errorf("content economy manager not running")
+	}
+	
+	// Validate purchase exists and belongs to seller
+	purchase := cem.purchases[purchaseID]
+	if purchase == nil {
+		return nil, fmt.Errorf("purchase %s not found", purchaseID)
+	}
+	
+	if purchase.UserID != sellerID {
+		return nil, fmt.Errorf("purchase %s does not belong to user %s", purchaseID, sellerID)
+	}
+	
+	if purchase.Status != PurchaseActive {
+		return nil, fmt.Errorf("purchase %s is not active", purchaseID)
+	}
+	
+	// Check if already listed
+	if cem.activeListing[purchaseID] != nil {
+		return nil, fmt.Errorf("purchase %s is already listed for sale", purchaseID)
+	}
+	
+	// Create listing
+	listingID := cem.generateListingID()
+	listing := &SecondaryMarketListing{
+		ListingID:      listingID,
+		PurchaseID:     purchaseID,
+		SellerID:       sellerID,
+		CreatorID:      purchase.CreatorID,
+		ContentID:      purchase.ContentID,
+		ListingPrice:   price,
+		OwnershipShare: purchase.OwnershipShare,
+		ListedAt:       time.Now(),
+		Status:         ListingActive,
+	}
+	
+	cem.listings[listingID] = listing
+	cem.activeListing[purchaseID] = listing
+	
+	cem.logger.Info().
+		Str("seller_id", sellerID).
+		Str("creator_id", purchase.CreatorID).
+		Str("content_id", purchase.ContentID).
+		Float64("price", price).
+		Str("listing_id", listingID).
+		Msg("Content listed for sale")
+	
+	return listing, nil
+}
+
+// BuyFromSecondaryMarket purchases content from secondary market
+func (cem *ContentEconomyManager) BuyFromSecondaryMarket(listingID, buyerID string) (*SecondaryMarketSale, error) {
+	cem.mu.Lock()
+	defer cem.mu.Unlock()
+	
+	if !cem.started {
+		return nil, fmt.Errorf("content economy manager not running")
+	}
+	
+	// Validate listing
+	listing := cem.listings[listingID]
+	if listing == nil {
+		return nil, fmt.Errorf("listing %s not found", listingID)
+	}
+	
+	if listing.Status != ListingActive {
+		return nil, fmt.Errorf("listing %s is not active", listingID)
+	}
+	
+	if listing.SellerID == buyerID {
+		return nil, fmt.Errorf("cannot buy your own listing")
+	}
+	
+	// Get original purchase
+	purchase := cem.purchases[listing.PurchaseID]
+	if purchase == nil {
+		return nil, fmt.Errorf("original purchase not found")
+	}
+	
+	// Calculate fees and distributions
+	creatorRoyalty := listing.ListingPrice * cem.config.ContentEconomy.CreatorRoyaltyRate
+	// marketplaceFee := listing.ListingPrice * cem.config.ContentEconomy.MarketplaceFeeRate
+	// sellerAmount := listing.ListingPrice - creatorRoyalty - marketplaceFee // Seller gets the remainder
+	
+	// Process sale
+	saleID := cem.generateSaleID()
+	sale := &SecondaryMarketSale{
+		SaleID:         saleID,
+		ListingID:      listingID,
+		PurchaseID:     listing.PurchaseID,
+		SellerID:       listing.SellerID,
+		BuyerID:        buyerID,
+		CreatorID:      listing.CreatorID,
+		ContentID:      listing.ContentID,
+		SalePrice:      listing.ListingPrice,
+		CreatorRoyalty: creatorRoyalty,
+		InvestorSplit:  creatorRoyalty * cem.config.ContentCreator.InvestorSplit,
+		SaleDate:       time.Now(),
+	}
+	
+	// Update purchase ownership
+	purchase.UserID = buyerID
+	purchase.Status = PurchaseActive
+	
+	// Update listing status
+	listing.Status = ListingSold
+	delete(cem.activeListing, listing.PurchaseID)
+	
+	// Store sale
+	cem.sales[saleID] = sale
+	
+	// Update investments
+	cem.transferInvestment(listing.SellerID, buyerID, listing.CreatorID, purchase.PurchasePrice)
+	
+	// Distribute royalty to creator's investors
+	cem.distributeRoyaltyToInvestors(sale)
+	
+	cem.logger.Info().
+		Str("buyer_id", buyerID).
+		Str("seller_id", listing.SellerID).
+		Str("creator_id", listing.CreatorID).
+		Float64("sale_price", listing.ListingPrice).
+		Float64("creator_royalty", creatorRoyalty).
+		Str("sale_id", saleID).
+		Msg("Secondary market sale completed")
+	
+	return sale, nil
+}
+
+// transferInvestment transfers investment from seller to buyer
+func (cem *ContentEconomyManager) transferInvestment(sellerID, buyerID, creatorID string, originalAmount float64) {
+	// Remove investment from seller
+	sellerInvestmentID := fmt.Sprintf("%s_%s", sellerID, creatorID)
+	sellerInvestment := cem.investments[sellerInvestmentID]
+	if sellerInvestment != nil {
+		sellerInvestment.TotalInvested -= originalAmount
+		sellerInvestment.ContentCount--
+		if sellerInvestment.TotalInvested <= 0 {
+			// Remove investment entirely
+			delete(cem.investments, sellerInvestmentID)
+			
+			// Remove from creator's investor list
+			investors := cem.creatorInvestors[creatorID]
+			for i, inv := range investors {
+				if inv.InvestmentID == sellerInvestmentID {
+					cem.creatorInvestors[creatorID] = append(investors[:i], investors[i+1:]...)
+					break
+				}
+			}
+		}
+	}
+	
+	// Add investment to buyer
+	cem.updateInvestment(buyerID, creatorID, originalAmount)
+}
+
+// distributeRoyaltyToInvestors distributes secondary market royalties to investors
+func (cem *ContentEconomyManager) distributeRoyaltyToInvestors(sale *SecondaryMarketSale) {
+	investors := cem.creatorInvestors[sale.CreatorID]
+	if len(investors) == 0 || sale.InvestorSplit <= 0 {
+		return
+	}
+	
+	for _, investment := range investors {
+		if investment.CurrentShare > 0 {
+			investorAmount := sale.InvestorSplit * (investment.CurrentShare / cem.config.ContentCreator.InvestorSplit)
+			
+			// Record investor revenue
+			cem.recordInvestorRevenue(investment.UserID, sale.CreatorID, "secondary_market_royalty", investorAmount)
+		}
+	}
+	
+	cem.logger.Debug().
+		Str("sale_id", sale.SaleID).
+		Float64("investor_split", sale.InvestorSplit).
+		Int("investor_count", len(investors)).
+		Msg("Secondary market royalty distributed to investors")
+}
+
+// REVENUE TRACKING
+
+// recordInvestorRevenue records revenue for an investor
+func (cem *ContentEconomyManager) recordInvestorRevenue(userID, creatorID, source string, amount float64) {
+	cycle := cem.pool.GetCurrentCycle()
+	if cycle == nil {
+		return
+	}
+	
+	// Find or create investor revenue record for this cycle
+	var revenue *InvestorRevenue
+	for _, rev := range cem.investorRevenues[userID] {
+		if rev.BillingCycleID == cycle.ID && rev.CreatorID == creatorID {
+			revenue = rev
+			break
+		}
+	}
+	
+	if revenue == nil {
+		revenue = &InvestorRevenue{
+			RevenueID:       cem.generateRevenueID(),
+			BillingCycleID:  cycle.ID,
+			InvestmentID:    fmt.Sprintf("%s_%s", userID, creatorID),
+			UserID:          userID,
+			CreatorID:       creatorID,
+			RevenueBreakdown: make(map[string]float64),
+			TotalRevenue:    0,
+			CalculatedAt:    time.Now(),
+			Status:          RewardPending,
+		}
+		cem.investorRevenues[userID] = append(cem.investorRevenues[userID], revenue)
+	}
+	
+	// Add to revenue breakdown
+	revenue.RevenueBreakdown[source] += amount
+	revenue.TotalRevenue += amount
+	
+	cem.logger.Debug().
+		Str("user_id", userID).
+		Str("creator_id", creatorID).
+		Str("source", source).
+		Float64("amount", amount).
+		Float64("total_revenue", revenue.TotalRevenue).
+		Msg("Investor revenue recorded")
+}
+
+// BACKGROUND WORKERS
+
+// listingExpirationWorker handles expired listings
+func (cem *ContentEconomyManager) listingExpirationWorker(ctx context.Context) {
+	defer cem.wg.Done()
+	
+	ticker := time.NewTicker(time.Hour) // Check hourly
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-cem.stopChan:
+			return
+		case <-ticker.C:
+			cem.expireOldListings()
+		}
+	}
+}
+
+// expireOldListings expires listings that have exceeded their duration
+func (cem *ContentEconomyManager) expireOldListings() {
+	cem.mu.Lock()
+	defer cem.mu.Unlock()
+	
+	now := time.Now()
+	expiredCount := 0
+	
+	for _, listing := range cem.listings {
+		if listing.Status == ListingActive && 
+		   now.Sub(listing.ListedAt) > cem.config.ContentEconomy.ListingDuration {
+			listing.Status = ListingExpired
+			delete(cem.activeListing, listing.PurchaseID)
+			expiredCount++
+		}
+	}
+	
+	if expiredCount > 0 {
+		cem.logger.Info().
+			Int("expired_count", expiredCount).
+			Msg("Expired old secondary market listings")
+	}
+}
+
+// revenueDistributionWorker handles periodic revenue distribution
+func (cem *ContentEconomyManager) revenueDistributionWorker(ctx context.Context) {
+	defer cem.wg.Done()
+	
+	ticker := time.NewTicker(24 * time.Hour) // Check daily
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-cem.stopChan:
+			return
+		case <-ticker.C:
+			cem.processRevenuePayout()
+		}
+	}
+}
+
+// processRevenuePayout processes pending revenue payouts
+func (cem *ContentEconomyManager) processRevenuePayout() {
+	cem.mu.Lock()
+	defer cem.mu.Unlock()
+	
+	// This would integrate with the payment system to actually send payments
+	// For now, just mark revenues as paid
+	processedCount := 0
+	
+	for _, revenues := range cem.investorRevenues {
+		for _, revenue := range revenues {
+			if revenue.Status == RewardPending && revenue.TotalRevenue >= cem.config.Payment.MinPayoutAmount {
+				revenue.Status = RewardPaid
+				now := time.Now()
+				revenue.PaidAt = &now
+				processedCount++
+			}
+		}
+	}
+	
+	if processedCount > 0 {
+		cem.logger.Info().
+			Int("processed_count", processedCount).
+			Msg("Processed investor revenue payouts")
+	}
+}
+
+// ID GENERATORS
+
+func (cem *ContentEconomyManager) generatePurchaseID() string {
+	return fmt.Sprintf("purchase_%d", time.Now().UnixNano())
+}
+
+func (cem *ContentEconomyManager) generateTipID() string {
+	return fmt.Sprintf("tip_%d", time.Now().UnixNano())
+}
+
+func (cem *ContentEconomyManager) generateListingID() string {
+	return fmt.Sprintf("listing_%d", time.Now().UnixNano())
+}
+
+func (cem *ContentEconomyManager) generateSaleID() string {
+	return fmt.Sprintf("sale_%d", time.Now().UnixNano())
+}
+
+func (cem *ContentEconomyManager) generateRevenueID() string {
+	return fmt.Sprintf("revenue_%d", time.Now().UnixNano())
+}
+
+// QUERY METHODS
+
+// GetContentPurchase returns a content purchase by ID
+func (cem *ContentEconomyManager) GetContentPurchase(purchaseID string) (*ContentPurchase, error) {
+	cem.mu.RLock()
+	defer cem.mu.RUnlock()
+	
+	purchase := cem.purchases[purchaseID]
+	if purchase == nil {
+		return nil, fmt.Errorf("purchase %s not found", purchaseID)
+	}
+	
+	// Return copy
+	p := *purchase
+	return &p, nil
+}
+
+// GetUserInvestments returns all investments for a user
+func (cem *ContentEconomyManager) GetUserInvestments(userID string) []*ContentInvestment {
+	cem.mu.RLock()
+	defer cem.mu.RUnlock()
+	
+	var investments []*ContentInvestment
+	for _, investment := range cem.investments {
+		if investment.UserID == userID {
+			// Return copy
+			inv := *investment
+			investments = append(investments, &inv)
+		}
+	}
+	
+	return investments
+}
+
+// GetCreatorInvestors returns all investors for a creator
+func (cem *ContentEconomyManager) GetCreatorInvestors(creatorID string) []*ContentInvestment {
+	cem.mu.RLock()
+	defer cem.mu.RUnlock()
+	
+	investors := cem.creatorInvestors[creatorID]
+	var result []*ContentInvestment
+	
+	for _, investment := range investors {
+		// Return copy
+		inv := *investment
+		result = append(result, &inv)
+	}
+	
+	return result
+}
+
+// GetActiveListings returns all active secondary market listings
+func (cem *ContentEconomyManager) GetActiveListings() []*SecondaryMarketListing {
+	cem.mu.RLock()
+	defer cem.mu.RUnlock()
+	
+	var listings []*SecondaryMarketListing
+	for _, listing := range cem.listings {
+		if listing.Status == ListingActive {
+			// Return copy
+			l := *listing
+			listings = append(listings, &l)
+		}
+	}
+	
+	return listings
+}
+
+// GetContentEconomyStats returns content economy statistics
+func (cem *ContentEconomyManager) GetContentEconomyStats() ContentEconomyStats {
+	cem.mu.RLock()
+	defer cem.mu.RUnlock()
+	
+	// Calculate statistics
+	totalPurchases := len(cem.purchases)
+	activeListings := 0
+	var totalInvestmentVolume, totalTipsVolume, secondaryMarketVolume float64
+	var totalContentPrices float64
+	var priceCount int
+	
+	// Calculate investment volume
+	for _, investment := range cem.investments {
+		totalInvestmentVolume += investment.TotalInvested
+	}
+	
+	// Calculate tips volume
+	for _, tipList := range cem.tips {
+		for _, tip := range tipList {
+			totalTipsVolume += tip.Amount
+		}
+	}
+	
+	// Calculate secondary market stats
+	for _, sale := range cem.sales {
+		secondaryMarketVolume += sale.SalePrice
+	}
+	
+	for _, listing := range cem.listings {
+		if listing.Status == ListingActive {
+			activeListings++
+		}
+	}
+	
+	// Calculate average content price
+	for _, purchase := range cem.purchases {
+		totalContentPrices += purchase.PurchasePrice
+		priceCount++
+	}
+	
+	averageContentPrice := float64(0)
+	if priceCount > 0 {
+		averageContentPrice = totalContentPrices / float64(priceCount)
+	}
+	
+	return ContentEconomyStats{
+		TotalContentPurchases: totalPurchases,
+		TotalInvestmentVolume: math.Round(totalInvestmentVolume*100) / 100,
+		TotalTipsVolume:       math.Round(totalTipsVolume*100) / 100,
+		SecondaryMarketVolume: math.Round(secondaryMarketVolume*100) / 100,
+		ActiveListings:        activeListings,
+		AverageContentPrice:   math.Round(averageContentPrice*100) / 100,
+		AverageRoyaltyRate:    cem.config.ContentEconomy.CreatorRoyaltyRate,
+		TopCreatorsByRevenue:  []string{}, // Would be calculated from actual revenue data
+	}
+}

@@ -388,13 +388,13 @@ func main() {
     if err != nil {
         log.Fatal(err)
     }
-    
+
     // Check for forbidden imports
     forbidden := []string{
         "github.com/blackhole/internal",
         "unsafe",
     }
-    
+
     for _, imp := range pkg.Imports {
         for _, f := range forbidden {
             if strings.Contains(imp, f) {

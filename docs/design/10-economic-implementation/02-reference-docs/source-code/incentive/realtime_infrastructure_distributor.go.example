@@ -1,0 +1,449 @@
+package incentive
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/rs/zerolog"
+)
+
+// RealTimeInfrastructureDistributor handles per-second distribution of infrastructure rewards
+type RealTimeInfrastructureDistributor struct {
+	mu                  sync.RWMutex
+	logger              zerolog.Logger
+	config              *Config
+	marketPricing       *MarketPricingModel
+	
+	// Current provider usage tracking
+	currentProviderUsage map[string]*RealTimeProviderUsage
+	
+	// Distribution state
+	infrastructurePool   float64  // Accumulated infrastructure funds to distribute
+	lastDistributionTime time.Time
+	
+	// Per-second distribution results
+	distributionHistory  []*RealTimeDistribution
+	maxHistorySize       int
+	
+	// Provider reward accumulation
+	providerRewards      map[string]float64 // providerID -> accumulated rewards
+	
+	// Control
+	started              bool
+	stopChan             chan struct{}
+	wg                   sync.WaitGroup
+}
+
+// RealTimeProviderUsage tracks current second-by-second provider usage
+type RealTimeProviderUsage struct {
+	ProviderID       string    `json:"provider_id"`
+	LastUpdateTime   time.Time `json:"last_update_time"`
+	
+	// Current usage rates (per second)
+	StorageGBHoursPerSecond  float64 `json:"storage_gb_hours_per_second"`
+	BandwidthGBPerSecond     float64 `json:"bandwidth_gb_per_second"`
+	CPUHoursPerSecond        float64 `json:"cpu_hours_per_second"`
+	GPUHoursPerSecond        float64 `json:"gpu_hours_per_second"`
+	MemoryGBHoursPerSecond   float64 `json:"memory_gb_hours_per_second"`
+	
+	// Market value calculation
+	MarketValuePerSecond     float64 `json:"market_value_per_second"`
+	
+	// Activity tracking
+	IsActive             bool      `json:"is_active"`
+	LastActivityTime     time.Time `json:"last_activity_time"`
+}
+
+// RealTimeDistribution represents a single second's distribution result
+type RealTimeDistribution struct {
+	Timestamp            time.Time            `json:"timestamp"`
+	InfrastructureAmount float64              `json:"infrastructure_amount"`
+	TotalMarketValue     float64              `json:"total_market_value"`
+	ProviderRewards      map[string]float64   `json:"provider_rewards"`
+	ActiveProviders      []string             `json:"active_providers"`
+}
+
+// NewRealTimeInfrastructureDistributor creates a new real-time infrastructure distributor
+func NewRealTimeInfrastructureDistributor(config *Config, logger zerolog.Logger) *RealTimeInfrastructureDistributor {
+	return &RealTimeInfrastructureDistributor{
+		logger:               logger.With().Str("component", "realtime_infra_distributor").Logger(),
+		config:               config,
+		marketPricing:        NewMarketPricingModel(),
+		currentProviderUsage: make(map[string]*RealTimeProviderUsage),
+		distributionHistory:  make([]*RealTimeDistribution, 0),
+		maxHistorySize:       3600, // Keep 1 hour of history
+		providerRewards:      make(map[string]float64),
+		stopChan:             make(chan struct{}),
+	}
+}
+
+// Start begins the real-time infrastructure distribution
+func (rtid *RealTimeInfrastructureDistributor) Start(ctx context.Context) error {
+	rtid.mu.Lock()
+	defer rtid.mu.Unlock()
+	
+	if rtid.started {
+		return fmt.Errorf("real-time infrastructure distributor already started")
+	}
+	
+	rtid.logger.Info().Msg("Starting real-time infrastructure distributor")
+	
+	// Start per-second distribution worker
+	rtid.wg.Add(1)
+	go rtid.distributionWorker(ctx)
+	
+	// Start provider activity cleanup worker
+	rtid.wg.Add(1)
+	go rtid.cleanupWorker(ctx)
+	
+	rtid.started = true
+	rtid.logger.Info().Msg("Real-time infrastructure distributor started")
+	
+	return nil
+}
+
+// Stop stops the real-time infrastructure distributor
+func (rtid *RealTimeInfrastructureDistributor) Stop(ctx context.Context) error {
+	rtid.mu.Lock()
+	defer rtid.mu.Unlock()
+	
+	if !rtid.started {
+		return nil
+	}
+	
+	rtid.logger.Info().Msg("Stopping real-time infrastructure distributor")
+	
+	close(rtid.stopChan)
+	rtid.wg.Wait()
+	
+	rtid.started = false
+	rtid.logger.Info().Msg("Real-time infrastructure distributor stopped")
+	
+	return nil
+}
+
+// AddInfrastructureFunds adds funds to the infrastructure pool for distribution
+func (rtid *RealTimeInfrastructureDistributor) AddInfrastructureFunds(amount float64) {
+	rtid.mu.Lock()
+	defer rtid.mu.Unlock()
+	
+	rtid.infrastructurePool += amount
+	
+	rtid.logger.Debug().
+		Float64("amount", amount).
+		Float64("total_pool", rtid.infrastructurePool).
+		Msg("Infrastructure funds added")
+}
+
+// RecordProviderUsage records real-time usage from a provider (SUBSCRIBERS ONLY)
+func (rtid *RealTimeInfrastructureDistributor) RecordProviderUsage(
+	providerID string,
+	storageGBHoursPerSecond, bandwidthGBPerSecond, cpuHoursPerSecond, 
+	gpuHoursPerSecond, memoryGBHoursPerSecond float64,
+) {
+	rtid.mu.Lock()
+	defer rtid.mu.Unlock()
+	
+	now := time.Now()
+	
+	// Get or create provider usage record
+	usage, exists := rtid.currentProviderUsage[providerID]
+	if !exists {
+		usage = &RealTimeProviderUsage{
+			ProviderID: providerID,
+		}
+		rtid.currentProviderUsage[providerID] = usage
+	}
+	
+	// Update usage rates
+	usage.LastUpdateTime = now
+	usage.StorageGBHoursPerSecond = storageGBHoursPerSecond
+	usage.BandwidthGBPerSecond = bandwidthGBPerSecond
+	usage.CPUHoursPerSecond = cpuHoursPerSecond
+	usage.GPUHoursPerSecond = gpuHoursPerSecond
+	usage.MemoryGBHoursPerSecond = memoryGBHoursPerSecond
+	usage.IsActive = true
+	usage.LastActivityTime = now
+	
+	// Calculate market value per second
+	usage.MarketValuePerSecond = rtid.calculateProviderMarketValuePerSecond(usage)
+	
+	rtid.logger.Debug().
+		Str("provider_id", providerID).
+		Float64("storage_rate", storageGBHoursPerSecond).
+		Float64("bandwidth_rate", bandwidthGBPerSecond).
+		Float64("cpu_rate", cpuHoursPerSecond).
+		Float64("market_value_per_second", usage.MarketValuePerSecond).
+		Msg("Provider usage recorded")
+}
+
+// calculateProviderMarketValuePerSecond calculates the market value of a provider's per-second contribution
+func (rtid *RealTimeInfrastructureDistributor) calculateProviderMarketValuePerSecond(usage *RealTimeProviderUsage) float64 {
+	value := 0.0
+	
+	// Storage value (GB-hours per second * hourly rate)
+	storageHourlyRate := rtid.marketPricing.BaseRates.StoragePerGBMonth / (30.44 * 24) // Convert monthly to hourly
+	value += usage.StorageGBHoursPerSecond * storageHourlyRate
+	
+	// Bandwidth value (GB per second * GB rate)
+	value += usage.BandwidthGBPerSecond * rtid.marketPricing.BaseRates.BandwidthPerGB
+	
+	// CPU value (CPU-hours per second * hourly rate)
+	value += usage.CPUHoursPerSecond * rtid.marketPricing.BaseRates.ComputePerCPUHour
+	
+	// GPU value (GPU-hours per second * hourly rate)
+	value += usage.GPUHoursPerSecond * rtid.marketPricing.BaseRates.GPUComputePerHour
+	
+	// Memory value (GB-hours per second * hourly rate)
+	value += usage.MemoryGBHoursPerSecond * rtid.marketPricing.BaseRates.MemoryPerGBHour
+	
+	return value
+}
+
+// distributionWorker runs the per-second distribution process
+func (rtid *RealTimeInfrastructureDistributor) distributionWorker(ctx context.Context) {
+	defer rtid.wg.Done()
+	
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-rtid.stopChan:
+			return
+		case <-ticker.C:
+			rtid.distributeInfrastructureFunds()
+		}
+	}
+}
+
+// distributeInfrastructureFunds distributes infrastructure funds based on current provider usage
+func (rtid *RealTimeInfrastructureDistributor) distributeInfrastructureFunds() {
+	rtid.mu.Lock()
+	defer rtid.mu.Unlock()
+	
+	now := time.Now()
+	
+	if rtid.infrastructurePool <= 0 {
+		return // No funds to distribute
+	}
+	
+	// Calculate total market value from all active providers
+	totalMarketValue := 0.0
+	activeProviders := []string{}
+	
+	for providerID, usage := range rtid.currentProviderUsage {
+		if usage.IsActive && time.Since(usage.LastActivityTime) < 5*time.Second {
+			totalMarketValue += usage.MarketValuePerSecond
+			activeProviders = append(activeProviders, providerID)
+		}
+	}
+	
+	if totalMarketValue <= 0 {
+		// No active providers - funds remain in pool
+		rtid.logger.Debug().
+			Float64("infrastructure_pool", rtid.infrastructurePool).
+			Msg("No active providers - keeping funds in pool")
+		return
+	}
+	
+	// Calculate distribution based on market value ratios
+	distribution := &RealTimeDistribution{
+		Timestamp:            now,
+		InfrastructureAmount: rtid.infrastructurePool,
+		TotalMarketValue:     totalMarketValue,
+		ProviderRewards:      make(map[string]float64),
+		ActiveProviders:      activeProviders,
+	}
+	
+	for _, providerID := range activeProviders {
+		usage := rtid.currentProviderUsage[providerID]
+		
+		// Calculate provider's share of the infrastructure pool
+		shareRatio := usage.MarketValuePerSecond / totalMarketValue
+		providerReward := rtid.infrastructurePool * shareRatio
+		
+		// Apply efficiency bonus
+		bonusReward := providerReward * rtid.config.MarketPricing.ProviderEfficiencyBonus
+		totalReward := providerReward + bonusReward
+		
+		distribution.ProviderRewards[providerID] = totalReward
+		
+		// Accumulate provider rewards
+		rtid.providerRewards[providerID] += totalReward
+		
+		rtid.logger.Debug().
+			Str("provider_id", providerID).
+			Float64("market_value_per_second", usage.MarketValuePerSecond).
+			Float64("share_ratio", shareRatio).
+			Float64("base_reward", providerReward).
+			Float64("bonus_reward", bonusReward).
+			Float64("total_reward", totalReward).
+			Msg("Provider reward calculated")
+	}
+	
+	// Add to distribution history
+	rtid.distributionHistory = append(rtid.distributionHistory, distribution)
+	if len(rtid.distributionHistory) > rtid.maxHistorySize {
+		rtid.distributionHistory = rtid.distributionHistory[1:]
+	}
+	
+	// Clear the infrastructure pool
+	rtid.infrastructurePool = 0
+	rtid.lastDistributionTime = now
+	
+	rtid.logger.Debug().
+		Int("active_providers", len(activeProviders)).
+		Float64("total_market_value", totalMarketValue).
+		Float64("distributed_amount", distribution.InfrastructureAmount).
+		Msg("Infrastructure funds distributed")
+}
+
+// cleanupWorker removes inactive providers from tracking
+func (rtid *RealTimeInfrastructureDistributor) cleanupWorker(ctx context.Context) {
+	defer rtid.wg.Done()
+	
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-rtid.stopChan:
+			return
+		case <-ticker.C:
+			rtid.cleanupInactiveProviders()
+		}
+	}
+}
+
+// cleanupInactiveProviders removes providers who haven't been active recently
+func (rtid *RealTimeInfrastructureDistributor) cleanupInactiveProviders() {
+	rtid.mu.Lock()
+	defer rtid.mu.Unlock()
+	
+	inactiveThreshold := 60 * time.Second // 1 minute of inactivity
+	
+	for providerID, usage := range rtid.currentProviderUsage {
+		if time.Since(usage.LastActivityTime) > inactiveThreshold {
+			usage.IsActive = false
+			
+			rtid.logger.Debug().
+				Str("provider_id", providerID).
+				Time("last_activity", usage.LastActivityTime).
+				Msg("Provider marked as inactive")
+		}
+	}
+}
+
+// GetCurrentInfrastructurePool returns the current infrastructure pool amount
+func (rtid *RealTimeInfrastructureDistributor) GetCurrentInfrastructurePool() float64 {
+	rtid.mu.RLock()
+	defer rtid.mu.RUnlock()
+	
+	return rtid.infrastructurePool
+}
+
+// GetActiveProviders returns current active providers and their usage
+func (rtid *RealTimeInfrastructureDistributor) GetActiveProviders() map[string]*RealTimeProviderUsage {
+	rtid.mu.RLock()
+	defer rtid.mu.RUnlock()
+	
+	result := make(map[string]*RealTimeProviderUsage)
+	
+	for providerID, usage := range rtid.currentProviderUsage {
+		if usage.IsActive && time.Since(usage.LastActivityTime) < 30*time.Second {
+			usageCopy := *usage
+			result[providerID] = &usageCopy
+		}
+	}
+	
+	return result
+}
+
+// GetProviderRewards returns accumulated rewards for all providers
+func (rtid *RealTimeInfrastructureDistributor) GetProviderRewards() map[string]float64 {
+	rtid.mu.RLock()
+	defer rtid.mu.RUnlock()
+	
+	result := make(map[string]float64)
+	for providerID, reward := range rtid.providerRewards {
+		result[providerID] = reward
+	}
+	
+	return result
+}
+
+// GetDistributionHistory returns recent distribution history
+func (rtid *RealTimeInfrastructureDistributor) GetDistributionHistory(limit int) []*RealTimeDistribution {
+	rtid.mu.RLock()
+	defer rtid.mu.RUnlock()
+	
+	if limit <= 0 || limit > len(rtid.distributionHistory) {
+		limit = len(rtid.distributionHistory)
+	}
+	
+	start := len(rtid.distributionHistory) - limit
+	result := make([]*RealTimeDistribution, limit)
+	
+	for i := 0; i < limit; i++ {
+		distribution := rtid.distributionHistory[start+i]
+		distCopy := *distribution
+		distCopy.ProviderRewards = make(map[string]float64)
+		for k, v := range distribution.ProviderRewards {
+			distCopy.ProviderRewards[k] = v
+		}
+		result[i] = &distCopy
+	}
+	
+	return result
+}
+
+// GetStats returns real-time infrastructure distribution statistics
+func (rtid *RealTimeInfrastructureDistributor) GetStats() *RealTimeInfrastructureStats {
+	rtid.mu.RLock()
+	defer rtid.mu.RUnlock()
+	
+	activeCount := 0
+	totalMarketValue := 0.0
+	
+	for _, usage := range rtid.currentProviderUsage {
+		if usage.IsActive && time.Since(usage.LastActivityTime) < 30*time.Second {
+			activeCount++
+			totalMarketValue += usage.MarketValuePerSecond
+		}
+	}
+	
+	var totalDistributedToday float64
+	today := time.Now().Truncate(24 * time.Hour)
+	
+	for _, distribution := range rtid.distributionHistory {
+		if distribution.Timestamp.After(today) {
+			totalDistributedToday += distribution.InfrastructureAmount
+		}
+	}
+	
+	return &RealTimeInfrastructureStats{
+		ActiveProviders:         activeCount,
+		TotalMarketValuePerSecond: totalMarketValue,
+		CurrentInfrastructurePool: rtid.infrastructurePool,
+		TotalDistributedToday:     totalDistributedToday,
+		LastDistribution:          rtid.lastDistributionTime,
+		DistributionCount:         len(rtid.distributionHistory),
+	}
+}
+
+// RealTimeInfrastructureStats represents statistics for real-time infrastructure distribution
+type RealTimeInfrastructureStats struct {
+	ActiveProviders           int       `json:"active_providers"`
+	TotalMarketValuePerSecond float64   `json:"total_market_value_per_second"`
+	CurrentInfrastructurePool float64   `json:"current_infrastructure_pool"`
+	TotalDistributedToday     float64   `json:"total_distributed_today"`
+	LastDistribution          time.Time `json:"last_distribution"`
+	DistributionCount         int       `json:"distribution_count"`
+}

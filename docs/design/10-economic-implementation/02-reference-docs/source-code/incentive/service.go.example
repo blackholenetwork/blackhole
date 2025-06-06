@@ -1,0 +1,1259 @@
+package incentive
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/blackholenetwork/blackhole/pkg/core"
+	"github.com/blackholenetwork/blackhole/pkg/interfaces"
+	"github.com/rs/zerolog"
+)
+
+// Service represents the main incentive service
+type Service struct {
+	*core.BaseService
+	mu            sync.RWMutex
+	logger        zerolog.Logger
+	config        *Config
+	
+	// Core components
+	pool          *SubscriptionPool // Legacy monthly billing
+	tracker       *UsageTracker
+	calculator    *RewardCalculator
+	contentEconomy *ContentEconomyManager
+	
+	// New prorated billing system
+	proratedBilling       *ProratedBillingEngine
+	infraDistributor      *RealTimeInfrastructureDistributor
+	contentDistributor    *RealTimeContentDistributor
+	appDevDistributor     *RealTimeAppDeveloperDistributor
+	unusedFundsDistributor *UnusedFundsDistributor
+	useRealTimeBilling    bool // Flag to switch between legacy and real-time
+	
+	// Persistence layer for billing and audit trails
+	persistence   *EconomicPersistenceLayer
+	nodeID        string
+	
+	// Service state
+	started       bool
+	stopChan      chan struct{}
+	wg            sync.WaitGroup
+}
+
+// NewService creates a new incentive service
+func NewService(config *Config, logger zerolog.Logger) *Service {
+	service := &Service{
+		BaseService: core.NewBaseService("incentive"),
+		logger:     logger.With().Str("component", "incentive_service").Logger(),
+		config:     config,
+		stopChan:   make(chan struct{}),
+	}
+	
+	// Initialize components
+	service.pool = NewSubscriptionPool(config, logger)
+	service.tracker = NewUsageTracker(config, service.pool, logger)
+	service.calculator = NewRewardCalculator(config, service.pool, service.tracker, logger)
+	service.contentEconomy = NewContentEconomyManager(config, service.pool, logger)
+	
+	return service
+}
+
+// NewServiceWithPersistence creates a new incentive service with persistence layer
+func NewServiceWithPersistence(config *Config, vfs interfaces.VFS, nodeID string, logger zerolog.Logger) *Service {
+	service := &Service{
+		BaseService: core.NewBaseService("incentive"),
+		logger:     logger.With().Str("component", "incentive_service").Logger(),
+		config:     config,
+		nodeID:     nodeID,
+		stopChan:   make(chan struct{}),
+		useRealTimeBilling: true, // Enable real-time prorated billing by default
+	}
+	
+	// Initialize legacy components (for compatibility)
+	service.pool = NewSubscriptionPool(config, logger)
+	service.tracker = NewUsageTracker(config, service.pool, logger)
+	service.calculator = NewRewardCalculator(config, service.pool, service.tracker, logger)
+	service.contentEconomy = NewContentEconomyManager(config, service.pool, logger)
+	
+	// Initialize new prorated billing system
+	service.proratedBilling = NewProratedBillingEngine(config, logger)
+	service.infraDistributor = NewRealTimeInfrastructureDistributor(config, logger)
+	service.contentDistributor = NewRealTimeContentDistributor(config, logger)
+	service.appDevDistributor = NewRealTimeAppDeveloperDistributor(config, logger)
+	service.unusedFundsDistributor = NewUnusedFundsDistributor(config, logger)
+	
+	// Initialize persistence layer if VFS is provided
+	if vfs != nil {
+		service.persistence = NewEconomicPersistenceLayer(vfs, nodeID, logger)
+		logger.Info().Str("node_id", nodeID).Msg("Economic persistence layer initialized")
+	}
+	
+	return service
+}
+
+// Start starts the incentive service
+func (s *Service) Start(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	
+	if s.started {
+		return fmt.Errorf("incentive service already started")
+	}
+	
+	if !s.config.Enabled {
+		s.logger.Info().Msg("Incentive service disabled in configuration")
+		return nil
+	}
+	
+	s.logger.Info().Msg("Starting incentive service")
+	
+	// Validate configuration
+	if err := s.config.Validate(); err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
+	}
+	
+	// Start legacy components (for compatibility)
+	if !s.useRealTimeBilling {
+		if err := s.pool.Start(ctx); err != nil {
+			return fmt.Errorf("failed to start subscription pool: %w", err)
+		}
+	}
+	
+	if err := s.tracker.Start(ctx); err != nil {
+		if !s.useRealTimeBilling {
+			s.pool.Stop(ctx) // Cleanup on failure
+		}
+		return fmt.Errorf("failed to start usage tracker: %w", err)
+	}
+	
+	if err := s.contentEconomy.Start(ctx); err != nil {
+		s.tracker.Stop(ctx) // Cleanup on failure
+		if !s.useRealTimeBilling {
+			s.pool.Stop(ctx)
+		}
+		return fmt.Errorf("failed to start content economy: %w", err)
+	}
+	
+	// Start new prorated billing system
+	if s.useRealTimeBilling {
+		if err := s.proratedBilling.Start(ctx); err != nil {
+			s.contentEconomy.Stop(ctx)
+			s.tracker.Stop(ctx)
+			return fmt.Errorf("failed to start prorated billing: %w", err)
+		}
+		
+		if err := s.infraDistributor.Start(ctx); err != nil {
+			s.proratedBilling.Stop(ctx)
+			s.contentEconomy.Stop(ctx)
+			s.tracker.Stop(ctx)
+			return fmt.Errorf("failed to start infrastructure distributor: %w", err)
+		}
+		
+		if err := s.contentDistributor.Start(ctx); err != nil {
+			s.infraDistributor.Stop(ctx)
+			s.proratedBilling.Stop(ctx)
+			s.contentEconomy.Stop(ctx)
+			s.tracker.Stop(ctx)
+			return fmt.Errorf("failed to start content distributor: %w", err)
+		}
+		
+		if err := s.appDevDistributor.Start(ctx); err != nil {
+			s.contentDistributor.Stop(ctx)
+			s.infraDistributor.Stop(ctx)
+			s.proratedBilling.Stop(ctx)
+			s.contentEconomy.Stop(ctx)
+			s.tracker.Stop(ctx)
+			return fmt.Errorf("failed to start app developer distributor: %w", err)
+		}
+		
+		if err := s.unusedFundsDistributor.Start(ctx); err != nil {
+			s.appDevDistributor.Stop(ctx)
+			s.contentDistributor.Stop(ctx)
+			s.infraDistributor.Stop(ctx)
+			s.proratedBilling.Stop(ctx)
+			s.contentEconomy.Stop(ctx)
+			s.tracker.Stop(ctx)
+			return fmt.Errorf("failed to start unused funds distributor: %w", err)
+		}
+	}
+	
+	s.started = true
+	
+	// Start background workers
+	if !s.useRealTimeBilling {
+		s.wg.Add(1)
+		go s.rewardCalculationWorker(ctx)
+	} else {
+		// Start integration worker for real-time billing
+		s.wg.Add(1)
+		go s.connectProratedToDistributors(ctx)
+	}
+	
+	s.logger.Info().
+		Float64("content_pct", s.config.MarketPricing.ContentCreatorPercentage*100).
+		Float64("network_ops_pct", s.config.MarketPricing.NetworkOpsPercentage*100).
+		Float64("app_dev_pct", s.config.MarketPricing.AppDeveloperPercentage*100).
+		Float64("infrastructure_pct", s.config.MarketPricing.InfrastructurePercentage*100).
+		Bool("real_time_billing", s.useRealTimeBilling).
+		Str("pricing_model", "market_based").
+		Msg("Incentive service started with updated allocation")
+	
+	// Mark service as healthy
+	s.SetHealthy()
+	
+	return nil
+}
+
+// Stop stops the incentive service
+func (s *Service) Stop(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	
+	if !s.started {
+		return nil
+	}
+	
+	s.logger.Info().Msg("Stopping incentive service")
+	
+	close(s.stopChan)
+	s.wg.Wait()
+	
+	// Stop components
+	if err := s.contentEconomy.Stop(ctx); err != nil {
+		s.logger.Warn().Err(err).Msg("Error stopping content economy")
+	}
+	
+	if err := s.tracker.Stop(ctx); err != nil {
+		s.logger.Warn().Err(err).Msg("Error stopping usage tracker")
+	}
+	
+	// Stop real-time billing components
+	if s.useRealTimeBilling {
+		if err := s.unusedFundsDistributor.Stop(ctx); err != nil {
+			s.logger.Warn().Err(err).Msg("Error stopping unused funds distributor")
+		}
+		
+		if err := s.appDevDistributor.Stop(ctx); err != nil {
+			s.logger.Warn().Err(err).Msg("Error stopping app developer distributor")
+		}
+		
+		if err := s.contentDistributor.Stop(ctx); err != nil {
+			s.logger.Warn().Err(err).Msg("Error stopping content distributor")
+		}
+		
+		if err := s.infraDistributor.Stop(ctx); err != nil {
+			s.logger.Warn().Err(err).Msg("Error stopping infrastructure distributor")
+		}
+		
+		if err := s.proratedBilling.Stop(ctx); err != nil {
+			s.logger.Warn().Err(err).Msg("Error stopping prorated billing")
+		}
+	} else {
+		// Stop legacy pool
+		if err := s.pool.Stop(ctx); err != nil {
+			s.logger.Warn().Err(err).Msg("Error stopping subscription pool")
+		}
+	}
+	
+	s.started = false
+	
+	s.logger.Info().Msg("Incentive service stopped")
+	return nil
+}
+
+// SUBSCRIPTION MANAGEMENT
+
+// AddSubscription adds or updates a user subscription
+func (s *Service) AddSubscription(userID string, tier SubscriptionTier) error {
+	if !s.started || !s.config.Enabled {
+		return fmt.Errorf("incentive service not running")
+	}
+	
+	var amount float64
+	switch tier {
+	case TierNormal:
+		amount = s.config.TierPricing.Normal
+	case TierAdvance:
+		amount = s.config.TierPricing.Advance
+	case TierUltimate:
+		amount = s.config.TierPricing.Ultimate
+	case TierFree:
+		amount = 0
+	default:
+		return fmt.Errorf("invalid subscription tier: %s", tier)
+	}
+	
+	subscription := &Subscription{
+		UserID:       userID,
+		Tier:         tier,
+		MonthlyAmount: amount,
+		StartDate:    time.Now(),
+		Status:       SubscriptionActive,
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+	}
+	
+	return s.pool.AddSubscription(subscription)
+}
+
+// CancelSubscription cancels a user subscription
+func (s *Service) CancelSubscription(userID string) error {
+	if !s.started || !s.config.Enabled {
+		return fmt.Errorf("incentive service not running")
+	}
+	
+	return s.pool.CancelSubscription(userID)
+}
+
+// GetSubscription retrieves a user's subscription
+func (s *Service) GetSubscription(userID string) (*Subscription, error) {
+	if !s.started || !s.config.Enabled {
+		return nil, fmt.Errorf("incentive service not running")
+	}
+	
+	return s.pool.GetSubscription(userID)
+}
+
+// USAGE TRACKING
+
+// TrackStorageUsage tracks storage resource usage
+func (s *Service) TrackStorageUsage(providerID, operation string, dataSize int64, duration time.Duration, userID string, isChargeable bool) error {
+	if !s.started || !s.config.Enabled {
+		return nil // Silently ignore if service not running
+	}
+	
+	return s.tracker.TrackStorageOperation(providerID, operation, dataSize, duration, userID, isChargeable)
+}
+
+// TrackBandwidthUsage tracks bandwidth resource usage
+func (s *Service) TrackBandwidthUsage(providerID, operation string, bytesTransferred int64, direction, userID string, isChargeable bool) error {
+	if !s.started || !s.config.Enabled {
+		return nil
+	}
+	
+	return s.tracker.TrackBandwidthOperation(providerID, operation, bytesTransferred, direction, userID, isChargeable)
+}
+
+// TrackComputeUsage tracks compute resource usage
+func (s *Service) TrackComputeUsage(providerID, operation, jobID, userID string, cpuHours, gpuHours, memoryGBHours float64, isChargeable bool) error {
+	if !s.started || !s.config.Enabled {
+		return nil
+	}
+	
+	return s.tracker.TrackComputeOperation(providerID, operation, jobID, userID, cpuHours, gpuHours, memoryGBHours, isChargeable)
+}
+
+// TrackContentContribution tracks content creator contributions
+func (s *Service) TrackContentContribution(creatorID, contentID, contentType string, viewCount int64, dataTransferred int64, engagementScore, qualityScore float64) error {
+	if !s.started || !s.config.Enabled {
+		return nil
+	}
+	
+	return s.tracker.TrackContentContribution(creatorID, contentID, contentType, viewCount, dataTransferred, engagementScore, qualityScore)
+}
+
+// TrackNetworkOperation tracks network operations
+func (s *Service) TrackNetworkOperation(providerID, operation, operationType, userID string, computeUnits float64, isChargeable bool) error {
+	if !s.started || !s.config.Enabled {
+		return nil
+	}
+	
+	return s.tracker.TrackNetworkOperation(providerID, operation, operationType, userID, computeUnits, isChargeable)
+}
+
+// REWARD QUERIES
+
+// GetProviderReward gets a provider's reward for a specific billing cycle
+func (s *Service) GetProviderReward(cycleID, providerID string) (*ProviderReward, error) {
+	if !s.started || !s.config.Enabled {
+		return nil, fmt.Errorf("incentive service not running")
+	}
+	
+	return s.calculator.GetProviderReward(cycleID, providerID)
+}
+
+// GetCycleCalculation gets the complete reward calculation for a billing cycle
+func (s *Service) GetCycleCalculation(cycleID string) (*RewardCalculation, error) {
+	if !s.started || !s.config.Enabled {
+		return nil, fmt.Errorf("incentive service not running")
+	}
+	
+	return s.calculator.GetCalculation(cycleID)
+}
+
+// GetCurrentCycle returns the current billing cycle
+func (s *Service) GetCurrentCycle() *BillingCycle {
+	if !s.started || !s.config.Enabled {
+		return nil
+	}
+	
+	return s.pool.GetCurrentCycle()
+}
+
+// GetStats returns incentive service statistics
+func (s *Service) GetStats() *IncentiveStats {
+	if !s.started || !s.config.Enabled {
+		return &IncentiveStats{}
+	}
+	
+	stats := s.pool.GetStats()
+	stats.ContentEconomy = s.contentEconomy.GetContentEconomyStats()
+	return stats
+}
+
+// CONTENT ECONOMY METHODS
+
+// PurchaseContent allows a user to purchase content and become an investor
+func (s *Service) PurchaseContent(userID, creatorID, contentID string, price float64) (*ContentPurchase, error) {
+	if !s.started || !s.config.Enabled {
+		return nil, fmt.Errorf("incentive service not running")
+	}
+	
+	return s.contentEconomy.PurchaseContent(userID, creatorID, contentID, price)
+}
+
+// SendTip sends a tip to a creator
+func (s *Service) SendTip(userID, creatorID string, amount float64, contentID, message string) (*Tip, error) {
+	if !s.started || !s.config.Enabled {
+		return nil, fmt.Errorf("incentive service not running")
+	}
+	
+	return s.contentEconomy.SendTip(userID, creatorID, amount, contentID, message)
+}
+
+// ListContentForSale lists purchased content on the secondary market
+func (s *Service) ListContentForSale(purchaseID string, sellerID string, price float64) (*SecondaryMarketListing, error) {
+	if !s.started || !s.config.Enabled {
+		return nil, fmt.Errorf("incentive service not running")
+	}
+	
+	return s.contentEconomy.ListContentForSale(purchaseID, sellerID, price)
+}
+
+// BuyFromSecondaryMarket purchases content from secondary market
+func (s *Service) BuyFromSecondaryMarket(listingID, buyerID string) (*SecondaryMarketSale, error) {
+	if !s.started || !s.config.Enabled {
+		return nil, fmt.Errorf("incentive service not running")
+	}
+	
+	return s.contentEconomy.BuyFromSecondaryMarket(listingID, buyerID)
+}
+
+// GetUserInvestments returns all investments for a user
+func (s *Service) GetUserInvestments(userID string) []*ContentInvestment {
+	if !s.started || !s.config.Enabled {
+		return nil
+	}
+	
+	return s.contentEconomy.GetUserInvestments(userID)
+}
+
+// GetCreatorInvestors returns all investors for a creator
+func (s *Service) GetCreatorInvestors(creatorID string) []*ContentInvestment {
+	if !s.started || !s.config.Enabled {
+		return nil
+	}
+	
+	return s.contentEconomy.GetCreatorInvestors(creatorID)
+}
+
+// GetActiveListings returns all active secondary market listings
+func (s *Service) GetActiveListings() []*SecondaryMarketListing {
+	if !s.started || !s.config.Enabled {
+		return nil
+	}
+	
+	return s.contentEconomy.GetActiveListings()
+}
+
+// BACKGROUND WORKERS
+
+// rewardCalculationWorker handles automatic reward calculations for completed cycles
+func (s *Service) rewardCalculationWorker(ctx context.Context) {
+	defer s.wg.Done()
+	
+	ticker := time.NewTicker(time.Hour) // Check every hour
+	defer ticker.Stop()
+	
+	s.logger.Debug().Msg("Reward calculation worker started")
+	
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.stopChan:
+			return
+		case <-ticker.C:
+			s.processCompletedCycles()
+		}
+	}
+}
+
+// processCompletedCycles checks for completed billing cycles and calculates rewards
+func (s *Service) processCompletedCycles() {
+	// This would check for cycles in "calculating" status and run calculations
+	// For now, we'll just log that it's checking
+	s.logger.Debug().Msg("Checking for completed billing cycles requiring reward calculation")
+	
+	// Implementation would:
+	// 1. Query for cycles with status = CycleStatusCalculating
+	// 2. For each cycle, call s.calculator.CalculateRewards(ctx, cycleID)
+	// 3. Update cycle status to CycleStatusDistributing
+	// 4. Schedule payment distribution
+}
+
+// GetServiceHealth returns detailed health information as a map
+func (s *Service) GetServiceHealth() map[string]interface{} {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	
+	health := map[string]interface{}{
+		"service":     "incentive",
+		"started":     s.started,
+		"enabled":     s.config.Enabled,
+		"version":     "1.0.0",
+		"timestamp":   time.Now(),
+	}
+	
+	if s.started && s.config.Enabled {
+		currentCycle := s.pool.GetCurrentCycle()
+		if currentCycle != nil {
+			health["current_cycle"] = currentCycle.ID
+			health["cycle_status"] = currentCycle.Status
+			health["cycle_end"] = currentCycle.EndDate
+		}
+		
+		health["pool_amount"] = s.pool.GetPoolAmount()
+		health["active_subscriptions"] = s.pool.GetActiveSubscriptions()
+	}
+	
+	return health
+}
+
+// ECONOMIC TRACKER INTERFACE IMPLEMENTATION
+// These methods implement the EconomicTracker interface from pkg/core
+
+// TrackResourceUsage records resource usage for economic calculations
+func (s *Service) TrackResourceUsage(ctx context.Context, event ResourceUsageEvent) error {
+	if !s.started || !s.config.Enabled {
+		return fmt.Errorf("incentive service not running")
+	}
+	
+	// Store billing event with full audit trail if persistence is enabled
+	if s.persistence != nil && event.IsChargeable {
+		billingEvent := s.convertToBillingEvent(event)
+		if err := s.persistence.StoreBillingEvent(ctx, billingEvent); err != nil {
+			s.logger.Error().
+				Err(err).
+				Str("user_id", event.UserID).
+				Str("provider_id", event.ProviderID).
+				Str("resource_type", string(event.ResourceType)).
+				Msg("Failed to store billing event")
+			// Don't fail the operation, but log the error
+		}
+	}
+	
+	// Convert core.ResourceUsageEvent to our internal tracking
+	switch event.ResourceType {
+	case "storage":
+		// Convert amount based on unit
+		dataSize := int64(event.Amount) // Assume bytes
+		if event.Unit == "gb" {
+			dataSize = int64(event.Amount * 1024 * 1024 * 1024)
+		}
+		return s.tracker.TrackStorageOperation(
+			event.ProviderID,
+			event.Operation,
+			dataSize,
+			time.Hour, // Default duration
+			event.UserID,
+			event.IsChargeable,
+		)
+	case "bandwidth":
+		// Convert amount based on unit
+		bytesTransferred := int64(event.Amount) // Assume bytes
+		if event.Unit == "gb" {
+			bytesTransferred = int64(event.Amount * 1024 * 1024 * 1024)
+		}
+		return s.tracker.TrackBandwidthOperation(
+			event.ProviderID,
+			event.Operation,
+			bytesTransferred,
+			"downstream", // Default direction
+			event.UserID,
+			event.IsChargeable,
+		)
+	case "compute":
+		// Assume amount is in CPU-hours
+		cpuHours := event.Amount
+		return s.tracker.TrackComputeOperation(
+			event.ProviderID,
+			event.Operation,
+			"", // No specific job ID
+			event.UserID,
+			cpuHours,
+			0, // No GPU hours
+			cpuHours * 4.0, // Assume 4GB memory per CPU-hour
+			event.IsChargeable,
+		)
+	case "memory":
+		// Memory usage typically gets tracked with compute
+		memoryGBHours := event.Amount
+		return s.tracker.TrackComputeOperation(
+			event.ProviderID,
+			"memory_"+event.Operation,
+			"", // No specific job ID
+			event.UserID,
+			0, // No CPU hours for pure memory tracking
+			0, // No GPU hours
+			memoryGBHours,
+			event.IsChargeable,
+		)
+	case "app_platform":
+		// Handle app platform usage for real-time app developer rewards
+		if s.useRealTimeBilling && s.appDevDistributor != nil {
+			// Extract app usage parameters from metadata
+			activeUserTime := event.Amount // Amount is in user_seconds
+			developerID := event.ProviderID // Developer is the provider
+			appID := event.OperationType // App ID stored in OperationType
+			appName := ""
+			userRetentionRate := 0.8 // Default retention rate
+			appRating := 4.0 // Default rating
+			
+			// Extract values from metadata if available
+			if event.Metadata != nil {
+				if name, ok := event.Metadata["app_name"]; ok {
+					appName = name
+				}
+				if retention, ok := event.Metadata["user_retention_rate"]; ok {
+					if rate, err := strconv.ParseFloat(retention, 64); err == nil {
+						userRetentionRate = rate
+					}
+				}
+				if rating, ok := event.Metadata["app_rating"]; ok {
+					if rate, err := strconv.ParseFloat(rating, 64); err == nil {
+						appRating = rate
+					}
+				}
+			}
+			
+			// Record real-time app usage
+			s.RecordAppUsage(
+				developerID,
+				appID,
+				appName,
+				activeUserTime,
+				userRetentionRate,
+				appRating,
+			)
+			
+			return nil
+		}
+		
+		// Fall back to legacy tracking
+		s.logger.Debug().
+			Str("developer_id", event.ProviderID).
+			Str("app_id", event.OperationType).
+			Float64("active_user_time", event.Amount).
+			Msg("App platform usage tracked (legacy mode)")
+		return nil
+	default:
+		s.logger.Warn().
+			Str("resource_type", string(event.ResourceType)).
+			Str("provider_id", event.ProviderID).
+			Msg("Unknown resource type for economic tracking")
+		return nil
+	}
+}
+
+// TrackContentActivity records content-related activity for economic calculations  
+func (s *Service) TrackContentActivity(ctx context.Context, event ContentActivityEvent) error {
+	if !s.started || !s.config.Enabled {
+		return fmt.Errorf("incentive service not running")
+	}
+	
+	// Use real-time content distribution if available
+	if s.useRealTimeBilling && s.contentDistributor != nil {
+		// Convert view duration to engagement time per content type
+		engagementSeconds := event.ViewDuration.Seconds()
+		var videoTime, audioTime, documentTime, photoTime float64
+		
+		// Distribute engagement time based on content type
+		switch event.ContentType {
+		case "video":
+			videoTime = engagementSeconds
+		case "audio":
+			audioTime = engagementSeconds
+		case "document", "text":
+			documentTime = engagementSeconds
+		case "photo", "image":
+			photoTime = engagementSeconds
+		default:
+			// Default to video engagement for unknown types
+			videoTime = engagementSeconds
+		}
+		
+		// Record real-time content engagement
+		s.RecordContentEngagement(
+			event.CreatorID,
+			videoTime,
+			audioTime, 
+			documentTime,
+			photoTime,
+			event.QualityScore,
+		)
+		
+		return nil
+	}
+	
+	// Fall back to legacy tracking for compatibility
+	viewCount := int64(1) // Assume each activity event represents 1 view
+	engagementScore := 1.0 // Default engagement score
+	if event.EngagementType == "like" {
+		engagementScore = 2.0
+	} else if event.EngagementType == "share" {
+		engagementScore = 5.0
+	}
+	return s.tracker.TrackContentContribution(
+		event.CreatorID,
+		event.ContentID,
+		event.ContentType,
+		viewCount,
+		event.DataConsumed,
+		engagementScore,
+		event.QualityScore,
+	)
+}
+
+// ResourceUsageEvent represents resource usage from the core layer
+type ResourceUsageEvent struct {
+	ResourceType  string            `json:"resource_type"`
+	Operation     string            `json:"operation"`
+	Amount        float64           `json:"amount"`
+	Unit          string            `json:"unit"`
+	ProviderID    string            `json:"provider_id"`
+	UserID        string            `json:"user_id"`
+	IsChargeable  bool              `json:"is_chargeable"`
+	OperationType string            `json:"operation_type"`
+	ServiceName   string            `json:"service_name"`
+	Metadata      map[string]string `json:"metadata"`
+}
+
+// ContentActivityEvent represents content activity from the core layer
+type ContentActivityEvent struct {
+	ContentID      string            `json:"content_id"`
+	ContentType    string            `json:"content_type"`
+	CreatorID      string            `json:"creator_id"`
+	ActivityType   string            `json:"activity_type"`
+	ViewerID       string            `json:"viewer_id"`
+	DataConsumed   int64             `json:"data_consumed"`
+	ViewDuration   time.Duration     `json:"view_duration"`
+	EngagementType string            `json:"engagement_type"`
+	QualityScore   float64           `json:"quality_score"`
+	Metadata       map[string]string `json:"metadata"`
+}
+
+// PERSISTENCE LAYER INTEGRATION METHODS
+
+// convertToBillingEvent converts a ResourceUsageEvent to a BillingEvent for persistence
+func (s *Service) convertToBillingEvent(event ResourceUsageEvent) *BillingEvent {
+	now := time.Now()
+	
+	// Calculate cost based on current pricing
+	unitCost := s.calculateUnitCost(event.ResourceType, event.Operation)
+	totalCost := event.Amount * unitCost
+	
+	// Generate transaction ID
+	transactionID := fmt.Sprintf("tx_%s_%s_%d", event.UserID[:8], event.ProviderID[:8], now.UnixNano())
+	
+	// Get current billing cycle
+	currentCycle := s.pool.GetCurrentCycle()
+	billingCycleID := ""
+	if currentCycle != nil {
+		billingCycleID = currentCycle.ID
+	}
+	
+	// Create billing event
+	billingEvent := &BillingEvent{
+		TransactionID:    transactionID,
+		BillingCycleID:   billingCycleID,
+		ResourceType:     event.ResourceType,
+		Operation:        event.Operation,
+		Amount:           event.Amount,
+		Unit:             event.Unit,
+		Duration:         0, // TODO: Extract from metadata or calculate
+		UserID:           event.UserID,
+		ProviderID:       event.ProviderID,
+		NodeID:           s.nodeID,
+		ServiceName:      event.ServiceName,
+		IsChargeable:     event.IsChargeable,
+		OperationType:    event.OperationType,
+		UnitCost:         unitCost,
+		TotalCost:        totalCost,
+		Currency:         "USD",
+		VerificationProof: "", // TODO: Generate cryptographic proof
+		ResourceHash:     "", // TODO: Generate resource hash
+		OperationHash:    "", // TODO: Generate operation hash
+		RequestedAt:      now,
+		StartedAt:        now,
+		CompletedAt:      now,
+		RegulatoryFlags:  []string{"SOX_COMPLIANT", "GDPR_COMPLIANT"},
+		Metadata:         event.Metadata,
+	}
+	
+	return billingEvent
+}
+
+// calculateUnitCost calculates the cost per unit for a given resource type and operation
+func (s *Service) calculateUnitCost(resourceType, operation string) float64 {
+	// TODO: Implement dynamic pricing based on market conditions
+	// For now, use static rates
+	switch resourceType {
+	case "storage":
+		switch operation {
+		case "put", "replicate":
+			return 0.00005 // $0.05 per GB stored
+		case "get", "stream":
+			return 0.00001 // $0.01 per GB retrieved
+		default:
+			return 0.0
+		}
+	case "bandwidth":
+		switch operation {
+		case "upload", "download", "stream":
+			return 0.00010 // $0.10 per GB transferred
+		default:
+			return 0.0
+		}
+	case "compute":
+		switch operation {
+		case "execute", "ai_inference":
+			return 0.50000 // $0.50 per CPU-hour
+		case "ml_training":
+			return 2.00000 // $2.00 per CPU-hour for ML training
+		default:
+			return 0.0
+		}
+	case "memory":
+		return 0.10000 // $0.10 per GB-hour
+	default:
+		return 0.0
+	}
+}
+
+// PERSISTENCE QUERY METHODS
+
+// QueryUserBillingEvents retrieves billing events for a specific user
+func (s *Service) QueryUserBillingEvents(ctx context.Context, userID string, startDate, endDate time.Time) ([]*BillingEvent, error) {
+	if s.persistence == nil {
+		return nil, fmt.Errorf("persistence layer not available")
+	}
+	
+	filter := BillingEventFilter{
+		UserID:       userID,
+		StartDate:    startDate,
+		EndDate:      endDate,
+		IsChargeable: boolPtr(true),
+		SortBy:       "date",
+		SortOrder:    "desc",
+		Limit:        1000,
+	}
+	
+	return s.persistence.QueryBillingEvents(ctx, filter)
+}
+
+// QueryProviderBillingEvents retrieves billing events for a specific provider
+func (s *Service) QueryProviderBillingEvents(ctx context.Context, providerID string, startDate, endDate time.Time) ([]*BillingEvent, error) {
+	if s.persistence == nil {
+		return nil, fmt.Errorf("persistence layer not available")
+	}
+	
+	filter := BillingEventFilter{
+		ProviderID:   providerID,
+		StartDate:    startDate,
+		EndDate:      endDate,
+		IsChargeable: boolPtr(true),
+		SortBy:       "date",
+		SortOrder:    "desc",
+		Limit:        1000,
+	}
+	
+	return s.persistence.QueryBillingEvents(ctx, filter)
+}
+
+// GenerateUserBill generates a comprehensive billing report for a user
+func (s *Service) GenerateUserBill(ctx context.Context, userID, billingCycleID string) (*BillingReport, error) {
+	if s.persistence == nil {
+		return nil, fmt.Errorf("persistence layer not available")
+	}
+	
+	return s.persistence.GenerateUserBillingReport(ctx, userID, billingCycleID)
+}
+
+// GenerateProviderStatement generates a statement report for a provider
+func (s *Service) GenerateProviderStatement(ctx context.Context, providerID, billingCycleID string) (*BillingReport, error) {
+	if s.persistence == nil {
+		return nil, fmt.Errorf("persistence layer not available")
+	}
+	
+	return s.persistence.GenerateProviderStatementReport(ctx, providerID, billingCycleID)
+}
+
+// QueryAuditTrail retrieves audit trail entries for regulatory compliance
+func (s *Service) QueryAuditTrail(ctx context.Context, entityType, entityID string, startDate, endDate time.Time) ([]*AuditTrailEntry, error) {
+	if s.persistence == nil {
+		return nil, fmt.Errorf("persistence layer not available")
+	}
+	
+	filter := AuditTrailFilter{
+		Entity:          entityType,
+		EntityID:        entityID,
+		StartDate:       startDate,
+		EndDate:         endDate,
+		ComplianceLevel: "HIGH",
+		SortBy:          "date",
+		SortOrder:       "desc",
+		Limit:           1000,
+	}
+	
+	return s.persistence.QueryAuditTrail(ctx, filter)
+}
+
+// GetPersistenceLayer returns the persistence layer for direct access (if needed)
+func (s *Service) GetPersistenceLayer() *EconomicPersistenceLayer {
+	return s.persistence
+}
+
+// UTILITY FUNCTIONS
+
+func boolPtr(b bool) *bool {
+	return &b
+}
+
+// PRORATED BILLING METHODS (NEW REAL-TIME SYSTEM)
+
+// AddProratedSubscription adds a new prorated subscription (per-second billing)
+func (s *Service) AddProratedSubscription(userID string, tier SubscriptionTier, startTime time.Time) error {
+	if !s.started || !s.config.Enabled {
+		return fmt.Errorf("incentive service not running")
+	}
+	
+	if !s.useRealTimeBilling {
+		return fmt.Errorf("real-time billing not enabled")
+	}
+	
+	return s.proratedBilling.AddProratedSubscription(userID, tier, startTime)
+}
+
+// CancelProratedSubscription cancels a prorated subscription
+func (s *Service) CancelProratedSubscription(userID string) error {
+	if !s.started || !s.config.Enabled {
+		return fmt.Errorf("incentive service not running")
+	}
+	
+	if !s.useRealTimeBilling {
+		return fmt.Errorf("real-time billing not enabled")
+	}
+	
+	return s.proratedBilling.CancelProratedSubscription(userID)
+}
+
+// GetProratedSubscriptions returns all active prorated subscriptions
+func (s *Service) GetProratedSubscriptions() map[string]*ProratedSubscription {
+	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
+		return make(map[string]*ProratedSubscription)
+	}
+	
+	return s.proratedBilling.GetActiveSubscriptions()
+}
+
+// GetCurrentRevenueRate returns the current per-second revenue rate
+func (s *Service) GetCurrentRevenueRate() float64 {
+	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
+		return 0
+	}
+	
+	return s.proratedBilling.GetCurrentRevenueRate()
+}
+
+// GetPoolAmounts returns current pool amounts for all distribution categories
+func (s *Service) GetPoolAmounts() map[string]float64 {
+	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
+		return make(map[string]float64)
+	}
+	
+	return s.proratedBilling.GetPoolAmounts()
+}
+
+// GetProratedBillingStats returns statistics for the prorated billing system
+func (s *Service) GetProratedBillingStats() *ProratedBillingStats {
+	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
+		return &ProratedBillingStats{}
+	}
+	
+	return s.proratedBilling.GetStats()
+}
+
+// REAL-TIME INFRASTRUCTURE DISTRIBUTION METHODS
+
+// RecordProviderUsageRealTime records real-time usage from a provider for immediate distribution
+func (s *Service) RecordProviderUsageRealTime(
+	providerID string,
+	storageGBHoursPerSecond, bandwidthGBPerSecond, cpuHoursPerSecond, 
+	gpuHoursPerSecond, memoryGBHoursPerSecond float64,
+) {
+	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
+		return
+	}
+	
+	s.infraDistributor.RecordProviderUsage(
+		providerID, 
+		storageGBHoursPerSecond, 
+		bandwidthGBPerSecond, 
+		cpuHoursPerSecond,
+		gpuHoursPerSecond, 
+		memoryGBHoursPerSecond,
+	)
+}
+
+// GetActiveProviders returns currently active infrastructure providers
+func (s *Service) GetActiveProviders() map[string]*RealTimeProviderUsage {
+	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
+		return make(map[string]*RealTimeProviderUsage)
+	}
+	
+	return s.infraDistributor.GetActiveProviders()
+}
+
+// GetProviderRewardsRealTime returns accumulated real-time rewards for providers
+func (s *Service) GetProviderRewardsRealTime() map[string]float64 {
+	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
+		return make(map[string]float64)
+	}
+	
+	return s.infraDistributor.GetProviderRewards()
+}
+
+// GetRealTimeInfrastructureStats returns real-time infrastructure distribution statistics
+func (s *Service) GetRealTimeInfrastructureStats() *RealTimeInfrastructureStats {
+	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
+		return &RealTimeInfrastructureStats{}
+	}
+	
+	return s.infraDistributor.GetStats()
+}
+
+// GetDistributionHistory returns recent per-second distribution history
+func (s *Service) GetDistributionHistory(limit int) []*RealTimeDistribution {
+	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
+		return []*RealTimeDistribution{}
+	}
+	
+	return s.infraDistributor.GetDistributionHistory(limit)
+}
+
+// INTEGRATION METHOD - Connect prorated billing with infrastructure distribution
+
+// connectProratedToDistributors runs periodically to feed all distributors from prorated billing
+func (s *Service) connectProratedToDistributors(ctx context.Context) {
+	if !s.useRealTimeBilling {
+		return
+	}
+	
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.stopChan:
+			return
+		case <-ticker.C:
+			pools := s.proratedBilling.GetPoolAmounts()
+			
+			// Feed infrastructure pool to infrastructure distributor
+			if infraAmount := pools["infrastructure"]; infraAmount > 0 {
+				s.infraDistributor.AddInfrastructureFunds(infraAmount)
+			}
+			
+			// Feed content pool to content distributor
+			if contentAmount := pools["content"]; contentAmount > 0 {
+				s.contentDistributor.AddContentFunds(contentAmount)
+			}
+			
+			// Feed app developer pool to app developer distributor
+			if appDevAmount := pools["app_developer"]; appDevAmount > 0 {
+				s.appDevDistributor.AddAppDeveloperFunds(appDevAmount)
+			}
+			
+			// Feed unused funds to unused funds distributor
+			if unusedAmount := pools["unused"]; unusedAmount > 0 {
+				s.unusedFundsDistributor.AddUnusedFunds(unusedAmount)
+			}
+		}
+	}
+}
+
+// CONTENT CREATOR DISTRIBUTION METHODS
+
+// RecordContentEngagement records real-time content engagement for distribution
+func (s *Service) RecordContentEngagement(
+	creatorID string,
+	videoWatchTime, audioListenTime, documentReadTime, photoViewTime float64,
+	qualityMultiplier float64,
+) {
+	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
+		return
+	}
+	
+	s.contentDistributor.RecordContentEngagement(
+		creatorID, 
+		videoWatchTime, 
+		audioListenTime, 
+		documentReadTime, 
+		photoViewTime,
+		qualityMultiplier,
+	)
+}
+
+// GetActiveCreators returns currently active content creators
+func (s *Service) GetActiveCreators() map[string]*ContentEngagementRealTime {
+	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
+		return make(map[string]*ContentEngagementRealTime)
+	}
+	
+	return s.contentDistributor.GetActiveCreators()
+}
+
+// GetCreatorRewardsRealTime returns accumulated real-time rewards for creators
+func (s *Service) GetCreatorRewardsRealTime() map[string]float64 {
+	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
+		return make(map[string]float64)
+	}
+	
+	return s.contentDistributor.GetCreatorRewards()
+}
+
+// GetRealTimeContentStats returns real-time content distribution statistics
+func (s *Service) GetRealTimeContentStats() *RealTimeContentStats {
+	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
+		return &RealTimeContentStats{}
+	}
+	
+	return s.contentDistributor.GetStats()
+}
+
+// GetContentDistributionHistory returns recent content distribution history
+func (s *Service) GetContentDistributionHistory(limit int) []*ContentDistribution {
+	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
+		return []*ContentDistribution{}
+	}
+	
+	return s.contentDistributor.GetDistributionHistory(limit)
+}
+
+// APP DEVELOPER DISTRIBUTION METHODS
+
+// RecordAppUsage records real-time app usage for distribution
+func (s *Service) RecordAppUsage(
+	developerID, appID, appName string,
+	activeUserTime float64,
+	userRetentionRate, appRating float64,
+) {
+	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
+		return
+	}
+	
+	s.appDevDistributor.RecordAppUsage(
+		developerID, 
+		appID, 
+		appName,
+		activeUserTime,
+		userRetentionRate, 
+		appRating,
+	)
+}
+
+// GetActiveApps returns currently active apps and their usage
+func (s *Service) GetActiveApps() map[string]*AppUsageRealTime {
+	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
+		return make(map[string]*AppUsageRealTime)
+	}
+	
+	return s.appDevDistributor.GetActiveApps()
+}
+
+// GetAppDeveloperRewardsRealTime returns accumulated real-time rewards for developers
+func (s *Service) GetAppDeveloperRewardsRealTime() map[string]float64 {
+	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
+		return make(map[string]float64)
+	}
+	
+	return s.appDevDistributor.GetDeveloperRewards()
+}
+
+// GetRealTimeAppDeveloperStats returns real-time app developer distribution statistics
+func (s *Service) GetRealTimeAppDeveloperStats() *RealTimeAppDeveloperStats {
+	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
+		return &RealTimeAppDeveloperStats{}
+	}
+	
+	return s.appDevDistributor.GetStats()
+}
+
+// GetAppDeveloperDistributionHistory returns recent app developer distribution history
+func (s *Service) GetAppDeveloperDistributionHistory(limit int) []*AppDeveloperDistribution {
+	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
+		return []*AppDeveloperDistribution{}
+	}
+	
+	return s.appDevDistributor.GetDistributionHistory(limit)
+}
+
+// UNUSED FUNDS DISTRIBUTION METHODS
+
+// RecordProviderUsageForUnusedFunds records provider usage for unused funds distribution (subscribers + free users)
+func (s *Service) RecordProviderUsageForUnusedFunds(
+	providerID string,
+	subscriberUsage, freeUserUsage ProviderContribution,
+) {
+	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
+		return
+	}
+	
+	s.unusedFundsDistributor.RecordProviderUsageAllUsers(providerID, subscriberUsage, freeUserUsage)
+}
+
+// GetUnusedFundsStats returns unused funds distribution statistics
+func (s *Service) GetUnusedFundsStats() *UnusedFundsStats {
+	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
+		return &UnusedFundsStats{}
+	}
+	
+	return s.unusedFundsDistributor.GetStats()
+}
+
+// GetUnusedFundsDistributionHistory returns recent unused funds distribution history
+func (s *Service) GetUnusedFundsDistributionHistory(limit int) []*UnusedFundsDistribution {
+	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
+		return []*UnusedFundsDistribution{}
+	}
+	
+	return s.unusedFundsDistributor.GetDistributionHistory(limit)
+}
+
+// SetRealTimeBilling enables or disables real-time billing (for testing/migration)
+func (s *Service) SetRealTimeBilling(enabled bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	
+	s.useRealTimeBilling = enabled
+	
+	s.logger.Info().
+		Bool("real_time_billing", enabled).
+		Msg("Real-time billing mode updated")
+}

@@ -1,0 +1,305 @@
+package incentive
+
+import (
+	"context"
+	"sync"
+	"time"
+
+	"github.com/rs/zerolog"
+)
+
+// ResourceIntegrationBridge connects the core resource tracker with real-time economic distribution
+type ResourceIntegrationBridge struct {
+	mu              sync.RWMutex
+	logger          zerolog.Logger
+	config          *Config
+	
+	// Connected systems
+	realTimeEngine  *RealTimeEngine
+	usageAggregator *LiveUsageAggregator
+	
+	// Conversion and mapping
+	providerMapping map[string]string // nodeID -> providerID mapping
+	
+	// Processing control
+	started         bool
+	eventQueue      chan *ResourceUpdateEvent
+	stopChan        chan struct{}
+	wg              sync.WaitGroup
+}
+
+// ResourceUpdateEvent represents a resource update from the core tracker
+type ResourceUpdateEvent struct {
+	ProviderID      string                 `json:"provider_id"`
+	Aggregate       *RealTimeUsageAggregate `json:"aggregate"`
+	Timestamp       time.Time              `json:"timestamp"`
+}
+
+// RealTimeUsageAggregate mirrors the type from pkg/core/resource_tracker.go
+type RealTimeUsageAggregate struct {
+	ProviderID       string    `json:"provider_id"`
+	WindowStart      time.Time `json:"window_start"`
+	LastUpdate       time.Time `json:"last_update"`
+	
+	// Resource usage totals (accumulated since window start)
+	StorageBytes     int64     `json:"storage_bytes"`      // Total bytes stored
+	StorageOps       int64     `json:"storage_ops"`        // Total operations
+	BandwidthBytes   int64     `json:"bandwidth_bytes"`    // Total bytes transferred
+	ComputeSeconds   float64   `json:"compute_seconds"`    // Total CPU seconds
+	MemoryByteSeconds int64    `json:"memory_byte_seconds"` // Total memory usage
+	
+	// Content activity
+	ContentViews     int64     `json:"content_views"`      // Total content views served
+	ContentBytes     int64     `json:"content_bytes"`      // Total content bytes delivered
+}
+
+// NewResourceIntegrationBridge creates a new resource integration bridge
+func NewResourceIntegrationBridge(config *Config, logger zerolog.Logger, realTimeEngine *RealTimeEngine) *ResourceIntegrationBridge {
+	return &ResourceIntegrationBridge{
+		logger:          logger.With().Str("component", "resource_integration").Logger(),
+		config:          config,
+		realTimeEngine:  realTimeEngine,
+		usageAggregator: realTimeEngine.usageAggregator,
+		providerMapping: make(map[string]string),
+		eventQueue:      make(chan *ResourceUpdateEvent, 1000),
+		stopChan:        make(chan struct{}),
+	}
+}
+
+// Start begins the resource integration bridge
+func (rib *ResourceIntegrationBridge) Start(ctx context.Context) error {
+	rib.mu.Lock()
+	defer rib.mu.Unlock()
+	
+	if rib.started {
+		return nil
+	}
+	
+	rib.logger.Info().Msg("Starting resource integration bridge")
+	
+	// Start event processor
+	rib.wg.Add(1)
+	go rib.eventProcessor(ctx)
+	
+	rib.started = true
+	return nil
+}
+
+// Stop halts the resource integration bridge
+func (rib *ResourceIntegrationBridge) Stop(ctx context.Context) error {
+	rib.mu.Lock()
+	defer rib.mu.Unlock()
+	
+	if !rib.started {
+		return nil
+	}
+	
+	rib.logger.Info().Msg("Stopping resource integration bridge")
+	
+	close(rib.stopChan)
+	rib.wg.Wait()
+	
+	rib.started = false
+	return nil
+}
+
+// NotifyUsageUpdate implements the EconomicNotifier interface from pkg/core
+// This method will be called by the resource tracker when usage updates occur
+func (rib *ResourceIntegrationBridge) NotifyUsageUpdate(providerID string, aggregate *RealTimeUsageAggregate) error {
+	// Convert the core aggregate to our internal event
+	event := &ResourceUpdateEvent{
+		ProviderID: providerID,
+		Aggregate:  aggregate,
+		Timestamp:  time.Now(),
+	}
+	
+	// Queue the event for processing
+	select {
+	case rib.eventQueue <- event:
+		rib.logger.Debug().
+			Str("provider_id", providerID).
+			Int64("storage_bytes", aggregate.StorageBytes).
+			Int64("bandwidth_bytes", aggregate.BandwidthBytes).
+			Float64("compute_seconds", aggregate.ComputeSeconds).
+			Msg("Queued resource usage update")
+		return nil
+	default:
+		rib.logger.Warn().
+			Str("provider_id", providerID).
+			Msg("Event queue full, dropping resource usage update")
+		return nil
+	}
+}
+
+// eventProcessor processes queued resource update events
+func (rib *ResourceIntegrationBridge) eventProcessor(ctx context.Context) {
+	defer rib.wg.Done()
+	
+	rib.logger.Debug().Msg("Resource integration event processor started")
+	
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-rib.stopChan:
+			return
+		case event := <-rib.eventQueue:
+			rib.processResourceUpdate(event)
+		}
+	}
+}
+
+// processResourceUpdate processes a single resource update event
+func (rib *ResourceIntegrationBridge) processResourceUpdate(event *ResourceUpdateEvent) {
+	aggregate := event.Aggregate
+	
+	// Convert storage usage: bytes to GB-seconds (assume 1 second window)
+	if aggregate.StorageBytes > 0 {
+		storageGB := float64(aggregate.StorageBytes) / (1024 * 1024 * 1024)
+		rib.usageAggregator.RecordUsage(event.ProviderID, "storage", storageGB, "gb")
+	}
+	
+	// Convert bandwidth usage: bytes to GB
+	if aggregate.BandwidthBytes > 0 {
+		bandwidthGB := float64(aggregate.BandwidthBytes) / (1024 * 1024 * 1024)
+		rib.usageAggregator.RecordUsage(event.ProviderID, "bandwidth", bandwidthGB, "gb")
+	}
+	
+	// Convert compute usage: already in seconds
+	if aggregate.ComputeSeconds > 0 {
+		rib.usageAggregator.RecordUsage(event.ProviderID, "compute", aggregate.ComputeSeconds, "seconds")
+	}
+	
+	// Convert memory usage: byte-seconds to GB-seconds
+	if aggregate.MemoryByteSeconds > 0 {
+		memoryGBSeconds := float64(aggregate.MemoryByteSeconds) / (1024 * 1024 * 1024)
+		rib.usageAggregator.RecordUsage(event.ProviderID, "memory", memoryGBSeconds, "gb")
+	}
+	
+	// Record content activity if present
+	if aggregate.ContentViews > 0 && aggregate.ContentBytes > 0 {
+		// Calculate average view duration (assume 30 seconds per view as default)
+		avgViewSeconds := 30.0
+		totalViewSeconds := float64(aggregate.ContentViews) * avgViewSeconds
+		
+		// Record content activity (using provider ID as creator ID for infrastructure providers)
+		rib.usageAggregator.RecordContentActivity(
+			event.ProviderID,    // creatorID (provider serving content)
+			"content_delivery",  // contentID (generic content delivery)
+			totalViewSeconds,    // viewSeconds
+			aggregate.ContentBytes, // dataConsumed
+		)
+	}
+	
+	// Record service metrics
+	if aggregate.StorageOps > 0 {
+		// Assume successful operations for now (success rate tracking would need more data)
+		rib.usageAggregator.RecordServiceMetrics(event.ProviderID, true, 50.0) // 50ms avg latency
+	}
+	
+	rib.logger.Debug().
+		Str("provider_id", event.ProviderID).
+		Float64("storage_gb", float64(aggregate.StorageBytes)/(1024*1024*1024)).
+		Float64("bandwidth_gb", float64(aggregate.BandwidthBytes)/(1024*1024*1024)).
+		Float64("compute_seconds", aggregate.ComputeSeconds).
+		Float64("memory_gb_seconds", float64(aggregate.MemoryByteSeconds)/(1024*1024*1024)).
+		Int64("content_views", aggregate.ContentViews).
+		Msg("Processed resource usage update")
+}
+
+// RegisterProviderMapping maps a node ID to a provider ID for reward distribution
+func (rib *ResourceIntegrationBridge) RegisterProviderMapping(nodeID, providerID string) {
+	rib.mu.Lock()
+	defer rib.mu.Unlock()
+	
+	rib.providerMapping[nodeID] = providerID
+	rib.logger.Info().
+		Str("node_id", nodeID).
+		Str("provider_id", providerID).
+		Msg("Registered provider mapping")
+}
+
+// UnregisterProviderMapping removes a provider mapping
+func (rib *ResourceIntegrationBridge) UnregisterProviderMapping(nodeID string) {
+	rib.mu.Lock()
+	defer rib.mu.Unlock()
+	
+	if providerID, exists := rib.providerMapping[nodeID]; exists {
+		delete(rib.providerMapping, nodeID)
+		rib.logger.Info().
+			Str("node_id", nodeID).
+			Str("provider_id", providerID).
+			Msg("Unregistered provider mapping")
+	}
+}
+
+// GetProviderMapping returns the provider ID for a given node ID
+func (rib *ResourceIntegrationBridge) GetProviderMapping(nodeID string) (string, bool) {
+	rib.mu.RLock()
+	defer rib.mu.RUnlock()
+	
+	providerID, exists := rib.providerMapping[nodeID]
+	return providerID, exists
+}
+
+// GetActiveProviders returns all currently active provider mappings
+func (rib *ResourceIntegrationBridge) GetActiveProviders() map[string]string {
+	rib.mu.RLock()
+	defer rib.mu.RUnlock()
+	
+	// Return a copy to avoid concurrent access
+	result := make(map[string]string)
+	for nodeID, providerID := range rib.providerMapping {
+		result[nodeID] = providerID
+	}
+	
+	return result
+}
+
+// GetStats returns integration bridge statistics
+func (rib *ResourceIntegrationBridge) GetStats() *ResourceIntegrationStats {
+	rib.mu.RLock()
+	defer rib.mu.RUnlock()
+	
+	queueLength := len(rib.eventQueue)
+	
+	return &ResourceIntegrationStats{
+		Started:              rib.started,
+		ActiveProviders:      len(rib.providerMapping),
+		QueuedEvents:        queueLength,
+		QueueCapacity:       cap(rib.eventQueue),
+		QueueUtilization:    float64(queueLength) / float64(cap(rib.eventQueue)),
+	}
+}
+
+// ResourceIntegrationStats provides statistics about the integration bridge
+type ResourceIntegrationStats struct {
+	Started              bool    `json:"started"`
+	ActiveProviders      int     `json:"active_providers"`
+	QueuedEvents        int     `json:"queued_events"`
+	QueueCapacity       int     `json:"queue_capacity"`
+	QueueUtilization    float64 `json:"queue_utilization"`
+}
+
+// TestResourceUpdate allows manual testing of resource updates
+func (rib *ResourceIntegrationBridge) TestResourceUpdate(providerID string, storageGB, bandwidthGB, computeSeconds, memoryGBSeconds float64) error {
+	if !rib.started {
+		return nil
+	}
+	
+	// Create a test aggregate
+	aggregate := &RealTimeUsageAggregate{
+		ProviderID:        providerID,
+		WindowStart:       time.Now().Add(-time.Minute),
+		LastUpdate:        time.Now(),
+		StorageBytes:      int64(storageGB * 1024 * 1024 * 1024),
+		BandwidthBytes:    int64(bandwidthGB * 1024 * 1024 * 1024),
+		ComputeSeconds:    computeSeconds,
+		MemoryByteSeconds: int64(memoryGBSeconds * 1024 * 1024 * 1024),
+		StorageOps:        10,
+		ContentViews:      5,
+		ContentBytes:      int64(bandwidthGB * 1024 * 1024 * 1024 * 0.5), // 50% of bandwidth is content
+	}
+	
+	return rib.NotifyUsageUpdate(providerID, aggregate)
+}

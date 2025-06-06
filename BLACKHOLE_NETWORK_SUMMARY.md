@@ -199,7 +199,6 @@ type Error struct {
 - Benchmark tests for performance
 - Security tests for auth/authz
 - Load tests at 2x expected traffic
-- All test should be created in tests directory separate from code
 
 ### Tooling
 - **Linting**: golangci-lint with strict rules

@@ -1,0 +1,38 @@
+# Dockerfile for release builds
+# This is used by goreleaser to create Docker images
+
+FROM alpine:3.19
+
+# Install ca-certificates for HTTPS connections
+RUN apk --no-cache add ca-certificates tzdata
+
+# Create non-root user
+RUN addgroup -g 1000 -S blackhole && \
+    adduser -u 1000 -S blackhole -G blackhole
+
+# Create directories
+RUN mkdir -p /var/lib/blackhole /var/log/blackhole /etc/blackhole && \
+    chown -R blackhole:blackhole /var/lib/blackhole /var/log/blackhole /etc/blackhole
+
+# Copy binary
+COPY blackhole /usr/local/bin/blackhole
+
+# Copy default configuration
+COPY deployments/config/blackhole.yaml /etc/blackhole/config.yaml
+
+# Set user
+USER blackhole
+
+# Expose ports
+EXPOSE 8080 4001 4002
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD ["/usr/local/bin/blackhole", "health"]
+
+# Volume for data persistence
+VOLUME ["/var/lib/blackhole"]
+
+# Default command
+ENTRYPOINT ["/usr/local/bin/blackhole"]
+CMD ["serve", "--config", "/etc/blackhole/config.yaml"]

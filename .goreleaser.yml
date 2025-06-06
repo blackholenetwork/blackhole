@@ -1,0 +1,321 @@
+# GoReleaser configuration for Blackhole Network
+# Documentation: https://goreleaser.com
+
+project_name: blackhole
+
+before:
+  hooks:
+    - go mod tidy
+    - go generate ./...
+    - go fmt ./...
+    - go vet ./...
+
+builds:
+  - id: blackhole
+    main: ./cmd/blackhole
+    binary: blackhole
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    ignore:
+      - goos: darwin
+        goarch: arm
+      - goos: windows
+        goarch: arm
+      - goos: windows
+        goarch: arm64
+    mod_timestamp: '{{ .CommitTimestamp }}'
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/blackholenetwork/blackhole/internal/version.Version={{.Version}}
+      - -X github.com/blackholenetwork/blackhole/internal/version.Commit={{.Commit}}
+      - -X github.com/blackholenetwork/blackhole/internal/version.BuildDate={{.Date}}
+      - -X github.com/blackholenetwork/blackhole/internal/version.BuiltBy=goreleaser
+
+archives:
+  - id: blackhole
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+      - LICENSE
+      - docs/README.md
+      - docs/PLUGIN_ARCHITECTURE.md
+      - deployments/*
+
+checksum:
+  name_template: 'checksums.txt'
+  algorithm: sha256
+
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  groups:
+    - title: "New Features"
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: "Bug Fixes"
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: "Performance Improvements"
+      regexp: '^.*?perf(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: "Documentation"
+      regexp: '^.*?docs(\([[:word:]]+\))??!?:.+$'
+      order: 3
+    - title: "Other Changes"
+      order: 999
+  filters:
+    exclude:
+      - '^test:'
+      - '^chore:'
+      - '^style:'
+      - '^build:'
+      - '^ci:'
+      - Merge pull request
+      - Merge remote-tracking branch
+      - Merge branch
+
+release:
+  github:
+    owner: blackholenetwork
+    name: blackhole
+  draft: false
+  prerelease: auto
+  mode: keep-existing
+  name_template: "{{.ProjectName}} v{{.Version}}"
+  footer: |
+    ## What's Changed
+    
+    **Full Changelog**: https://github.com/blackholenetwork/blackhole/compare/{{ .PreviousTag }}...{{ .Tag }}
+    
+    ## Installation
+    
+    ### macOS
+    ```bash
+    # Homebrew
+    brew install blackholenetwork/tap/blackhole
+    
+    # Or download directly
+    curl -L https://github.com/blackholenetwork/blackhole/releases/download/{{ .Tag }}/blackhole_{{ .Version }}_Darwin_x86_64.tar.gz | tar xz
+    ```
+    
+    ### Linux
+    ```bash
+    # Download and extract (AMD64)
+    curl -L https://github.com/blackholenetwork/blackhole/releases/download/{{ .Tag }}/blackhole_{{ .Version }}_Linux_x86_64.tar.gz | tar xz
+    
+    # Download and extract (ARM64)
+    curl -L https://github.com/blackholenetwork/blackhole/releases/download/{{ .Tag }}/blackhole_{{ .Version }}_Linux_arm64.tar.gz | tar xz
+    ```
+    
+    ### Windows
+    Download the ZIP file from the [releases page](https://github.com/blackholenetwork/blackhole/releases/tag/{{ .Tag }})
+
+brews:
+  - name: blackhole
+    ids:
+      - blackhole
+    tap:
+      owner: blackholenetwork
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    url_template: "https://github.com/blackholenetwork/blackhole/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+    download_strategy: CurlDownloadStrategy
+    commit_author:
+      name: blackholenetwork-bot
+      email: bot@blackholenetwork.org
+    commit_msg_template: "Brew formula update for {{ .ProjectName }} version {{ .Tag }}"
+    homepage: "https://github.com/blackholenetwork/blackhole"
+    description: "Decentralized infrastructure platform that transforms idle computing resources into a global shared network"
+    license: "MIT"
+    skip_upload: auto
+    test: |
+      system "#{bin}/blackhole", "version"
+    install: |
+      bin.install "blackhole"
+    extra_install: |
+      bash_completion.install "completions/blackhole.bash" => "blackhole"
+      zsh_completion.install "completions/blackhole.zsh" => "_blackhole"
+      fish_completion.install "completions/blackhole.fish"
+
+nfpms:
+  - id: blackhole
+    package_name: blackhole
+    file_name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    vendor: Blackhole Network
+    homepage: https://github.com/blackholenetwork/blackhole
+    maintainer: Blackhole Network Team <team@blackholenetwork.org>
+    description: |
+      Decentralized infrastructure platform that transforms idle computing
+      resources into a global shared network. Blackhole Network enables
+      users to contribute unused storage, compute, and bandwidth while
+      earning rewards.
+    license: MIT
+    formats:
+      - deb
+      - rpm
+      - apk
+    dependencies:
+      - git
+    recommends:
+      - golang
+    suggests:
+      - docker
+    section: utils
+    priority: optional
+    contents:
+      - src: ./blackhole
+        dst: /usr/bin/blackhole
+      - src: ./README.md
+        dst: /usr/share/doc/blackhole/README.md
+      - src: ./LICENSE
+        dst: /usr/share/doc/blackhole/LICENSE
+      - src: ./deployments/systemd/blackhole.service
+        dst: /etc/systemd/system/blackhole.service
+        type: config
+      - src: ./deployments/config/blackhole.yaml
+        dst: /etc/blackhole/config.yaml
+        type: config
+    scripts:
+      postinstall: |
+        #!/bin/sh
+        # Create blackhole user if it doesn't exist
+        if ! id -u blackhole >/dev/null 2>&1; then
+          useradd --system --user-group --home-dir /var/lib/blackhole --shell /bin/false blackhole
+        fi
+        
+        # Create directories
+        mkdir -p /var/lib/blackhole
+        mkdir -p /var/log/blackhole
+        mkdir -p /etc/blackhole
+        
+        # Set permissions
+        chown -R blackhole:blackhole /var/lib/blackhole
+        chown -R blackhole:blackhole /var/log/blackhole
+        chown -R blackhole:blackhole /etc/blackhole
+        
+        # Enable service
+        systemctl daemon-reload
+        systemctl enable blackhole.service
+        
+        echo "Blackhole Network has been installed!"
+        echo "Start the service with: sudo systemctl start blackhole"
+        echo "View logs with: sudo journalctl -u blackhole -f"
+      preremove: |
+        #!/bin/sh
+        # Stop service if running
+        if systemctl is-active blackhole >/dev/null 2>&1; then
+          systemctl stop blackhole
+        fi
+        systemctl disable blackhole.service
+
+dockers:
+  - id: blackhole
+    goos: linux
+    goarch: amd64
+    ids:
+      - blackhole
+    image_templates:
+      - "ghcr.io/blackholenetwork/blackhole:latest"
+      - "ghcr.io/blackholenetwork/blackhole:{{ .Tag }}"
+      - "ghcr.io/blackholenetwork/blackhole:v{{ .Major }}"
+      - "ghcr.io/blackholenetwork/blackhole:v{{ .Major }}.{{ .Minor }}"
+      - "blackholenetwork/blackhole:latest"
+      - "blackholenetwork/blackhole:{{ .Tag }}"
+      - "blackholenetwork/blackhole:v{{ .Major }}"
+      - "blackholenetwork/blackhole:v{{ .Major }}.{{ .Minor }}"
+    skip_push: false
+    dockerfile: Dockerfile.release
+    use: buildx
+    build_flag_templates:
+      - "--pull"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--label=org.opencontainers.image.source={{.GitURL}}"
+      - "--platform=linux/amd64,linux/arm64"
+    extra_files:
+      - deployments/
+
+sboms:
+  - artifacts: archive
+    documents:
+      - "${artifact}.spdx.sbom.json"
+
+signs:
+  - cmd: cosign
+    certificate: '${artifact}.pem'
+    output: true
+    artifacts: checksum
+    args:
+      - sign-blob
+      - '--output-certificate=${certificate}'
+      - '--output-signature=${signature}'
+      - '${artifact}'
+      - '--yes'
+
+milestones:
+  - close: true
+    fail_on_error: false
+    name_template: "{{ .Tag }}"
+
+announce:
+  discord:
+    enabled: true
+    message_template: |
+      **Blackhole Network {{ .Tag }} is out!** 🚀
+      
+      Check out the release notes: {{ .ReleaseURL }}
+    icon_url: https://github.com/blackholenetwork.png
+    author: Blackhole Network
+    color: "3888754"
+
+  twitter:
+    enabled: true
+    message_template: |
+      Blackhole Network {{ .Tag }} is out! 🎉
+      
+      {{ .ReleaseURL }}
+      
+      #blackholenetwork #decentralized #infrastructure
+
+completions:
+  - cmd: blackhole
+    shells:
+      - bash
+      - zsh
+      - fish
+    dir: completions
