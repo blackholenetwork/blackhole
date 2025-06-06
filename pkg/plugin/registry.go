@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"time"
-	
+
 	"github.com/blackholenetwork/blackhole/pkg/common/errors"
 )
 
@@ -23,6 +23,7 @@ type Registry struct {
 // RegistryState represents the state of the plugin registry
 type RegistryState string
 
+// Registry state constants
 const (
 	RegistryStateInitialized RegistryState = "initialized"
 	RegistryStateStarting    RegistryState = "starting"
@@ -42,7 +43,7 @@ func NewRegistry() *Registry {
 	return &Registry{
 		plugins: make(map[string]Plugin),
 		hooks:   make(map[Hook][]HookFunc),
-		events:  &EventBus{
+		events: &EventBus{
 			subscribers: make(map[string][]EventHandler),
 		},
 		state:        RegistryStateInitialized,
@@ -77,12 +78,12 @@ func (r *Registry) Register(plugin Plugin) error {
 	}
 
 	r.plugins[info.Name] = plugin
-	
+
 	// Publish registration event
 	r.events.Publish(Event{
-		Type:   "plugin.registered",
-		Source: "registry",
-		Data:   info,
+		Type:      "plugin.registered",
+		Source:    "registry",
+		Data:      info,
 		Timestamp: time.Now(),
 	})
 
@@ -142,7 +143,7 @@ func (r *Registry) Start(ctx context.Context) error {
 		return fmt.Errorf("cannot start from state %s", r.state)
 	}
 	r.state = RegistryStateStarting
-	
+
 	// Initialize message queue
 	r.messageQueue = NewMessageQueue(ctx)
 	r.mu.Unlock()
@@ -168,7 +169,7 @@ func (r *Registry) Start(ctx context.Context) error {
 	started := []string{}
 	for _, name := range order {
 		plugin := r.plugins[name]
-		
+
 		// Initialize plugin
 		if err := plugin.Init(ctx, make(Config)); err != nil {
 			r.rollbackStarted(ctx, started)
@@ -188,12 +189,12 @@ func (r *Registry) Start(ctx context.Context) error {
 		}
 
 		started = append(started, name)
-		
+
 		// Publish start event
 		r.events.Publish(Event{
-			Type:   "plugin.started",
-			Source: "registry",
-			Data:   plugin.Info(),
+			Type:      "plugin.started",
+			Source:    "registry",
+			Data:      plugin.Info(),
 			Timestamp: time.Now(),
 		})
 	}
@@ -229,22 +230,22 @@ func (r *Registry) Stop(ctx context.Context) error {
 
 	// Calculate shutdown order (reverse of startup)
 	order, _ := r.calculateStartupOrder()
-	
+
 	// Stop plugins in reverse order
 	for i := len(order) - 1; i >= 0; i-- {
 		name := order[i]
 		plugin := r.plugins[name]
-		
+
 		if err := plugin.Stop(ctx); err != nil {
 			// Log error but continue stopping other plugins
 			fmt.Printf("Error stopping plugin %s: %v\n", name, err)
 		}
-		
+
 		// Publish stop event
 		r.events.Publish(Event{
-			Type:   "plugin.stopped",
-			Source: "registry",
-			Data:   plugin.Info(),
+			Type:      "plugin.stopped",
+			Source:    "registry",
+			Data:      plugin.Info(),
 			Timestamp: time.Now(),
 		})
 	}
@@ -318,17 +319,17 @@ func (r *Registry) calculateStartupOrder() ([]string, error) {
 
 		temp[name] = true
 		plugin := r.plugins[name]
-		
+
 		for _, dep := range plugin.Info().Dependencies {
 			if err := visit(dep); err != nil {
 				return err
 			}
 		}
-		
+
 		temp[name] = false
 		visited[name] = true
 		order = append(order, name)
-		
+
 		return nil
 	}
 
@@ -346,7 +347,7 @@ func (r *Registry) rollbackStarted(ctx context.Context, started []string) {
 	for i := len(started) - 1; i >= 0; i-- {
 		name := started[i]
 		plugin := r.plugins[name]
-		
+
 		if err := plugin.Stop(ctx); err != nil {
 			fmt.Printf("Error stopping plugin %s during rollback: %v\n", name, err)
 		}
@@ -377,7 +378,7 @@ func (eb *EventBus) Subscribe(eventType string, handler EventHandler) func() {
 	return func() {
 		eb.mu.Lock()
 		defer eb.mu.Unlock()
-		
+
 		handlers := eb.subscribers[eventType]
 		for i, h := range handlers {
 			// Compare function pointers properly
@@ -406,7 +407,7 @@ func (r *Registry) MessageQueue() *MessageQueue {
 // SetShared stores a value in the shared store
 func (r *Registry) SetShared(key string, value interface{}) {
 	r.sharedStore.Set(key, value)
-	
+
 	// Also publish event for watchers
 	r.Publish(Event{
 		Type:   "shared.updated",
@@ -428,11 +429,11 @@ func (r *Registry) PublishMessage(topic string, payload interface{}) error {
 	r.mu.RLock()
 	mq := r.messageQueue
 	r.mu.RUnlock()
-	
+
 	if mq == nil {
 		return fmt.Errorf("message queue not initialized")
 	}
-	
+
 	return mq.Publish(topic, payload)
 }
 
@@ -441,10 +442,10 @@ func (r *Registry) SubscribeToTopic(topic string, handler MessageHandler) (func(
 	r.mu.RLock()
 	mq := r.messageQueue
 	r.mu.RUnlock()
-	
+
 	if mq == nil {
 		return nil, fmt.Errorf("message queue not initialized")
 	}
-	
+
 	return mq.Subscribe(topic, handler), nil
 }

@@ -55,7 +55,7 @@ func TestMessageQueue(t *testing.T) {
 
 	// Test Subscribe and Publish
 	received := make(chan bool, 1)
-	unsubscribe := queue.Subscribe("test.topic", func(ctx context.Context, msg plugin.Message) error {
+	unsubscribe := queue.Subscribe("test.topic", func(_ context.Context, msg plugin.Message) error {
 		if msg.Topic != "test.topic" {
 			t.Errorf("Expected topic 'test.topic', got %s", msg.Topic)
 		}

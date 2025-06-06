@@ -1,3 +1,4 @@
+// Package main provides the entry point for the Blackhole Network daemon
 package main
 
 import (
@@ -22,10 +23,6 @@ func main() {
 
 	// Initialize logger
 	logger := initLogger()
-	
-	// Create root context
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	// Parse command line arguments
 	if len(os.Args) < 2 {
@@ -34,25 +31,38 @@ func main() {
 	}
 
 	command := os.Args[1]
-	
-	switch command {
-	case "node":
-		if len(os.Args) < 3 {
-			fmt.Println("Usage: blackhole node [start|stop|status]")
-			os.Exit(1)
-		}
-		handleNodeCommand(ctx, os.Args[2], logger)
-		
-	case "version":
-		fmt.Printf("Blackhole Network v%s\n", version.Get())
-		
-	case "help":
-		printUsage()
-		
-	default:
+
+	// Validate node command arguments early
+	if command == "node" && len(os.Args) < 3 {
+		fmt.Println("Usage: blackhole node [start|stop|status]")
+		os.Exit(1)
+	}
+
+	// Check for unknown commands early
+	validCommands := map[string]bool{
+		"node":    true,
+		"version": true,
+		"help":    true,
+	}
+	if !validCommands[command] {
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
 		os.Exit(1)
+	}
+
+	// Create root context after all validation
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	switch command {
+	case "node":
+		handleNodeCommand(ctx, os.Args[2], logger)
+
+	case "version":
+		fmt.Printf("Blackhole Network v%s\n", version.Get())
+
+	case "help":
+		printUsage()
 	}
 }
 
@@ -72,7 +82,7 @@ func handleNodeCommand(ctx context.Context, action string, logger *log.Logger) {
 
 func startNode(ctx context.Context, logger *log.Logger) {
 	logger.Printf("Starting Blackhole Network node v%s...\n", version.Get())
-	
+
 	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
@@ -109,7 +119,7 @@ func startNode(ctx context.Context, logger *log.Logger) {
 	if err := orch.Stop(ctx); err != nil {
 		logger.Printf("Error during shutdown: %v", err)
 	}
-	
+
 	logger.Println("Node stopped")
 }
 

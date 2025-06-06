@@ -9,19 +9,19 @@ import (
 type Plugin interface {
 	// Info returns metadata about the plugin
 	Info() Info
-	
+
 	// Init initializes the plugin with configuration
 	Init(ctx context.Context, config Config) error
-	
+
 	// Start starts the plugin
 	Start(ctx context.Context) error
-	
+
 	// Stop gracefully shuts down the plugin
 	Stop(ctx context.Context) error
-	
+
 	// Health returns the current health status
 	Health() Health
-	
+
 	// SetHealth sets the current health status
 	SetHealth(status HealthStatus, message string)
 }
@@ -52,6 +52,7 @@ type Health struct {
 // HealthStatus represents the health state
 type HealthStatus string
 
+// Health status constants
 const (
 	HealthStatusHealthy   HealthStatus = "healthy"
 	HealthStatusDegraded  HealthStatus = "degraded"
@@ -62,6 +63,7 @@ const (
 // Type represents the type of plugin
 type Type string
 
+// Plugin type constants
 const (
 	TypeCore      Type = "core"
 	TypeResource  Type = "resource"
@@ -74,56 +76,80 @@ const (
 // Capability represents what a plugin can do
 type Capability string
 
+// Plugin capability constants
 const (
-	// Core capabilities
+	// CapabilityOrchestration enables orchestration of other plugins
 	CapabilityOrchestration Capability = "orchestration"
-	CapabilitySecurity      Capability = "security"
-	CapabilityNetworking    Capability = "networking"
-	CapabilityMonitoring    Capability = "monitoring"
-	
-	// Resource capabilities
-	CapabilityStorage   Capability = "storage"
-	CapabilityCompute   Capability = "compute"
+	// CapabilitySecurity enables security features
+	CapabilitySecurity Capability = "security"
+	// CapabilityNetworking enables P2P networking
+	CapabilityNetworking Capability = "networking"
+	// CapabilityMonitoring enables system monitoring
+	CapabilityMonitoring Capability = "monitoring"
+
+	// CapabilityStorage enables storage management
+	CapabilityStorage Capability = "storage"
+	// CapabilityCompute enables compute resource management
+	CapabilityCompute Capability = "compute"
+	// CapabilityBandwidth enables bandwidth management
 	CapabilityBandwidth Capability = "bandwidth"
-	CapabilityMemory    Capability = "memory"
-	
-	// Data capabilities
-	CapabilitySchema   Capability = "schema"
+	// CapabilityMemory enables memory management
+	CapabilityMemory Capability = "memory"
+
+	// CapabilitySchema enables data schema management
+	CapabilitySchema Capability = "schema"
+	// CapabilityIndexing enables data indexing
 	CapabilityIndexing Capability = "indexing"
-	CapabilityQuery    Capability = "query"
-	CapabilitySearch   Capability = "search"
-	
-	// Service capabilities
-	CapabilityAPI      Capability = "api"
+	// CapabilityQuery enables data queries
+	CapabilityQuery Capability = "query"
+	// CapabilitySearch enables search functionality
+	CapabilitySearch Capability = "search"
+
+	// CapabilityAPI enables API services
+	CapabilityAPI Capability = "api"
+	// CapabilityRealtime enables real-time communication
 	CapabilityRealtime Capability = "realtime"
-	CapabilitySocial   Capability = "social"
-	
-	// Economic capabilities
+	// CapabilitySocial enables social features
+	CapabilitySocial Capability = "social"
+
+	// CapabilityIncentive enables incentive mechanisms
 	CapabilityIncentive Capability = "incentive"
-	CapabilityContract  Capability = "contract"
-	
-	// Other capabilities
-	CapabilityCustom    Capability = "custom"
+	// CapabilityContract enables smart contracts
+	CapabilityContract Capability = "contract"
+
+	// CapabilityCustom enables custom plugin capabilities
+	CapabilityCustom Capability = "custom"
 )
 
 // Hook represents a plugin hook point
 type Hook string
 
+// Hook constants
 const (
-	// Lifecycle hooks
-	HookPreInit     Hook = "pre_init"
-	HookPostInit    Hook = "post_init"
-	HookPreStart    Hook = "pre_start"
-	HookPostStart   Hook = "post_start"
-	HookPreStop     Hook = "pre_stop"
-	HookPostStop    Hook = "post_stop"
-	
-	// Operation hooks
-	HookPreRequest  Hook = "pre_request"
+	// HookPreInit is called before plugin initialization
+	HookPreInit Hook = "pre_init"
+	// HookPostInit is called after plugin initialization
+	HookPostInit Hook = "post_init"
+	// HookPreStart is called before plugin start
+	HookPreStart Hook = "pre_start"
+	// HookPostStart is called after plugin start
+	HookPostStart Hook = "post_start"
+	// HookPreStop is called before plugin stop
+	HookPreStop Hook = "pre_stop"
+	// HookPostStop is called after plugin stop
+	HookPostStop Hook = "post_stop"
+
+	// HookPreRequest is called before handling a request
+	HookPreRequest Hook = "pre_request"
+	// HookPostRequest is called after handling a request
 	HookPostRequest Hook = "post_request"
-	HookPreStore    Hook = "pre_store"
-	HookPostStore   Hook = "post_store"
-	HookPreCompute  Hook = "pre_compute"
+	// HookPreStore is called before storing data
+	HookPreStore Hook = "pre_store"
+	// HookPostStore is called after storing data
+	HookPostStore Hook = "post_store"
+	// HookPreCompute is called before compute operations
+	HookPreCompute Hook = "pre_compute"
+	// HookPostCompute is called after compute operations
 	HookPostCompute Hook = "post_compute"
 )
 
@@ -134,7 +160,7 @@ type HookFunc func(ctx context.Context, data interface{}) error
 type Hookable interface {
 	// RegisterHook registers a function for a specific hook
 	RegisterHook(hook Hook, fn HookFunc)
-	
+
 	// TriggerHook executes all functions registered for a hook
 	TriggerHook(ctx context.Context, hook Hook, data interface{}) error
 }
@@ -143,7 +169,7 @@ type Hookable interface {
 type Observable interface {
 	// Publish publishes an event
 	Publish(event Event)
-	
+
 	// Subscribe subscribes to events of a specific type
 	Subscribe(eventType string, handler EventHandler) (unsubscribe func())
 }
@@ -164,7 +190,7 @@ type EventHandler func(event Event)
 type Configurable interface {
 	// Configure updates the plugin configuration
 	Configure(ctx context.Context, config Config) error
-	
+
 	// GetConfig returns the current configuration
 	GetConfig() Config
 }
@@ -184,16 +210,16 @@ type Diagnostics interface {
 // ResourceProvider is implemented by resource plugins
 type ResourceProvider interface {
 	Plugin
-	
+
 	// GetResourceType returns the type of resource provided
 	GetResourceType() string
-	
+
 	// GetCapacity returns the current capacity
 	GetCapacity() (total, used, available int64)
-	
+
 	// Allocate allocates resources
 	Allocate(ctx context.Context, amount int64) (AllocationID, error)
-	
+
 	// Release releases allocated resources
 	Release(ctx context.Context, id AllocationID) error
 }
@@ -204,19 +230,19 @@ type AllocationID string
 // ServiceProvider is implemented by service plugins
 type ServiceProvider interface {
 	Plugin
-	
+
 	// GetEndpoints returns the service endpoints
 	GetEndpoints() []Endpoint
-	
+
 	// HandleRequest handles a service request
 	HandleRequest(ctx context.Context, req Request) (Response, error)
 }
 
 // Endpoint represents a service endpoint
 type Endpoint struct {
-	Path        string   `json:"path"`
-	Method      string   `json:"method"`
-	Description string   `json:"description"`
+	Path        string      `json:"path"`
+	Method      string      `json:"method"`
+	Description string      `json:"description"`
 	Parameters  []Parameter `json:"parameters,omitempty"`
 }
 
@@ -228,8 +254,8 @@ type Parameter struct {
 	Description string `json:"description"`
 }
 
-// Request represents a service request
-type Request struct {
+// ServiceRequest represents a service request
+type ServiceRequest struct {
 	Method   string                 `json:"method"`
 	Path     string                 `json:"path"`
 	Headers  map[string]string      `json:"headers"`
@@ -237,8 +263,8 @@ type Request struct {
 	Metadata map[string]interface{} `json:"metadata"`
 }
 
-// Response represents a service response
-type Response struct {
+// ServiceResponse represents a service response
+type ServiceResponse struct {
 	Status   int                    `json:"status"`
 	Headers  map[string]string      `json:"headers"`
 	Body     []byte                 `json:"body"`

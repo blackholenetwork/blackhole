@@ -1,3 +1,4 @@
+// Package plugin provides the base plugin infrastructure and interfaces
 package plugin
 
 import (
@@ -9,12 +10,12 @@ import (
 
 // BasePlugin provides common functionality for all plugins
 type BasePlugin struct {
-	mu      sync.RWMutex
-	info    Info
-	config  Config
-	started bool
-	hooks   map[Hook][]HookFunc
-	events  chan Event
+	mu       sync.RWMutex
+	info     Info
+	config   Config
+	started  bool
+	hooks    map[Hook][]HookFunc
+	events   chan Event
 	registry *Registry
 }
 
@@ -24,7 +25,7 @@ func NewBasePlugin(info Info) *BasePlugin {
 	if info.CreatedAt.IsZero() {
 		info.CreatedAt = time.Now()
 	}
-	
+
 	return &BasePlugin{
 		info:   info,
 		config: make(Config),
@@ -46,7 +47,7 @@ func (bp *BasePlugin) Info() Info {
 }
 
 // Init initializes the plugin with configuration
-func (bp *BasePlugin) Init(ctx context.Context, config Config) error {
+func (bp *BasePlugin) Init(_ context.Context, config Config) error {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 
@@ -63,7 +64,7 @@ func (bp *BasePlugin) Init(ctx context.Context, config Config) error {
 }
 
 // Start starts the plugin
-func (bp *BasePlugin) Start(ctx context.Context) error {
+func (bp *BasePlugin) Start(_ context.Context) error {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 
@@ -80,7 +81,7 @@ func (bp *BasePlugin) Start(ctx context.Context) error {
 }
 
 // Stop gracefully shuts down the plugin
-func (bp *BasePlugin) Stop(ctx context.Context) error {
+func (bp *BasePlugin) Stop(_ context.Context) error {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 
@@ -120,7 +121,7 @@ func (bp *BasePlugin) Health() Health {
 }
 
 // Configure updates the plugin configuration
-func (bp *BasePlugin) Configure(ctx context.Context, config Config) error {
+func (bp *BasePlugin) Configure(_ context.Context, config Config) error {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 
@@ -323,18 +324,18 @@ func (bp *BasePlugin) triggerHook(hook Hook, data interface{}) {
 	}
 }
 
-// PluginBuilder provides a fluent interface for building plugins
-type PluginBuilder struct {
-	info   Info
-	initFn func(context.Context, Config) error
-	startFn func(context.Context) error
-	stopFn func(context.Context) error
+// Builder provides a fluent interface for building plugins
+type Builder struct {
+	info     Info
+	initFn   func(context.Context, Config) error
+	startFn  func(context.Context) error
+	stopFn   func(context.Context) error
 	healthFn func() Health
 }
 
-// NewPluginBuilder creates a new plugin builder
-func NewPluginBuilder(name string) *PluginBuilder {
-	return &PluginBuilder{
+// NewBuilder creates a new plugin builder
+func NewBuilder(name string) *Builder {
+	return &Builder{
 		info: Info{
 			Name:    name,
 			Version: "1.0.0",
@@ -343,37 +344,37 @@ func NewPluginBuilder(name string) *PluginBuilder {
 }
 
 // WithVersion sets the plugin version
-func (pb *PluginBuilder) WithVersion(version string) *PluginBuilder {
+func (pb *Builder) WithVersion(version string) *Builder {
 	pb.info.Version = version
 	return pb
 }
 
 // WithDescription sets the plugin description
-func (pb *PluginBuilder) WithDescription(description string) *PluginBuilder {
+func (pb *Builder) WithDescription(description string) *Builder {
 	pb.info.Description = description
 	return pb
 }
 
 // WithAuthor sets the plugin author
-func (pb *PluginBuilder) WithAuthor(author string) *PluginBuilder {
+func (pb *Builder) WithAuthor(author string) *Builder {
 	pb.info.Author = author
 	return pb
 }
 
 // WithLicense sets the plugin license
-func (pb *PluginBuilder) WithLicense(license string) *PluginBuilder {
+func (pb *Builder) WithLicense(license string) *Builder {
 	pb.info.License = license
 	return pb
 }
 
 // WithDependencies sets the plugin dependencies
-func (pb *PluginBuilder) WithDependencies(dependencies ...string) *PluginBuilder {
+func (pb *Builder) WithDependencies(dependencies ...string) *Builder {
 	pb.info.Dependencies = dependencies
 	return pb
 }
 
 // WithCapabilities sets the plugin capabilities
-func (pb *PluginBuilder) WithCapabilities(capabilities ...Capability) *PluginBuilder {
+func (pb *Builder) WithCapabilities(capabilities ...Capability) *Builder {
 	pb.info.Capabilities = make([]string, len(capabilities))
 	for i, cap := range capabilities {
 		pb.info.Capabilities[i] = string(cap)
@@ -382,31 +383,31 @@ func (pb *PluginBuilder) WithCapabilities(capabilities ...Capability) *PluginBui
 }
 
 // WithInit sets the init function
-func (pb *PluginBuilder) WithInit(fn func(context.Context, Config) error) *PluginBuilder {
+func (pb *Builder) WithInit(fn func(context.Context, Config) error) *Builder {
 	pb.initFn = fn
 	return pb
 }
 
 // WithStart sets the start function
-func (pb *PluginBuilder) WithStart(fn func(context.Context) error) *PluginBuilder {
+func (pb *Builder) WithStart(fn func(context.Context) error) *Builder {
 	pb.startFn = fn
 	return pb
 }
 
 // WithStop sets the stop function
-func (pb *PluginBuilder) WithStop(fn func(context.Context) error) *PluginBuilder {
+func (pb *Builder) WithStop(fn func(context.Context) error) *Builder {
 	pb.stopFn = fn
 	return pb
 }
 
 // WithHealth sets the health function
-func (pb *PluginBuilder) WithHealth(fn func() Health) *PluginBuilder {
+func (pb *Builder) WithHealth(fn func() Health) *Builder {
 	pb.healthFn = fn
 	return pb
 }
 
 // Build creates the plugin
-func (pb *PluginBuilder) Build() Plugin {
+func (pb *Builder) Build() Plugin {
 	return &builtPlugin{
 		BasePlugin: NewBasePlugin(pb.info),
 		initFn:     pb.initFn,

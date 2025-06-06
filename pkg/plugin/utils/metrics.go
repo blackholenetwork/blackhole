@@ -14,23 +14,24 @@ type MetricsCollector struct {
 
 // Metric represents a single metric
 type Metric struct {
-	Name        string
-	Type        MetricType
-	Value       float64
-	Labels      map[string]string
-	Timestamp   time.Time
-	mu          sync.RWMutex
-	
+	Name      string
+	Type      MetricType
+	Value     float64
+	Labels    map[string]string
+	Timestamp time.Time
+	mu        sync.RWMutex
+
 	// For histograms
-	buckets     []float64
-	counts      []int64
-	sum         float64
-	count       int64
+	buckets []float64
+	counts  []int64
+	sum     float64
+	count   int64
 }
 
 // MetricType represents the type of metric
 type MetricType string
 
+// Metric type constants
 const (
 	MetricTypeGauge     MetricType = "gauge"
 	MetricTypeCounter   MetricType = "counter"
@@ -48,7 +49,7 @@ func NewMetricsCollector() *MetricsCollector {
 func (mc *MetricsCollector) RegisterGauge(name string, labels map[string]string) *Metric {
 	mc.mu.Lock()
 	defer mc.mu.Unlock()
-	
+
 	key := metricKey(name, labels)
 	metric := &Metric{
 		Name:      name,
@@ -56,7 +57,7 @@ func (mc *MetricsCollector) RegisterGauge(name string, labels map[string]string)
 		Labels:    labels,
 		Timestamp: time.Now(),
 	}
-	
+
 	mc.metrics[key] = metric
 	return metric
 }
@@ -65,7 +66,7 @@ func (mc *MetricsCollector) RegisterGauge(name string, labels map[string]string)
 func (mc *MetricsCollector) RegisterCounter(name string, labels map[string]string) *Metric {
 	mc.mu.Lock()
 	defer mc.mu.Unlock()
-	
+
 	key := metricKey(name, labels)
 	metric := &Metric{
 		Name:      name,
@@ -74,7 +75,7 @@ func (mc *MetricsCollector) RegisterCounter(name string, labels map[string]strin
 		Value:     0,
 		Timestamp: time.Now(),
 	}
-	
+
 	mc.metrics[key] = metric
 	return metric
 }
@@ -83,7 +84,7 @@ func (mc *MetricsCollector) RegisterCounter(name string, labels map[string]strin
 func (mc *MetricsCollector) RegisterHistogram(name string, labels map[string]string, buckets []float64) *Metric {
 	mc.mu.Lock()
 	defer mc.mu.Unlock()
-	
+
 	key := metricKey(name, labels)
 	metric := &Metric{
 		Name:      name,
@@ -93,7 +94,7 @@ func (mc *MetricsCollector) RegisterHistogram(name string, labels map[string]str
 		buckets:   buckets,
 		counts:    make([]int64, len(buckets)+1),
 	}
-	
+
 	mc.metrics[key] = metric
 	return metric
 }
@@ -104,11 +105,11 @@ func (mc *MetricsCollector) Set(name string, value float64, labels map[string]st
 	key := metricKey(name, labels)
 	metric, exists := mc.metrics[key]
 	mc.mu.RUnlock()
-	
+
 	if !exists {
 		metric = mc.RegisterGauge(name, labels)
 	}
-	
+
 	metric.Set(value)
 }
 
@@ -118,11 +119,11 @@ func (mc *MetricsCollector) Inc(name string, labels map[string]string) {
 	key := metricKey(name, labels)
 	metric, exists := mc.metrics[key]
 	mc.mu.RUnlock()
-	
+
 	if !exists {
 		metric = mc.RegisterCounter(name, labels)
 	}
-	
+
 	metric.Inc()
 }
 
@@ -132,11 +133,11 @@ func (mc *MetricsCollector) Add(name string, value float64, labels map[string]st
 	key := metricKey(name, labels)
 	metric, exists := mc.metrics[key]
 	mc.mu.RUnlock()
-	
+
 	if !exists {
 		metric = mc.RegisterCounter(name, labels)
 	}
-	
+
 	metric.Add(value)
 }
 
@@ -146,7 +147,7 @@ func (mc *MetricsCollector) Observe(name string, value float64, labels map[strin
 	key := metricKey(name, labels)
 	metric, exists := mc.metrics[key]
 	mc.mu.RUnlock()
-	
+
 	if exists && metric.Type == MetricTypeHistogram {
 		metric.Observe(value)
 	}
@@ -156,13 +157,13 @@ func (mc *MetricsCollector) Observe(name string, value float64, labels map[strin
 func (mc *MetricsCollector) GetMetrics() map[string]interface{} {
 	mc.mu.RLock()
 	defer mc.mu.RUnlock()
-	
+
 	result := make(map[string]interface{})
-	
+
 	for key, metric := range mc.metrics {
 		result[key] = metric.GetValue()
 	}
-	
+
 	return result
 }
 
@@ -170,7 +171,7 @@ func (mc *MetricsCollector) GetMetrics() map[string]interface{} {
 func (mc *MetricsCollector) GetMetric(name string, labels map[string]string) (*Metric, bool) {
 	mc.mu.RLock()
 	defer mc.mu.RUnlock()
-	
+
 	key := metricKey(name, labels)
 	metric, exists := mc.metrics[key]
 	return metric, exists
@@ -183,10 +184,10 @@ func (m *Metric) Set(value float64) {
 	if m.Type != MetricTypeGauge {
 		return
 	}
-	
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	m.Value = value
 	m.Timestamp = time.Now()
 }
@@ -201,10 +202,10 @@ func (m *Metric) Add(value float64) {
 	if m.Type != MetricTypeCounter {
 		return
 	}
-	
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	m.Value += value
 	m.Timestamp = time.Now()
 }
@@ -214,14 +215,14 @@ func (m *Metric) Observe(value float64) {
 	if m.Type != MetricTypeHistogram {
 		return
 	}
-	
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	// Update histogram
 	m.sum += value
 	m.count++
-	
+
 	// Find the right bucket
 	bucketIndex := len(m.buckets)
 	for i, boundary := range m.buckets {
@@ -230,7 +231,7 @@ func (m *Metric) Observe(value float64) {
 			break
 		}
 	}
-	
+
 	m.counts[bucketIndex]++
 	m.Timestamp = time.Now()
 }
@@ -239,7 +240,7 @@ func (m *Metric) Observe(value float64) {
 func (m *Metric) GetValue() interface{} {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	switch m.Type {
 	case MetricTypeGauge, MetricTypeCounter:
 		return map[string]interface{}{
@@ -248,7 +249,7 @@ func (m *Metric) GetValue() interface{} {
 			"timestamp": m.Timestamp,
 			"labels":    m.Labels,
 		}
-		
+
 	case MetricTypeHistogram:
 		return map[string]interface{}{
 			"type":      m.Type,
@@ -260,7 +261,7 @@ func (m *Metric) GetValue() interface{} {
 			"timestamp": m.Timestamp,
 			"labels":    m.Labels,
 		}
-		
+
 	default:
 		return nil
 	}
@@ -271,12 +272,12 @@ func (m *Metric) GetValue() interface{} {
 // metricKey generates a unique key for a metric
 func metricKey(name string, labels map[string]string) string {
 	key := name
-	
+
 	// Sort labels for consistent keys
 	for k, v := range labels {
 		key += fmt.Sprintf(",%s=%s", k, v)
 	}
-	
+
 	return key
 }
 
@@ -285,7 +286,7 @@ func metricKey(name string, labels map[string]string) string {
 // MeasureDuration measures the duration of a function call
 func MeasureDuration(mc *MetricsCollector, name string, labels map[string]string) func() {
 	start := time.Now()
-	
+
 	return func() {
 		duration := time.Since(start).Seconds()
 		mc.Observe(name, duration, labels)
@@ -295,7 +296,7 @@ func MeasureDuration(mc *MetricsCollector, name string, labels map[string]string
 // TrackGoroutines tracks the number of goroutines
 func TrackGoroutines(mc *MetricsCollector, name string, labels map[string]string) func() {
 	mc.Inc(name+"_started", labels)
-	
+
 	return func() {
 		mc.Inc(name+"_completed", labels)
 	}
@@ -309,7 +310,7 @@ func TrackError(mc *MetricsCollector, name string, err error, labels map[string]
 			errorLabels[k] = v
 		}
 		errorLabels["error"] = err.Error()
-		
+
 		mc.Inc(name+"_errors", errorLabels)
 	}
 }

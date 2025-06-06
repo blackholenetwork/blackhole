@@ -56,7 +56,7 @@ func (tp *TestPlugin) Stop(ctx context.Context) error {
 
 func TestRegistry_RegisterAndStart(t *testing.T) {
 	registry := NewRegistry()
-	
+
 	// Create test plugins
 	plugin1 := NewTestPlugin("plugin1")
 	plugin2 := NewTestPlugin("plugin2", "plugin1")
@@ -90,7 +90,7 @@ func TestRegistry_RegisterAndStart(t *testing.T) {
 
 func TestRegistry_CircularDependency(t *testing.T) {
 	registry := NewRegistry()
-	
+
 	// Create plugins with circular dependency: plugin1 -> plugin2 -> plugin3 -> plugin1
 	plugin1 := NewTestPlugin("plugin1")
 	plugin2 := NewTestPlugin("plugin2", "plugin1")
@@ -104,7 +104,7 @@ func TestRegistry_CircularDependency(t *testing.T) {
 	// Manually create circular dependency by modifying plugin1's dependencies
 	// This simulates a circular dependency that would be detected at start time
 	plugin1.info.Dependencies = []string{"plugin3"}
-	
+
 	// Starting should fail due to circular dependency
 	ctx := context.Background()
 	err := registry.Start(ctx)
@@ -114,14 +114,14 @@ func TestRegistry_CircularDependency(t *testing.T) {
 
 func TestRegistry_GetByCapability(t *testing.T) {
 	registry := NewRegistry()
-	
+
 	// Create plugins with different capabilities
 	plugin1 := NewTestPlugin("plugin1")
 	plugin1.info.Capabilities = []string{"storage", "compute"}
-	
+
 	plugin2 := NewTestPlugin("plugin2")
 	plugin2.info.Capabilities = []string{"storage"}
-	
+
 	plugin3 := NewTestPlugin("plugin3")
 	plugin3.info.Capabilities = []string{"compute"}
 
@@ -140,7 +140,7 @@ func TestRegistry_GetByCapability(t *testing.T) {
 
 func TestRegistry_Events(t *testing.T) {
 	registry := NewRegistry()
-	
+
 	// Subscribe to events
 	events := make([]Event, 0)
 	unsubscribe := registry.Subscribe("plugin.started", func(event Event) {
@@ -165,17 +165,17 @@ func TestRegistry_Events(t *testing.T) {
 
 func TestRegistry_Hooks(t *testing.T) {
 	registry := NewRegistry()
-	
+
 	// Register hooks
 	preStartCalled := false
 	postStartCalled := false
-	
-	registry.RegisterHook(HookPreStart, func(ctx context.Context, data interface{}) error {
+
+	registry.RegisterHook(HookPreStart, func(_ context.Context, _ interface{}) error {
 		preStartCalled = true
 		return nil
 	})
-	
-	registry.RegisterHook(HookPostStart, func(ctx context.Context, data interface{}) error {
+
+	registry.RegisterHook(HookPostStart, func(_ context.Context, _ interface{}) error {
 		postStartCalled = true
 		return nil
 	})
@@ -194,7 +194,7 @@ func TestRegistry_Hooks(t *testing.T) {
 
 func TestPluginBuilder(t *testing.T) {
 	// Build a plugin using the builder
-	plugin := NewPluginBuilder("test-builder").
+	plugin := NewBuilder("test-builder").
 		WithVersion("2.0.0").
 		WithDescription("A test plugin built with builder").
 		WithAuthor("Test Author").
@@ -218,16 +218,16 @@ func TestPluginBuilder(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, plugin.Init(ctx, make(Config)))
 	require.NoError(t, plugin.Start(ctx))
-	
+
 	health := plugin.Health()
 	assert.Equal(t, HealthStatusHealthy, health.Status)
-	
+
 	require.NoError(t, plugin.Stop(ctx))
 }
 
 func TestBasePlugin_Configuration(t *testing.T) {
 	plugin := NewBasePlugin(Info{Name: "test"})
-	
+
 	// Test configuration methods
 	ctx := context.Background()
 	config := Config{
@@ -236,21 +236,21 @@ func TestBasePlugin_Configuration(t *testing.T) {
 		"bool_key":     true,
 		"duration_key": "5s",
 	}
-	
+
 	require.NoError(t, plugin.Configure(ctx, config))
-	
+
 	// Test GetConfigString
 	assert.Equal(t, "value", plugin.GetConfigString("string_key", "default"))
 	assert.Equal(t, "default", plugin.GetConfigString("missing_key", "default"))
-	
+
 	// Test GetConfigInt
 	assert.Equal(t, 42, plugin.GetConfigInt("int_key", 0))
 	assert.Equal(t, 0, plugin.GetConfigInt("missing_key", 0))
-	
+
 	// Test GetConfigBool
 	assert.True(t, plugin.GetConfigBool("bool_key", false))
 	assert.False(t, plugin.GetConfigBool("missing_key", false))
-	
+
 	// Test GetConfigDuration
 	assert.Equal(t, 5*time.Second, plugin.GetConfigDuration("duration_key", time.Second))
 	assert.Equal(t, time.Second, plugin.GetConfigDuration("missing_key", time.Second))

@@ -33,57 +33,57 @@ const (
 	EventJobFailed    = "compute.job.failed"
 
 	// Economic events
-	EventCreditsEarned   = "economic.credits.earned"
-	EventCreditsSpent    = "economic.credits.spent"
-	EventQuotaExceeded   = "economic.quota.exceeded"
+	EventCreditsEarned       = "economic.credits.earned"
+	EventCreditsSpent        = "economic.credits.spent"
+	EventQuotaExceeded       = "economic.quota.exceeded"
 	EventSubscriptionChanged = "economic.subscription.changed"
 
 	// System events
-	EventHealthChanged = "system.health.changed"
-	EventConfigUpdated = "system.config.updated"
+	EventHealthChanged       = "system.health.changed"
+	EventConfigUpdated       = "system.config.updated"
 	EventSystemConfigUpdated = "system.config.updated" // Alias for backward compatibility
-	EventShutdownRequested = "system.shutdown.requested"
-	
+	EventShutdownRequested   = "system.shutdown.requested"
+
 	// Plugin lifecycle events
 	EventPluginStarted = "plugin.started"
 	EventPluginStopped = "plugin.stopped"
 )
 
-// PluginRequest represents a synchronous request between plugins
-type PluginRequest struct {
-	ID       string                 `json:"id"`
-	Type     string                 `json:"type"`
-	From     string                 `json:"from"`
-	To       string                 `json:"to"`
-	Data     interface{}            `json:"data"`
-	Headers  map[string]string      `json:"headers,omitempty"`
-	Timeout  time.Duration          `json:"timeout"`
-	Created  time.Time              `json:"created"`
+// Request represents a synchronous request between plugins
+type Request struct {
+	ID      string            `json:"id"`
+	Type    string            `json:"type"`
+	From    string            `json:"from"`
+	To      string            `json:"to"`
+	Data    interface{}       `json:"data"`
+	Headers map[string]string `json:"headers,omitempty"`
+	Timeout time.Duration     `json:"timeout"`
+	Created time.Time         `json:"created"`
 }
 
-// PluginResponse represents a response to a plugin request
-type PluginResponse struct {
-	ID      string                 `json:"id"`
-	Status  int                    `json:"status"`
-	Error   error                  `json:"error,omitempty"`
-	Data    interface{}            `json:"data,omitempty"`
-	Headers map[string]string      `json:"headers,omitempty"`
-	Created time.Time              `json:"created"`
+// Response represents a response to a plugin request
+type Response struct {
+	ID      string            `json:"id"`
+	Status  int               `json:"status"`
+	Error   error             `json:"error,omitempty"`
+	Data    interface{}       `json:"data,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+	Created time.Time         `json:"created"`
 }
 
-// PluginRequestHandler handles synchronous requests
-type PluginRequestHandler interface {
-	HandlePluginRequest(ctx context.Context, req PluginRequest) (PluginResponse, error)
+// RequestHandler handles synchronous requests
+type RequestHandler interface {
+	HandlePluginRequest(ctx context.Context, req Request) (Response, error)
 }
 
 // Message represents an async message for queue-based communication
 type Message struct {
-	ID        string                 `json:"id"`
-	Topic     string                 `json:"topic"`
-	Payload   interface{}            `json:"payload"`
-	Headers   map[string]string      `json:"headers,omitempty"`
-	Timestamp time.Time              `json:"timestamp"`
-	Retries   int                    `json:"retries"`
+	ID        string            `json:"id"`
+	Topic     string            `json:"topic"`
+	Payload   interface{}       `json:"payload"`
+	Headers   map[string]string `json:"headers,omitempty"`
+	Timestamp time.Time         `json:"timestamp"`
+	Retries   int               `json:"retries"`
 }
 
 // MessageHandler processes messages from a queue
@@ -91,8 +91,8 @@ type MessageHandler func(ctx context.Context, msg Message) error
 
 // SharedStore provides thread-safe shared data storage
 type SharedStore struct {
-	mu    sync.RWMutex
-	data  map[string]interface{}
+	mu       sync.RWMutex
+	data     map[string]interface{}
 	watchers map[string][]func(key string, value interface{})
 }
 
@@ -142,22 +142,22 @@ func (s *SharedStore) Delete(key string) {
 
 // MessageQueue provides async message queue functionality
 type MessageQueue struct {
-	mu       sync.RWMutex
-	topics   map[string][]MessageHandler
-	queues   map[string]chan Message
-	workers  sync.WaitGroup
-	ctx      context.Context
-	cancel   context.CancelFunc
+	mu      sync.RWMutex
+	topics  map[string][]MessageHandler
+	queues  map[string]chan Message
+	workers sync.WaitGroup
+	ctx     context.Context
+	cancel  context.CancelFunc
 }
 
 // NewMessageQueue creates a new message queue
 func NewMessageQueue(ctx context.Context) *MessageQueue {
 	ctx, cancel := context.WithCancel(ctx)
 	return &MessageQueue{
-		topics:   make(map[string][]MessageHandler),
-		queues:   make(map[string]chan Message),
-		ctx:      ctx,
-		cancel:   cancel,
+		topics: make(map[string][]MessageHandler),
+		queues: make(map[string]chan Message),
+		ctx:    ctx,
+		cancel: cancel,
 	}
 }
 
@@ -248,7 +248,10 @@ func (mq *MessageQueue) processMessage(topic string, msg Message) {
 			// Handle retry logic
 			if msg.Retries < 3 {
 				msg.Retries++
-				mq.Publish(topic, msg.Payload)
+				if err := mq.Publish(topic, msg.Payload); err != nil {
+					// Log error but don't break retry loop
+					fmt.Printf("Error retrying publish to %s: %v\n", topic, err)
+				}
 			}
 		}
 	}

@@ -1,3 +1,4 @@
+// Package orchestrator manages the lifecycle and coordination of components
 package orchestrator
 
 import (
@@ -14,16 +15,16 @@ import (
 type Component interface {
 	// Name returns the component name
 	Name() string
-	
+
 	// Dependencies returns the names of components this one depends on
 	Dependencies() []string
-	
+
 	// Start initializes and starts the component
 	Start(ctx context.Context) error
-	
+
 	// Stop gracefully shuts down the component
 	Stop(ctx context.Context) error
-	
+
 	// Health returns the current health status
 	Health() ComponentHealth
 }
@@ -38,6 +39,7 @@ type ComponentHealth struct {
 // HealthStatus represents the health state
 type HealthStatus string
 
+// Health status constants
 const (
 	HealthStatusHealthy   HealthStatus = "healthy"
 	HealthStatusDegraded  HealthStatus = "degraded"
@@ -52,21 +54,22 @@ type Orchestrator struct {
 	components map[string]Component
 	order      []string // Startup order based on dependencies
 	mu         sync.RWMutex
-	state      OrchestratorState
+	state      State
 	ctx        context.Context
 	cancel     context.CancelFunc
 }
 
-// OrchestratorState represents the orchestrator's current state
-type OrchestratorState string
+// State represents the orchestrator's current state
+type State string
 
+// Orchestrator state constants
 const (
-	StateInitialized OrchestratorState = "initialized"
-	StateStarting    OrchestratorState = "starting"
-	StateRunning     OrchestratorState = "running"
-	StateStopping    OrchestratorState = "stopping"
-	StateStopped     OrchestratorState = "stopped"
-	StateError       OrchestratorState = "error"
+	StateInitialized State = "initialized"
+	StateStarting    State = "starting"
+	StateRunning     State = "running"
+	StateStopping    State = "stopping"
+	StateStopped     State = "stopped"
+	StateError       State = "error"
 )
 
 // New creates a new orchestrator instance
@@ -79,7 +82,7 @@ func New(cfg *config.Config, logger *log.Logger) (*Orchestrator, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	return &Orchestrator{
 		config:     cfg,
 		logger:     logger,
@@ -117,7 +120,7 @@ func (o *Orchestrator) Register(component Component) error {
 
 	o.components[name] = component
 	o.logger.Printf("Registered component: %s", name)
-	
+
 	// Recalculate startup order
 	if err := o.calculateStartupOrder(); err != nil {
 		delete(o.components, name)
@@ -143,18 +146,18 @@ func (o *Orchestrator) Start(ctx context.Context) error {
 	for _, name := range o.order {
 		component := o.components[name]
 		o.logger.Printf("Starting component: %s", name)
-		
+
 		if err := component.Start(ctx); err != nil {
 			o.mu.Lock()
 			o.state = StateError
 			o.mu.Unlock()
-			
+
 			// Stop already started components
 			o.stopStartedComponents(name)
-			
+
 			return fmt.Errorf("failed to start component %s: %w", name, err)
 		}
-		
+
 		o.logger.Printf("Component %s started successfully", name)
 	}
 
@@ -189,14 +192,14 @@ func (o *Orchestrator) Stop(ctx context.Context) error {
 	for i := len(o.order) - 1; i >= 0; i-- {
 		name := o.order[i]
 		component := o.components[name]
-		
+
 		o.logger.Printf("Stopping component: %s", name)
-		
+
 		// Create timeout context for each component
 		stopCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		err := component.Stop(stopCtx)
 		cancel()
-		
+
 		if err != nil {
 			o.logger.Printf("Error stopping component %s: %v", name, err)
 			// Continue stopping other components
@@ -231,12 +234,12 @@ func (o *Orchestrator) HealthExcluding(caller string) map[string]ComponentHealth
 		}
 		health[name] = component.Health()
 	}
-	
+
 	return health
 }
 
 // State returns the current orchestrator state
-func (o *Orchestrator) State() OrchestratorState {
+func (o *Orchestrator) State() State {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 	return o.state
@@ -260,17 +263,17 @@ func (o *Orchestrator) calculateStartupOrder() error {
 
 		temp[name] = true
 		component := o.components[name]
-		
+
 		for _, dep := range component.Dependencies() {
 			if err := visit(dep); err != nil {
 				return err
 			}
 		}
-		
+
 		temp[name] = false
 		visited[name] = true
 		order = append(order, name)
-		
+
 		return nil
 	}
 
@@ -303,9 +306,9 @@ func (o *Orchestrator) stopStartedComponents(failedComponent string) {
 	for i := failedIndex - 1; i >= 0; i-- {
 		name := o.order[i]
 		component := o.components[name]
-		
+
 		o.logger.Printf("Rolling back component: %s", name)
-		
+
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		if err := component.Stop(ctx); err != nil {
 			o.logger.Printf("Error stopping component %s during rollback: %v", name, err)

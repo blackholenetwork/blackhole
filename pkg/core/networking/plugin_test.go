@@ -4,9 +4,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/blackholenetwork/blackhole/pkg/plugin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/blackholenetwork/blackhole/pkg/plugin"
 )
 
 func TestPlugin_Lifecycle(t *testing.T) {
@@ -15,7 +16,7 @@ func TestPlugin_Lifecycle(t *testing.T) {
 	p := New(registry)
 
 	// Test plugin info
-	assert.Equal(t, "networking", p.Info().Name)
+	assert.Equal(t, "network", p.Info().Name)
 	assert.Equal(t, "0.1.0", p.Info().Version)
 
 	// Test initialization
@@ -39,7 +40,7 @@ func TestPlugin_Lifecycle(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestPlugin_Configuration(t *testing.T) {
+func TestPlugin_Configuration(_ *testing.T) {
 	// TODO: Add configuration tests
 }
 
@@ -47,19 +48,19 @@ func TestPlugin_NetworkService(t *testing.T) {
 	ctx := context.Background()
 	registry := plugin.NewRegistry()
 	p := New(registry)
-	
+
 	// Test that it implements NetworkService
 	var _ plugin.NetworkService = p
-	
+
 	// Initialize with test config
 	config := plugin.Config{
-		"port": 0, // Use random port for testing
+		"port":              0,     // Use random port for testing
 		"enable_auto_relay": false, // Disable for tests
 	}
-	
+
 	err := p.Init(ctx, config)
 	require.NoError(t, err)
-	
+
 	// Test GetPeers (should be empty initially)
 	peers, err := p.GetPeers(ctx)
 	require.NoError(t, err)

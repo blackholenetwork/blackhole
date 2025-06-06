@@ -7,9 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/blackholenetwork/blackhole/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/blackholenetwork/blackhole/internal/config"
 )
 
 // mockComponent is a test component
@@ -31,7 +32,7 @@ func (m *mockComponent) Dependencies() []string {
 	return m.dependencies
 }
 
-func (m *mockComponent) Start(ctx context.Context) error {
+func (m *mockComponent) Start(_ context.Context) error {
 	if m.startErr != nil {
 		return m.startErr
 	}
@@ -39,7 +40,7 @@ func (m *mockComponent) Start(ctx context.Context) error {
 	return nil
 }
 
-func (m *mockComponent) Stop(ctx context.Context) error {
+func (m *mockComponent) Stop(_ context.Context) error {
 	if m.stopErr != nil {
 		return m.stopErr
 	}
@@ -170,13 +171,13 @@ func TestOrchestrator_CircularDependency(t *testing.T) {
 		dependencies: []string{"comp3"},
 		health:       HealthStatusHealthy,
 	}
-	
+
 	// Manually add comp4 to test circular dependency
 	orch.components["comp4"] = comp4
-	
+
 	// Modify comp1 to depend on comp4 (creating circular dependency)
 	comp1.dependencies = []string{"comp4"}
-	
+
 	// Recalculate startup order should fail
 	err = orch.calculateStartupOrder()
 	assert.Error(t, err)
@@ -241,11 +242,11 @@ func TestOrchestrator_StartFailure(t *testing.T) {
 	err = orch.Start(ctx)
 	assert.Error(t, err)
 	assert.Equal(t, StateError, orch.state)
-	
+
 	// comp1 should be started then stopped (rollback)
 	assert.True(t, comp1.started)
 	assert.True(t, comp1.stopped)
-	
+
 	// comp2 should not be started
 	assert.False(t, comp2.started)
 }
