@@ -11,7 +11,7 @@ Blackhole Network enables home users to monetize their unused storage, compute, 
 The system is built with a six-layer architecture:
 
 0. **Infrastructure Layer**: Build pipeline, CI/CD, packaging, distribution
-1. **Core Layer**: Orchestrator, Security (DID), Networking (libp2p), ResourceManager, Monitoring
+1. **Core Layer**: Orchestrator, Security (DID), Network (libp2p), ResourceManager, Monitor
 2. **Resources Layer**: Storage (VFS), Compute (CPU/GPU), Bandwidth, Memory allocation
 3. **Data Layer**: Schema evolution, Indexer (Bleve), Query (SQL-like), Search (ML-enhanced)
 4. **Service Layer**: WebServer, RealTime (WebSocket/WebRTC), Social graph

@@ -33,6 +33,16 @@ test:
 	@echo ""
 	@echo "📁 Coverage report: coverage.html"
 
+# Quick test - run tests without coverage and only short tests
+test-quick:
+	@echo "Running quick tests..."
+	@go test -short ./...
+
+# Test only changed packages
+test-changed:
+	@echo "Testing changed packages..."
+	@./scripts/test-changed.sh
+
 # Run tests with race detection (may show harmless linker warnings on macOS)
 test-race:
 	@echo "Running tests with race detection..."

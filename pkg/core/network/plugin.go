@@ -1,5 +1,5 @@
-// Package networking provides P2P networking functionality using libp2p
-package networking
+// Package network provides P2P networking functionality using libp2p
+package network
 
 import (
 	"context"

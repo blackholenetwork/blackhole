@@ -478,7 +478,7 @@ func TestPluginsHandler(t *testing.T) {
 		t.Fatal("Expected plugins to be an array")
 	}
 
-	expectedPlugins := []string{"security", "analytics", "network", "webserver"}
+	expectedPlugins := []string{"security", "monitor", "network", "webserver"}
 	if len(plugins) != len(expectedPlugins) {
 		t.Errorf("Expected %d plugins, got %d", len(expectedPlugins), len(plugins))
 	}
@@ -605,7 +605,7 @@ func TestPollPluginHealth(t *testing.T) {
 		},
 	}
 	mockAnalyticsPlugin := &mockPlugin{
-		info: plugin.Info{Name: "analytics"},
+		info: plugin.Info{Name: "monitor"},
 		health: plugin.Health{
 			Status:  plugin.HealthStatusDegraded,
 			Message: "Analytics plugin degraded",
@@ -629,15 +629,15 @@ func TestPollPluginHealth(t *testing.T) {
 	// Check that plugin statuses were updated
 	ws.mu.RLock()
 	securityStatus := ws.startupStatus["security"]
-	analyticsStatus := ws.startupStatus["analytics"]
+	monitorStatus := ws.startupStatus["monitor"]
 	webserverStatus := ws.startupStatus["webserver"]
 	ws.mu.RUnlock()
 
 	if securityStatus.Status != "ready" {
 		t.Errorf("Expected security status 'ready', got %s", securityStatus.Status)
 	}
-	if analyticsStatus.Status != "degraded" {
-		t.Errorf("Expected analytics status 'degraded', got %s", analyticsStatus.Status)
+	if monitorStatus.Status != "degraded" {
+		t.Errorf("Expected monitor status 'degraded', got %s", monitorStatus.Status)
 	}
 	if webserverStatus.Status != "starting" {
 		t.Errorf("Expected webserver status 'starting', got %s", webserverStatus.Status)

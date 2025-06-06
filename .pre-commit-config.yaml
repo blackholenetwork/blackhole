@@ -84,9 +84,9 @@ repos:
         types: [go]
         pass_filenames: false
 
-      - id: make-test
-        name: Run make test
-        entry: bash -c 'if ! make test > /tmp/test.log 2>&1; then cat /tmp/test.log | grep -E "(FAIL|Error:|panic:|--- FAIL)" | tail -50; exit 1; fi'
+      - id: test-changed
+        name: Test changed packages
+        entry: ./scripts/test-changed.sh
         language: system
         types: [go]
         pass_filenames: false

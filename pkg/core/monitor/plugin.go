@@ -1,5 +1,5 @@
-// Package analytics provides system analytics and metrics collection functionality
-package analytics
+// Package monitor provides system monitoring and metrics collection functionality
+package monitor
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"github.com/blackholenetwork/blackhole/pkg/plugin"
 )
 
-// Plugin provides system analytics and metrics collection
+// Plugin provides system monitoring and metrics collection
 type Plugin struct {
 	*plugin.BasePlugin
 	mu            sync.RWMutex
@@ -37,9 +37,9 @@ type Metric struct {
 // NewPlugin creates a new analytics plugin
 func NewPlugin(registry *plugin.Registry) *Plugin {
 	info := plugin.Info{
-		Name:         "analytics",
+		Name:         "monitor",
 		Version:      "1.0.0",
-		Description:  "System analytics and metrics collection",
+		Description:  "System monitoring and metrics collection",
 		Author:       "Blackhole Network",
 		License:      "Apache-2.0",
 		Dependencies: []string{},
@@ -61,9 +61,9 @@ func NewPlugin(registry *plugin.Registry) *Plugin {
 // Info returns metadata about the plugin
 func (ap *Plugin) Info() plugin.Info {
 	return plugin.Info{
-		Name:         "analytics",
+		Name:         "monitor",
 		Version:      "1.0.0",
-		Description:  "System analytics and metrics collection",
+		Description:  "System monitoring and metrics collection",
 		Author:       "Blackhole Network",
 		License:      "Apache-2.0",
 		Dependencies: []string{},
@@ -80,7 +80,7 @@ func (ap *Plugin) Init(_ context.Context, config plugin.Config) error {
 
 	// Update health status
 	ap.healthStatus = plugin.HealthStatusHealthy
-	ap.healthMessage = "Analytics initialized"
+	ap.healthMessage = "Monitor initialized"
 	ap.SetHealth(ap.healthStatus, ap.healthMessage)
 
 	return nil
@@ -92,7 +92,7 @@ func (ap *Plugin) Start(ctx context.Context) error {
 	defer ap.mu.Unlock()
 
 	if ap.started {
-		return fmt.Errorf("analytics plugin already started")
+		return fmt.Errorf("monitor plugin already started")
 	}
 
 	// Get collection interval from config or use default
@@ -112,7 +112,7 @@ func (ap *Plugin) Start(ctx context.Context) error {
 
 	// Update and publish initial health status
 	ap.healthStatus = plugin.HealthStatusHealthy
-	ap.healthMessage = "Analytics operational"
+	ap.healthMessage = "Monitor operational"
 	ap.SetHealth(ap.healthStatus, ap.healthMessage)
 
 	return nil
@@ -138,7 +138,7 @@ func (ap *Plugin) Stop(_ context.Context) error {
 
 	// Update health status
 	ap.healthStatus = plugin.HealthStatusUnknown
-	ap.healthMessage = "Analytics stopped"
+	ap.healthMessage = "Monitor stopped"
 	ap.SetHealth(ap.healthStatus, ap.healthMessage)
 
 	return nil
@@ -158,13 +158,13 @@ func (ap *Plugin) Health() plugin.Health {
 	switch {
 	case !ap.started:
 		status = plugin.HealthStatusUnknown
-		message = "Analytics not started"
+		message = "Monitor not started"
 	case metricsCount == 0:
 		status = plugin.HealthStatusDegraded
 		message = "No metrics collected yet"
 	default:
 		status = plugin.HealthStatusHealthy
-		message = fmt.Sprintf("Analytics operational (%d metrics collected)", metricsCount)
+		message = fmt.Sprintf("Monitor operational (%d metrics collected)", metricsCount)
 	}
 
 	return plugin.Health{
@@ -256,7 +256,7 @@ func (ap *Plugin) collectSystemMetrics() {
 	// Publish metrics collection event
 	if ap.registry != nil {
 		ap.registry.Publish(plugin.Event{
-			Type:      "analytics.metrics_collected",
+			Type:      "monitor.metrics_collected",
 			Source:    ap.Info().Name,
 			Timestamp: now,
 			Data: map[string]interface{}{

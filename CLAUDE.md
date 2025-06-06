@@ -28,7 +28,7 @@ Blackhole Network is a decentralized infrastructure platform written in Go that 
 
 ### Six-Layer Architecture
 0. **Infrastructure Layer**: Project setup, Build pipeline (CI/CD, packaging, distribution)
-1. **Core Layer**: Orchestrator (with lifecycle management), Security (DID), Networking (libp2p), ResourceManager, Monitoring
+1. **Core Layer**: Orchestrator (with lifecycle management), Security (DID), Network (libp2p), ResourceManager, Monitor
 2. **Resources Layer**: Storage (VFS), Compute (CPU/GPU), Bandwidth, Memory allocation
 3. **Data Layer**: Schema evolution, Indexer (Bleve), Query (SQL-like), Search (ML-enhanced)
 4. **Service Layer**: WebServer, RealTime (WebSocket/WebRTC), Social graph

@@ -1,4 +1,4 @@
-package analytics
+package monitor
 
 import (
 	"context"
@@ -56,8 +56,8 @@ func TestNewPlugin(t *testing.T) {
 	}
 
 	info := p.Info()
-	if info.Name != "analytics" {
-		t.Errorf("Expected name 'analytics', got %s", info.Name)
+	if info.Name != "monitor" {
+		t.Errorf("Expected name 'monitor', got %s", info.Name)
 	}
 	if info.Version != "1.0.0" {
 		t.Errorf("Expected version '1.0.0', got %s", info.Version)
@@ -87,8 +87,8 @@ func TestPluginInit(t *testing.T) {
 	if health.Status != plugin.HealthStatusUnknown {
 		t.Errorf("Expected unknown status after init (not started), got %v", health.Status)
 	}
-	if health.Message != "Analytics not started" {
-		t.Errorf("Expected 'Analytics not started' message, got %s", health.Message)
+	if health.Message != "Monitor not started" {
+		t.Errorf("Expected 'Monitor not started' message, got %s", health.Message)
 	}
 }
 
@@ -143,7 +143,7 @@ func TestPluginStart_AlreadyStarted(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error when starting already started plugin")
 	}
-	if err.Error() != "analytics plugin already started" {
+	if err.Error() != "monitor plugin already started" {
 		t.Errorf("Expected 'already started' error, got: %v", err)
 	}
 
@@ -309,8 +309,8 @@ func TestHealthStates(t *testing.T) {
 	if health.Status != plugin.HealthStatusUnknown {
 		t.Errorf("Expected unknown status when not started, got %v", health.Status)
 	}
-	if health.Message != "Analytics not started" {
-		t.Errorf("Expected 'Analytics not started' message, got %s", health.Message)
+	if health.Message != "Monitor not started" {
+		t.Errorf("Expected 'Monitor not started' message, got %s", health.Message)
 	}
 
 	// Test 2: Started but no metrics yet
@@ -332,8 +332,8 @@ func TestHealthStates(t *testing.T) {
 	if health.Status != plugin.HealthStatusHealthy {
 		t.Errorf("Expected healthy status with metrics, got %v", health.Status)
 	}
-	if !contains(health.Message, "Analytics operational") {
-		t.Errorf("Expected 'Analytics operational' in message, got %s", health.Message)
+	if !contains(health.Message, "Monitor operational") {
+		t.Errorf("Expected 'Monitor operational' in message, got %s", health.Message)
 	}
 
 	// Verify health details
@@ -428,7 +428,7 @@ func TestEventPublication(t *testing.T) {
 	registry := plugin.NewRegistry()
 
 	// Subscribe to events before creating the plugin
-	unsubscribe := registry.Subscribe("analytics.metrics_collected", func(event plugin.Event) {
+	unsubscribe := registry.Subscribe("monitor.metrics_collected", func(event plugin.Event) {
 		eventChan <- event
 	})
 	defer unsubscribe()
@@ -445,11 +445,11 @@ func TestEventPublication(t *testing.T) {
 	// Check if event was published
 	select {
 	case event := <-eventChan:
-		if event.Type != "analytics.metrics_collected" {
-			t.Errorf("Expected event type 'analytics.metrics_collected', got %s", event.Type)
+		if event.Type != "monitor.metrics_collected" {
+			t.Errorf("Expected event type 'monitor.metrics_collected', got %s", event.Type)
 		}
-		if event.Source != "analytics" {
-			t.Errorf("Expected event source 'analytics', got %s", event.Source)
+		if event.Source != "monitor" {
+			t.Errorf("Expected event source 'monitor', got %s", event.Source)
 		}
 		if data, ok := event.Data.(map[string]interface{}); ok {
 			if _, exists := data["metrics_count"]; !exists {
@@ -462,7 +462,7 @@ func TestEventPublication(t *testing.T) {
 			t.Error("Expected event data to be map[string]interface{}")
 		}
 	case <-time.After(500 * time.Millisecond):
-		t.Error("Timeout waiting for analytics.metrics_collected event")
+		t.Error("Timeout waiting for monitor.metrics_collected event")
 	}
 
 	// Clean up

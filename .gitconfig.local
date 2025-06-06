@@ -1,0 +1,17 @@
+# Local git config for this project
+# Include this in your global gitconfig with:
+# [include]
+#     path = /path/to/blackholenetwork/.gitconfig.local
+
+[alias]
+    # Quick commit without pre-commit hooks
+    qc = commit --no-verify -m
+
+    # Commit with only quick tests
+    tc = !SKIP=make-test pre-commit run && git commit
+
+    # Run full tests manually
+    test-all = !make test
+
+    # Run only changed tests
+    test-changed = !make test-changed

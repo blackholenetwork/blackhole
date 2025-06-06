@@ -86,6 +86,8 @@ const (
 	CapabilityNetworking Capability = "networking"
 	// CapabilityMonitoring enables system monitoring
 	CapabilityMonitoring Capability = "monitoring"
+	// CapabilityResourceManagement enables resource allocation and job scheduling
+	CapabilityResourceManagement Capability = "resource-management"
 
 	// CapabilityStorage enables storage management
 	CapabilityStorage Capability = "storage"

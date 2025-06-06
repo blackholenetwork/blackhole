@@ -38,9 +38,9 @@ type Plugin interface {
 ### 1. Core Plugins
 - **Orchestrator**: System coordination and lifecycle management
 - **Security**: Authentication, authorization, and DID management
-- **Networking**: P2P communication and peer discovery
-- **Monitoring**: Telemetry collection and system notifications
-- **ResourceManager**: Resource allocation and job scheduling
+- **Network**: P2P communication and peer discovery
+- **Monitor**: System monitoring and metrics collection
+- **ResourceManager**: Resource allocation, job scheduling, and economic priority management
 
 ### 2. Resource Plugins
 - **Storage**: Distributed file storage with erasure coding

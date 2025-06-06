@@ -36,10 +36,10 @@ cmd/blackhole/
 pkg/
 ├── core/               # Core layer components
 │   ├── orchestrator/
-│   ├── networking/
+│   ├── network/
 │   ├── security/
-│   ├── resource/
-│   └── monitoring/
+│   ├── resourcemanager/
+│   └── monitor/
 ├── resources/          # Resources layer
 │   ├── storage/
 │   ├── compute/
@@ -66,7 +66,7 @@ pkg/
 - Dependency resolution and startup sequencing
 - Health monitoring with automatic recovery
 
-**Networking**
+**Network**
 - libp2p node with DHT discovery
 - PubSub for event propagation
 - NAT traversal with relay fallback
@@ -81,7 +81,7 @@ pkg/
 - Load-based allocation decisions
 - Resource usage tracking and limits
 
-**Monitoring**
+**Monitor**
 - OpenTelemetry integration
 - Prometheus metrics export
 - Real-time dashboard with Grafana
