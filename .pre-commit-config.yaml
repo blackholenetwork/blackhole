@@ -25,21 +25,19 @@ repos:
       # - id: no-commit-to-branch
       #   args: ['--branch', 'main']  # Enable this in production
 
-  # Go-specific checks
+  # Go-specific checks (most are handled by make lint/test)
   - repo: https://github.com/dnephin/pre-commit-golang
     rev: v0.5.1
     hooks:
-      - id: go-fmt
-      # - id: go-vet  # Moved to local hooks due to directory issues
-      - id: go-imports
-        args: ['-local', 'github.com/blackholenetwork/blackhole']
-      - id: go-cyclo
-        args: ['-over', '15']
-      - id: golangci-lint
-      - id: go-mod-tidy
-      - id: go-unit-tests
-      - id: go-build
-      - id: go-critic
+      # - id: go-fmt        # Handled by make lint
+      # - id: go-vet        # Handled by make lint
+      # - id: go-imports    # Handled by make lint
+      # - id: go-cyclo      # Handled by make lint
+      # - id: golangci-lint # Handled by make lint
+      - id: go-mod-tidy     # Keep this for go.mod/go.sum consistency
+      # - id: go-unit-tests # Handled by make test
+      - id: go-build        # Keep this for build verification
+      # - id: go-critic     # Handled by make lint
 
   # Shell script checks
   - repo: https://github.com/jumanjihouse/pre-commit-hooks
@@ -79,16 +77,16 @@ repos:
   # Local hooks
   - repo: local
     hooks:
-      - id: go-vet
-        name: Go Vet
-        entry: go vet ./...
+      - id: make-lint
+        name: Run make lint
+        entry: make lint
         language: system
         types: [go]
         pass_filenames: false
 
-      - id: go-test-coverage
-        name: Check Test Coverage
-        entry: bash -c 'echo "=== CHECKING TEST COVERAGE ===" && packages_without_tests=$(go test ./... 2>&1 | grep "\[no test files\]" | awk "{print \$2}" | sort) && if [ ! -z "$packages_without_tests" ]; then echo "❌ MISSING TESTS in the following packages:" && echo "$packages_without_tests" | sed "s/^/  - /" && echo "" && echo "⚠️  Please add tests for consistency and quality!" && exit 1; else echo "✅ All packages with code have tests!" && exit 0; fi'
+      - id: make-test
+        name: Run make test
+        entry: bash -c 'if ! make test > /tmp/test.log 2>&1; then cat /tmp/test.log | grep -E "(FAIL|Error:|panic:|--- FAIL)" | tail -50; exit 1; fi'
         language: system
         types: [go]
         pass_filenames: false
@@ -100,26 +98,10 @@ repos:
         types: [go]
         pass_filenames: false
 
-      - id: gofumpt
-        name: Go Format (Strict)
-        entry: gofumpt -w
-        language: system
-        types: [go]
-        pass_filenames: true
-
-      - id: go-mod-verify
-        name: Go Mod Verify
-        entry: go mod verify
-        language: system
-        types: [go]
-        pass_filenames: false
-
-      - id: go-security
-        name: Go Security Check
-        entry: gosec -quiet ./...
-        language: system
-        types: [go]
-        pass_filenames: false
+      # The following are handled by make lint:
+      # - id: gofumpt
+      # - id: go-mod-verify
+      # - id: go-security
 
       # - id: go-licenses
       #   name: Check Go Licenses

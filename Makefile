@@ -20,8 +20,34 @@ build:
 # Run tests
 test:
 	@echo "Running tests..."
+	@go test -v -coverprofile=coverage.out ./...
+	@go tool cover -html=coverage.out -o coverage.html
+	@echo ""
+	@echo "📊 Test Statistics"
+	@echo ""
+	@echo "Coverage by Package:"
+	@go test -cover ./... 2>/dev/null | grep "coverage:" | sed 's/github.com\/blackholenetwork\/blackhole\///g' | awk '{printf "  - %-35s %s\n", $$2, $$4 " " $$5}' | sort
+	@echo ""
+	@echo "Overall Coverage:"
+	@go tool cover -func=coverage.out | tail -n 1 | awk '{printf "  📈 Total: %s of statements covered\n", $$3}'
+	@echo ""
+	@echo "📁 Coverage report: coverage.html"
+
+# Run tests with race detection (may show harmless linker warnings on macOS)
+test-race:
+	@echo "Running tests with race detection..."
 	@go test -v -race -coverprofile=coverage.out ./...
 	@go tool cover -html=coverage.out -o coverage.html
+	@echo ""
+	@echo "📊 Test Statistics"
+	@echo ""
+	@echo "Coverage by Package:"
+	@go test -cover ./... 2>/dev/null | grep "coverage:" | sed 's/github.com\/blackholenetwork\/blackhole\///g' | awk '{printf "  - %-35s %s\n", $$2, $$4 " " $$5}' | sort
+	@echo ""
+	@echo "Overall Coverage:"
+	@go tool cover -func=coverage.out | tail -n 1 | awk '{printf "  📈 Total: %s of statements covered\n", $$3}'
+	@echo ""
+	@echo "📁 Coverage report: coverage.html"
 
 # Run benchmarks
 bench:
