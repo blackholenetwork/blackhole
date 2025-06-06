@@ -2,6 +2,7 @@ package utils
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
@@ -274,8 +275,16 @@ func metricKey(name string, labels map[string]string) string {
 	key := name
 
 	// Sort labels for consistent keys
-	for k, v := range labels {
-		key += fmt.Sprintf(",%s=%s", k, v)
+	if len(labels) > 0 {
+		keys := make([]string, 0, len(labels))
+		for k := range labels {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		for _, k := range keys {
+			key += fmt.Sprintf(",%s=%s", k, labels[k])
+		}
 	}
 
 	return key
