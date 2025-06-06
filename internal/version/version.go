@@ -1,3 +1,4 @@
+// Package version provides version information for the application
 package version
 
 import (
@@ -7,10 +8,10 @@ import (
 var (
 	// Version is the current version of the application
 	version = "dev"
-	
+
 	// BuildTime is when the binary was built
 	buildTime = "unknown"
-	
+
 	// GitCommit is the git commit hash
 	gitCommit = "unknown"
 )

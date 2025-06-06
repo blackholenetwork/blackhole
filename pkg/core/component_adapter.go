@@ -1,3 +1,4 @@
+// Package core provides core infrastructure components for the Blackhole Network
 package core
 
 import (
@@ -45,7 +46,7 @@ func (a *PluginComponentAdapter) Start(ctx context.Context) error {
 	if err := a.plugin.Init(ctx, a.config); err != nil {
 		return err
 	}
-	
+
 	return a.plugin.Start(ctx)
 }
 
@@ -57,7 +58,7 @@ func (a *PluginComponentAdapter) Stop(ctx context.Context) error {
 // Health returns the current health status
 func (a *PluginComponentAdapter) Health() orchestrator.ComponentHealth {
 	pluginHealth := a.plugin.Health()
-	
+
 	// Convert plugin health status to orchestrator health status
 	var status orchestrator.HealthStatus
 	switch pluginHealth.Status {
@@ -70,7 +71,7 @@ func (a *PluginComponentAdapter) Health() orchestrator.ComponentHealth {
 	default:
 		status = orchestrator.HealthStatusUnknown
 	}
-	
+
 	return orchestrator.ComponentHealth{
 		Status:    status,
 		Message:   pluginHealth.Message,
@@ -92,7 +93,7 @@ func (a *PluginComponentAdapter) SetHealth(status string, message string) {
 	default:
 		healthStatus = plugin.HealthStatusUnknown
 	}
-	
+
 	// Call SetHealth on the plugin's base
 	a.plugin.SetHealth(healthStatus, message)
 }

@@ -1,3 +1,4 @@
+// Package types provides common type definitions for the Blackhole Network
 package types
 
 import (
@@ -24,6 +25,7 @@ type JobID string
 // UserTier represents the economic tier of a user
 type UserTier int
 
+// User tier constants representing different service levels
 const (
 	TierFree UserTier = iota
 	TierNormal
@@ -55,6 +57,7 @@ func (t UserTier) Priority() int {
 // ResourceType represents the type of resource
 type ResourceType string
 
+// Resource type constants
 const (
 	ResourceTypeStorage   ResourceType = "storage"
 	ResourceTypeCompute   ResourceType = "compute"
@@ -65,6 +68,7 @@ const (
 // JobType represents the type of job
 type JobType string
 
+// Job type constants
 const (
 	JobTypeCompute   JobType = "compute"
 	JobTypeTranscode JobType = "transcode"
@@ -75,6 +79,7 @@ const (
 // Status represents a generic status
 type Status string
 
+// Status constants
 const (
 	StatusPending    Status = "pending"
 	StatusInProgress Status = "in_progress"
@@ -86,6 +91,7 @@ const (
 // ByteSize represents a size in bytes with formatting support
 type ByteSize int64
 
+// Byte size constants
 const (
 	B  ByteSize = 1
 	KB ByteSize = 1024
@@ -169,7 +175,7 @@ func (m Metadata) GetInt(key string) (int, bool) {
 	if !ok {
 		return 0, false
 	}
-	
+
 	// Handle different numeric types
 	switch v := val.(type) {
 	case int:

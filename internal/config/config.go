@@ -1,3 +1,4 @@
+// Package config provides configuration management for the Blackhole Network
 package config
 
 import (
@@ -5,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/kelseyhightower/envconfig"
@@ -14,19 +16,19 @@ import (
 type Config struct {
 	// Node configuration
 	Node NodeConfig `json:"node" envconfig:"NODE"`
-	
+
 	// Network configuration
 	Network NetworkConfig `json:"network" envconfig:"NETWORK"`
-	
+
 	// Storage configuration
 	Storage StorageConfig `json:"storage" envconfig:"STORAGE"`
-	
+
 	// Resource limits
 	Resources ResourceConfig `json:"resources" envconfig:"RESOURCES"`
-	
+
 	// API configuration
 	API APIConfig `json:"api" envconfig:"API"`
-	
+
 	// Monitoring configuration
 	Monitoring MonitoringConfig `json:"monitoring" envconfig:"MONITORING"`
 }
@@ -49,12 +51,12 @@ type NetworkConfig struct {
 
 // StorageConfig contains storage settings
 type StorageConfig struct {
-	Path          string `json:"path" envconfig:"PATH" default:"~/.blackhole/storage"`
-	MaxSize       int64  `json:"max_size" envconfig:"MAX_SIZE" default:"536870912000"` // 500GB
-	CacheSize     int64  `json:"cache_size" envconfig:"CACHE_SIZE" default:"1073741824"` // 1GB
-	DataShards    int    `json:"data_shards" envconfig:"DATA_SHARDS" default:"10"`
-	ParityShards  int    `json:"parity_shards" envconfig:"PARITY_SHARDS" default:"4"`
-	ChunkSize     int    `json:"chunk_size" envconfig:"CHUNK_SIZE" default:"1048576"` // 1MB
+	Path         string `json:"path" envconfig:"PATH" default:"~/.blackhole/storage"`
+	MaxSize      int64  `json:"max_size" envconfig:"MAX_SIZE" default:"536870912000"`   // 500GB
+	CacheSize    int64  `json:"cache_size" envconfig:"CACHE_SIZE" default:"1073741824"` // 1GB
+	DataShards   int    `json:"data_shards" envconfig:"DATA_SHARDS" default:"10"`
+	ParityShards int    `json:"parity_shards" envconfig:"PARITY_SHARDS" default:"4"`
+	ChunkSize    int    `json:"chunk_size" envconfig:"CHUNK_SIZE" default:"1048576"` // 1MB
 }
 
 // ResourceConfig contains resource allocation limits
@@ -112,7 +114,11 @@ func Load() (*Config, error) {
 
 	// Load from file if it exists
 	if _, err := os.Stat(configPath); err == nil {
-		data, err := os.ReadFile(configPath)
+		// Validate config path is under expected directory
+		if !isValidConfigPath(configPath) {
+			return nil, fmt.Errorf("invalid config path: %s", configPath)
+		}
+		data, err := os.ReadFile(configPath) // #nosec G304 - path is validated
 		if err != nil {
 			return nil, fmt.Errorf("failed to read config file: %w", err)
 		}
@@ -141,7 +147,7 @@ func Load() (*Config, error) {
 // expandPaths expands ~ in paths to home directory
 func (c *Config) expandPaths() {
 	home, _ := os.UserHomeDir()
-	
+
 	c.Node.IdentityPath = expandPath(c.Node.IdentityPath, home)
 	c.Node.DataPath = expandPath(c.Node.DataPath, home)
 	c.Storage.Path = expandPath(c.Storage.Path, home)
@@ -189,14 +195,44 @@ func (c *Config) Save(path string) error {
 
 	// Create directory if it doesn't exist
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
 	// Write file
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 
 	return nil
+}
+
+// isValidConfigPath validates that the config path is in expected locations
+func isValidConfigPath(path string) bool {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+
+	// Check if path is under home directory
+	home, err := os.UserHomeDir()
+	if err == nil {
+		homeConfig := filepath.Join(home, ".blackhole")
+		if strings.HasPrefix(absPath, homeConfig) {
+			return true
+		}
+	}
+
+	// Check if path is in system config directories
+	systemDirs := []string{
+		"/etc/blackhole",
+		"/usr/local/etc/blackhole",
+	}
+	for _, dir := range systemDirs {
+		if strings.HasPrefix(absPath, dir) {
+			return true
+		}
+	}
+
+	return false
 }
