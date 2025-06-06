@@ -336,10 +336,10 @@ Each package manager handles updates:
    ```bash
    # macOS
    brew upgrade blackhole
-   
+
    # Linux
    sudo apt update && sudo apt upgrade blackhole
-   
+
    # Docker
    docker pull blackholenetwork/blackhole:latest
    ```

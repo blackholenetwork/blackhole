@@ -15,12 +15,12 @@ type NetworkSchemaAwareStoreRequest struct {
 	// Required fields
 	Content     io.Reader `json:"-"`           // File content
 	ContentType string    `json:"content_type"` // MIME type
-	
+
 	// Network-wide use case selection
 	UseCase      string                 `json:"use_case,omitempty"`       // Standard or user-defined use case ID
 	UserMetadata map[string]interface{} `json:"user_metadata,omitempty"`  // User-provided metadata
 	Filename     string                 `json:"filename,omitempty"`       // Original filename for extraction
-	
+
 	// User context
 	OwnerDID     string                      `json:"owner_did"`               // Content owner
 	AppID        string                      `json:"app_id,omitempty"`        // App identifier for user-defined use cases
@@ -32,18 +32,18 @@ type NetworkSchemaAwareStoreResult struct {
 	// Storage result
 	ContentCID ContentCID `json:"content_cid"`  // Content identifier
 	Size       int64      `json:"size"`         // File size
-	
+
 	// Schema processing result
 	MetadataContainer *schema.MetadataContainer `json:"metadata"`      // Rich metadata
 	SchemaUsed        schema.SchemaID           `json:"schema_used"`   // Schema that was applied
 	QualityScore      float64                   `json:"quality_score"` // Metadata quality
 	CompletenessScore float64                   `json:"completeness"`  // Metadata completeness
-	
+
 	// Network policy information
 	UseCase        string `json:"use_case"`         // Use case that was applied
 	PolicyApplied  string `json:"policy_applied"`   // Which policy was used
 	IsUserDefined  bool   `json:"is_user_defined"`  // Whether use case is user-defined
-	
+
 	// Processing information
 	AutoDetectedUseCase bool     `json:"auto_detected_use_case"` // Whether use case was auto-detected
 	Suggestions        []string `json:"suggestions,omitempty"`  // Suggestions for improvement
@@ -57,31 +57,31 @@ func (nsis *NetworkSchemaIntegratedService) StoreWithNetworkPolicy(ctx context.C
 		Str("use_case", req.UseCase).
 		Str("app_id", req.AppID).
 		Msg("Starting network schema-integrated storage")
-	
+
 	// Step 1: Read content into memory for processing
 	content, err := io.ReadAll(req.Content)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read content: %w", err)
 	}
-	
+
 	// Step 2: Detect/validate content type
 	if req.ContentType == "" {
 		req.ContentType = nsis.detectContentType(req.Filename, content)
 	}
-	
+
 	// Step 3: Determine use case and get policy
 	useCase, policy, isUserDefined, autoDetected, err := nsis.determineUseCaseAndPolicy(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to determine use case policy: %w", err)
 	}
-	
+
 	nsis.logger.Info().
 		Str("use_case", useCase).
 		Bool("is_user_defined", isUserDefined).
 		Bool("auto_detected", autoDetected).
 		Str("enforcement_level", policy.EnforcementLevel).
 		Msg("Use case policy determined")
-	
+
 	// Step 4: Check if schema is required and determine appropriate schema
 	schemaID := nsis.determineSchema(req, policy)
 	if schemaID == "" {
@@ -90,13 +90,13 @@ func (nsis *NetworkSchemaIntegratedService) StoreWithNetworkPolicy(ctx context.C
 		}
 		schemaID = schema.SchemaID("generic/v1")
 	}
-	
+
 	// Step 5: Extract metadata from multiple sources
 	extractionResult := nsis.extractNetworkMetadata(req.ContentType, content, req.Filename, policy)
-	
+
 	// Step 6: Merge user-provided metadata with auto-extracted metadata
 	finalMetadata, autoExtracted := nsis.mergeMetadata(extractionResult.ExtractedData, req.UserMetadata, policy)
-	
+
 	// Step 7: Create metadata creation request
 	metadataReq := &schema.CreateMetadataRequest{
 		ContentHash: "", // Will be set after storage
@@ -107,21 +107,21 @@ func (nsis *NetworkSchemaIntegratedService) StoreWithNetworkPolicy(ctx context.C
 		Content:     content,
 		ContentType: req.ContentType,
 	}
-	
+
 	// Step 8: Store content in underlying storage
 	contentReader := strings.NewReader(string(content))
 	contentCID, err := nsis.storage.Store(ctx, contentReader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to store content: %w", err)
 	}
-	
+
 	// Step 9: Update metadata with content hash and create metadata container
 	metadataReq.ContentHash = string(contentCID)
 	metadataContainer, err := nsis.schemaService.CreateMetadata(ctx, metadataReq)
 	if err != nil {
 		// Storage succeeded but metadata creation failed - create minimal container
 		nsis.logger.Warn().Err(err).Str("cid", string(contentCID)).Msg("Content stored but metadata creation failed")
-		
+
 		metadataContainer = &schema.MetadataContainer{
 			ContentHash:       string(contentCID),
 			SchemaID:          schemaID,
@@ -133,11 +133,11 @@ func (nsis *NetworkSchemaIntegratedService) StoreWithNetworkPolicy(ctx context.C
 			AutoExtracted:     autoExtracted,
 		}
 	}
-	
+
 	// Step 10: Quality validation based on policy
 	if err := nsis.validateQualityWithPolicy(metadataContainer, policy); err != nil {
 		nsis.logger.Warn().Err(err).Float64("quality", metadataContainer.QualityScore).Msg("Quality check failed")
-		
+
 		// Handle quality failure based on enforcement level
 		if policy.EnforcementLevel == "strict" {
 			// Delete the stored content and return error
@@ -146,26 +146,26 @@ func (nsis *NetworkSchemaIntegratedService) StoreWithNetworkPolicy(ctx context.C
 		}
 		// For "moderate" and "lenient", just log warning and continue
 	}
-	
+
 	// Step 11: Get storage info for response
 	storageInfo, err := nsis.storage.GetContentInfo(ctx, contentCID)
 	if err != nil {
 		nsis.logger.Warn().Err(err).Msg("Failed to get content info")
 	}
-	
+
 	var size int64
 	if storageInfo.Size > 0 {
 		size = int64(storageInfo.Size)
 	}
-	
+
 	// Step 12: Generate suggestions based on policy and quality
 	suggestions := nsis.generatePolicySuggestions(metadataContainer, policy, useCase, isUserDefined)
-	
+
 	// Step 13: Record use case usage if user-defined
 	if isUserDefined {
 		nsis.recordUserUseCaseUsage(useCase, req.AppID)
 	}
-	
+
 	// Step 14: Return comprehensive result
 	result := &NetworkSchemaAwareStoreResult{
 		ContentCID:          contentCID,
@@ -180,7 +180,7 @@ func (nsis *NetworkSchemaIntegratedService) StoreWithNetworkPolicy(ctx context.C
 		AutoDetectedUseCase: autoDetected,
 		Suggestions:        suggestions,
 	}
-	
+
 	nsis.logger.Info().
 		Str("cid", string(contentCID)).
 		Str("schema", string(schemaID)).
@@ -188,7 +188,7 @@ func (nsis *NetworkSchemaIntegratedService) StoreWithNetworkPolicy(ctx context.C
 		Float64("quality", result.QualityScore).
 		Bool("is_user_defined", isUserDefined).
 		Msg("Network schema-integrated storage completed")
-	
+
 	return result, nil
 }
 
@@ -196,32 +196,32 @@ func (nsis *NetworkSchemaIntegratedService) StoreWithNetworkPolicy(ctx context.C
 func (nsis *NetworkSchemaIntegratedService) determineUseCaseAndPolicy(req *NetworkSchemaAwareStoreRequest) (string, *SchemaPolicy, bool, bool, error) {
 	// Ensure policy is loaded before proceeding
 	nsis.ensurePolicyLoaded()
-	
+
 	nsis.policyMutex.RLock()
 	defer nsis.policyMutex.RUnlock()
-	
+
 	var useCase string
 	var autoDetected bool
-	
+
 	// 1. Use explicitly specified use case
 	if req.UseCase != "" {
 		useCase = req.UseCase
-		
+
 		// Check if it's a standard use case
 		if policy, exists := nsis.networkPolicy.StandardUseCases[useCase]; exists {
 			return useCase, &policy, false, false, nil
 		}
-		
+
 		// Check if it's a user-defined use case
 		if userUseCase, exists := nsis.getUserDefinedUseCase(useCase); exists {
 			if userUseCase.IsActive && (userUseCase.AppIdentifier == req.AppID || req.AppID == "") {
 				return useCase, &userUseCase.SchemaPolicy, true, false, nil
 			}
 		}
-		
+
 		return "", nil, false, false, fmt.Errorf("use case '%s' not found or not accessible", useCase)
 	}
-	
+
 	// 2. Auto-detect based on content type mapping
 	for contentPattern, mappedUseCase := range nsis.networkPolicy.ContentTypeMapping {
 		if nsis.matchesContentType(req.ContentType, contentPattern) {
@@ -230,18 +230,18 @@ func (nsis *NetworkSchemaIntegratedService) determineUseCaseAndPolicy(req *Netwo
 			break
 		}
 	}
-	
+
 	// 3. Fall back to network default
 	if useCase == "" {
 		useCase = nsis.networkPolicy.NetworkDefaults.DefaultUseCase
 		autoDetected = true
 	}
-	
+
 	// Get the policy for the determined use case
 	if policy, exists := nsis.networkPolicy.StandardUseCases[useCase]; exists {
 		return useCase, &policy, false, autoDetected, nil
 	}
-	
+
 	return "", nil, false, false, fmt.Errorf("default use case '%s' not found in standard use cases", useCase)
 }
 
@@ -255,7 +255,7 @@ func (nsis *NetworkSchemaIntegratedService) determineSchema(req *NetworkSchemaAw
 			}
 		}
 	}
-	
+
 	// Use recommended schemas from policy
 	if len(policy.RecommendedSchemas) > 0 {
 		// Pick the first recommended schema that matches content type
@@ -267,7 +267,7 @@ func (nsis *NetworkSchemaIntegratedService) determineSchema(req *NetworkSchemaAw
 		// If none match exactly, use the first recommended schema
 		return schema.SchemaID(policy.RecommendedSchemas[0])
 	}
-	
+
 	// Fall back to content type-based suggestion
 	return nsis.suggestSchemaFromContentType(req.ContentType)
 }
@@ -277,13 +277,13 @@ func (nsis *NetworkSchemaIntegratedService) requiresSchema(contentType string, p
 	if policy.RequireSchemaForAllFiles {
 		return true
 	}
-	
+
 	for _, required := range policy.RequiredContentTypes {
 		if nsis.matchesContentType(contentType, required) {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
@@ -294,18 +294,18 @@ func (nsis *NetworkSchemaIntegratedService) extractNetworkMetadata(contentType s
 		ExtractedData: nsis.extractBasicMetadata(contentType, content),
 		Confidence:    make(map[string]float64),
 	}
-	
+
 	// Set confidence for basic extracted fields
 	for field := range extractionResult.ExtractedData {
 		extractionResult.Confidence[field] = 0.8
 	}
-	
+
 	// Enhanced extraction based on policy auto-classification
 	if policy.AutoClassification {
 		// Add content classification metadata
 		extractionResult.ExtractedData["content_classification"] = nsis.classifyContent(contentType, content)
 		extractionResult.Confidence["content_classification"] = 0.9
-		
+
 		// Add use case specific metadata
 		useCaseMetadata := nsis.extractUseCaseSpecificMetadata(contentType, content, policy)
 		for field, value := range useCaseMetadata {
@@ -313,7 +313,7 @@ func (nsis *NetworkSchemaIntegratedService) extractNetworkMetadata(contentType s
 			extractionResult.Confidence[field] = 0.7
 		}
 	}
-	
+
 	// Extract metadata from filename if provided
 	if filename != "" {
 		filenameMetadata := nsis.extractMetadataFromFilename(filename)
@@ -324,7 +324,7 @@ func (nsis *NetworkSchemaIntegratedService) extractNetworkMetadata(contentType s
 			}
 		}
 	}
-	
+
 	return extractionResult
 }
 
@@ -332,13 +332,13 @@ func (nsis *NetworkSchemaIntegratedService) extractNetworkMetadata(contentType s
 func (nsis *NetworkSchemaIntegratedService) mergeMetadata(autoExtracted map[string]interface{}, userMetadata map[string]interface{}, policy *SchemaPolicy) (map[string]interface{}, map[string]bool) {
 	finalMetadata := make(map[string]interface{})
 	autoExtractedFlags := make(map[string]bool)
-	
+
 	// Start with auto-extracted data
 	for field, value := range autoExtracted {
 		finalMetadata[field] = value
 		autoExtractedFlags[field] = true
 	}
-	
+
 	// Override with user-provided data if policy allows
 	if policy.AllowUserMetadataOverride && userMetadata != nil {
 		for field, value := range userMetadata {
@@ -346,7 +346,7 @@ func (nsis *NetworkSchemaIntegratedService) mergeMetadata(autoExtracted map[stri
 			autoExtractedFlags[field] = false // User provided
 		}
 	}
-	
+
 	return finalMetadata, autoExtractedFlags
 }
 
@@ -364,37 +364,37 @@ func (nsis *NetworkSchemaIntegratedService) validateQualityWithPolicy(metadata *
 // generatePolicySuggestions generates improvement suggestions based on policy
 func (nsis *NetworkSchemaIntegratedService) generatePolicySuggestions(metadata *schema.MetadataContainer, policy *SchemaPolicy, useCase string, isUserDefined bool) []string {
 	var suggestions []string
-	
+
 	// Policy-specific suggestions
 	if metadata.QualityScore < policy.MinQualityScore {
-		suggestions = append(suggestions, fmt.Sprintf("Quality score %.2f is below %s policy requirement of %.2f", 
+		suggestions = append(suggestions, fmt.Sprintf("Quality score %.2f is below %s policy requirement of %.2f",
 			metadata.QualityScore, policy.Name, policy.MinQualityScore))
 	}
-	
+
 	if metadata.CompletenessScore < policy.MinCompletenessScore {
-		suggestions = append(suggestions, fmt.Sprintf("Completeness score %.2f is below %s policy requirement of %.2f", 
+		suggestions = append(suggestions, fmt.Sprintf("Completeness score %.2f is below %s policy requirement of %.2f",
 			metadata.CompletenessScore, policy.Name, policy.MinCompletenessScore))
 	}
-	
+
 	// Field-specific suggestions
 	if _, hasTitle := metadata.Data["title"]; !hasTitle {
 		suggestions = append(suggestions, "Add a title to improve discoverability")
 	}
-	
+
 	if _, hasTags := metadata.Data["tags"]; !hasTags && policy.AutoClassification {
 		suggestions = append(suggestions, "Add tags to improve content classification")
 	}
-	
+
 	// Use case specific suggestions
 	if isUserDefined {
 		suggestions = append(suggestions, fmt.Sprintf("Using custom use case '%s' - consider if a standard use case would be more appropriate", useCase))
 	}
-	
+
 	// Policy improvement suggestions
 	if policy.EnforcementLevel == "lenient" && metadata.QualityScore > 0.7 {
 		suggestions = append(suggestions, "Content quality is high - consider using a stricter use case for better validation")
 	}
-	
+
 	return suggestions
 }
 
@@ -402,7 +402,7 @@ func (nsis *NetworkSchemaIntegratedService) generatePolicySuggestions(metadata *
 func (nsis *NetworkSchemaIntegratedService) getUserDefinedUseCase(useCaseID string) (*UserDefinedUseCase, bool) {
 	nsis.cacheMutex.RLock()
 	defer nsis.cacheMutex.RUnlock()
-	
+
 	useCase, exists := nsis.userUseCaseCache[useCaseID]
 	return useCase, exists
 }
@@ -413,11 +413,11 @@ func (nsis *NetworkSchemaIntegratedService) recordUserUseCaseUsage(useCaseID, ap
 		// Update usage statistics in background
 		nsis.cacheMutex.Lock()
 		defer nsis.cacheMutex.Unlock()
-		
+
 		if useCase, exists := nsis.userUseCaseCache[useCaseID]; exists {
 			useCase.UsageCount++
 			useCase.LastUsed = time.Now()
-			
+
 			// Save back to VFS
 			nsis.saveUserDefinedUseCase(useCaseID, useCase)
 		}
@@ -484,12 +484,11 @@ func (nsis *NetworkSchemaIntegratedService) classifyContent(contentType string, 
 
 func (nsis *NetworkSchemaIntegratedService) extractUseCaseSpecificMetadata(contentType string, content []byte, policy *SchemaPolicy) map[string]interface{} {
 	metadata := make(map[string]interface{})
-	
+
 	// Add use case specific metadata based on policy
 	metadata["use_case_type"] = policy.Name
 	metadata["enforcement_level"] = policy.EnforcementLevel
 	metadata["extraction_timestamp"] = time.Now().Format(time.RFC3339)
-	
+
 	return metadata
 }
-

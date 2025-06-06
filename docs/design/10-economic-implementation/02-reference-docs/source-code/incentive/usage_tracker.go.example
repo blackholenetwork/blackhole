@@ -15,17 +15,17 @@ type UsageTracker struct {
 	logger        zerolog.Logger
 	config        *Config
 	pool          *SubscriptionPool
-	
+
 	// Usage tracking by operation type
 	storageUsage     map[string][]*StorageContribution  // providerID -> contributions
 	bandwidthUsage   map[string][]*BandwidthContribution // providerID -> contributions
 	computeUsage     map[string][]*ComputeContribution   // providerID -> contributions
 	contentUsage     map[string][]*ContentContribution   // creatorID -> contributions
 	networkOpsUsage  map[string][]*NetworkOpsContribution // providerID -> contributions
-	
+
 	// Billing cycle aggregation
 	cycleAggregates  map[string]*CycleAggregate // cycleID -> aggregate
-	
+
 	started          bool
 	stopChan         chan struct{}
 	wg               sync.WaitGroup
@@ -115,19 +115,19 @@ func NewUsageTracker(config *Config, pool *SubscriptionPool, logger zerolog.Logg
 func (ut *UsageTracker) Start(ctx context.Context) error {
 	ut.mu.Lock()
 	defer ut.mu.Unlock()
-	
+
 	if ut.started {
 		return fmt.Errorf("usage tracker already started")
 	}
-	
+
 	ut.logger.Info().Msg("Starting usage tracker")
-	
+
 	ut.started = true
-	
+
 	// Start background aggregation worker
 	ut.wg.Add(1)
 	go ut.aggregationWorker(ctx)
-	
+
 	return nil
 }
 
@@ -135,16 +135,16 @@ func (ut *UsageTracker) Start(ctx context.Context) error {
 func (ut *UsageTracker) Stop(ctx context.Context) error {
 	ut.mu.Lock()
 	defer ut.mu.Unlock()
-	
+
 	if !ut.started {
 		return nil
 	}
-	
+
 	ut.logger.Info().Msg("Stopping usage tracker")
-	
+
 	close(ut.stopChan)
 	ut.wg.Wait()
-	
+
 	ut.started = false
 	return nil
 }
@@ -157,12 +157,12 @@ func (ut *UsageTracker) TrackStorageOperation(providerID, operation string, data
 		// Free operations like "exists", "hash" are not tracked for payments
 		return nil
 	}
-	
+
 	ut.mu.Lock()
 	defer ut.mu.Unlock()
-	
+
 	storageHours := float64(dataSize) / (1024 * 1024 * 1024) * duration.Hours() // GB-hours
-	
+
 	contribution := &StorageContribution{
 		ProviderID:      providerID,
 		Operation:       operation,
@@ -173,16 +173,16 @@ func (ut *UsageTracker) TrackStorageOperation(providerID, operation string, data
 		UserID:          userID,
 		ChargableToUser: isChargeable,
 	}
-	
+
 	ut.storageUsage[providerID] = append(ut.storageUsage[providerID], contribution)
-	
+
 	ut.logger.Debug().
 		Str("provider_id", providerID).
 		Str("operation", operation).
 		Float64("storage_hours", storageHours).
 		Bool("chargeable", isChargeable).
 		Msg("Storage operation tracked")
-	
+
 	return nil
 }
 
@@ -206,10 +206,10 @@ func (ut *UsageTracker) TrackBandwidthOperation(providerID, operation string, by
 		// Free operations like DHT lookups are not tracked
 		return nil
 	}
-	
+
 	ut.mu.Lock()
 	defer ut.mu.Unlock()
-	
+
 	contribution := &BandwidthContribution{
 		ProviderID:       providerID,
 		Operation:        operation,
@@ -219,16 +219,16 @@ func (ut *UsageTracker) TrackBandwidthOperation(providerID, operation string, by
 		UserID:           userID,
 		ChargableToUser:  isChargeable,
 	}
-	
+
 	ut.bandwidthUsage[providerID] = append(ut.bandwidthUsage[providerID], contribution)
-	
+
 	ut.logger.Debug().
 		Str("provider_id", providerID).
 		Str("operation", operation).
 		Int64("bytes", bytesTransferred).
 		Bool("chargeable", isChargeable).
 		Msg("Bandwidth operation tracked")
-	
+
 	return nil
 }
 
@@ -251,10 +251,10 @@ func (ut *UsageTracker) TrackComputeOperation(providerID, operation, jobID, user
 	if !ut.isChargeableComputeOp(operation) && !isChargeable {
 		return nil
 	}
-	
+
 	ut.mu.Lock()
 	defer ut.mu.Unlock()
-	
+
 	contribution := &ComputeContribution{
 		ProviderID:      providerID,
 		Operation:       operation,
@@ -266,16 +266,16 @@ func (ut *UsageTracker) TrackComputeOperation(providerID, operation, jobID, user
 		UserID:          userID,
 		ChargableToUser: isChargeable,
 	}
-	
+
 	ut.computeUsage[providerID] = append(ut.computeUsage[providerID], contribution)
-	
+
 	ut.logger.Debug().
 		Str("provider_id", providerID).
 		Str("operation", operation).
 		Float64("cpu_hours", cpuHours).
 		Bool("chargeable", isChargeable).
 		Msg("Compute operation tracked")
-	
+
 	return nil
 }
 
@@ -297,25 +297,25 @@ func (ut *UsageTracker) isChargeableComputeOp(operation string) bool {
 func (ut *UsageTracker) TrackContentContribution(creatorID, contentID, contentType string, viewCount int64, dataTransferred int64, engagementScore, qualityScore float64) error {
 	ut.mu.Lock()
 	defer ut.mu.Unlock()
-	
+
 	// Calculate content points based on config weights
 	viewPoints := float64(viewCount) * ut.config.ContentCreator.ViewWeight
 	engagementPoints := engagementScore * ut.config.ContentCreator.EngagementWeight
 	qualityMultiplier := 1.0 + (qualityScore * ut.config.ContentCreator.QualityWeight)
-	
+
 	// Apply quality bonus for high quality content
 	if qualityScore > 0.8 { // 80% quality threshold
 		qualityMultiplier *= ut.config.ContentCreator.QualityBonus
 	}
-	
+
 	contentPoints := (viewPoints + engagementPoints) * qualityMultiplier
-	
+
 	// Get current cycle
 	cycle := ut.pool.GetCurrentCycle()
 	if cycle == nil {
 		return fmt.Errorf("no active billing cycle")
 	}
-	
+
 	contribution := &ContentContribution{
 		CreatorID:       creatorID,
 		ContentID:       contentID,
@@ -328,9 +328,9 @@ func (ut *UsageTracker) TrackContentContribution(creatorID, contentID, contentTy
 		BillingCycleID:  cycle.ID,
 		Timestamp:       time.Now(),
 	}
-	
+
 	ut.contentUsage[creatorID] = append(ut.contentUsage[creatorID], contribution)
-	
+
 	ut.logger.Debug().
 		Str("creator_id", creatorID).
 		Str("content_id", contentID).
@@ -339,7 +339,7 @@ func (ut *UsageTracker) TrackContentContribution(creatorID, contentID, contentTy
 		Float64("quality", qualityScore).
 		Float64("content_points", contentPoints).
 		Msg("Content contribution tracked")
-	
+
 	return nil
 }
 
@@ -353,7 +353,7 @@ func (ut *UsageTracker) TrackContentView(creatorID, contentID string, dataConsum
 		Int64("data_consumed", dataConsumed).
 		Str("engagement_type", engagementType).
 		Msg("Content view tracked")
-	
+
 	return nil
 }
 
@@ -363,7 +363,7 @@ func (ut *UsageTracker) TrackContentView(creatorID, contentID string, dataConsum
 func (ut *UsageTracker) TrackNetworkOperation(providerID, operation, operationType, userID string, computeUnits float64, isChargeable bool) error {
 	ut.mu.Lock()
 	defer ut.mu.Unlock()
-	
+
 	contribution := &NetworkOpsContribution{
 		ProviderID:      providerID,
 		Operation:       operation,
@@ -373,9 +373,9 @@ func (ut *UsageTracker) TrackNetworkOperation(providerID, operation, operationTy
 		UserID:          userID,
 		ChargableToUser: isChargeable,
 	}
-	
+
 	ut.networkOpsUsage[providerID] = append(ut.networkOpsUsage[providerID], contribution)
-	
+
 	ut.logger.Debug().
 		Str("provider_id", providerID).
 		Str("operation", operation).
@@ -383,17 +383,17 @@ func (ut *UsageTracker) TrackNetworkOperation(providerID, operation, operationTy
 		Float64("compute_units", computeUnits).
 		Bool("chargeable", isChargeable).
 		Msg("Network operation tracked")
-	
+
 	return nil
 }
 
 // aggregationWorker periodically aggregates usage data for billing cycles
 func (ut *UsageTracker) aggregationWorker(ctx context.Context) {
 	defer ut.wg.Done()
-	
+
 	ticker := time.NewTicker(10 * time.Minute) // Aggregate every 10 minutes
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -412,10 +412,10 @@ func (ut *UsageTracker) aggregateCurrentCycle() {
 	if cycle == nil {
 		return
 	}
-	
+
 	ut.mu.Lock()
 	defer ut.mu.Unlock()
-	
+
 	aggregate := ut.cycleAggregates[cycle.ID]
 	if aggregate == nil {
 		aggregate = &CycleAggregate{
@@ -428,7 +428,7 @@ func (ut *UsageTracker) aggregateCurrentCycle() {
 		}
 		ut.cycleAggregates[cycle.ID] = aggregate
 	}
-	
+
 	// Reset totals for fresh calculation
 	for k := range aggregate.StorageTotals {
 		delete(aggregate.StorageTotals, k)
@@ -445,7 +445,7 @@ func (ut *UsageTracker) aggregateCurrentCycle() {
 	for k := range aggregate.NetworkOpsTotals {
 		delete(aggregate.NetworkOpsTotals, k)
 	}
-	
+
 	// Aggregate storage contributions for current cycle
 	for providerID, contributions := range ut.storageUsage {
 		var total float64
@@ -458,7 +458,7 @@ func (ut *UsageTracker) aggregateCurrentCycle() {
 			aggregate.StorageTotals[providerID] = total
 		}
 	}
-	
+
 	// Aggregate bandwidth contributions
 	for providerID, contributions := range ut.bandwidthUsage {
 		var total float64
@@ -471,7 +471,7 @@ func (ut *UsageTracker) aggregateCurrentCycle() {
 			aggregate.BandwidthTotals[providerID] = total
 		}
 	}
-	
+
 	// Aggregate compute contributions
 	for providerID, contributions := range ut.computeUsage {
 		var total float64
@@ -485,14 +485,14 @@ func (ut *UsageTracker) aggregateCurrentCycle() {
 			aggregate.ComputeTotals[providerID] = total
 		}
 	}
-	
+
 	// Aggregate content contributions
 	for creatorID, contributions := range ut.contentUsage {
 		var total float64
 		for _, contrib := range contributions {
 			if contrib.Timestamp.After(cycle.StartDate) && contrib.Timestamp.Before(cycle.EndDate) {
 				// Only count if meets minimum thresholds
-				if contrib.ViewCount >= ut.config.ContentCreator.MinViews && 
+				if contrib.ViewCount >= ut.config.ContentCreator.MinViews &&
 				   contrib.EngagementScore >= ut.config.ContentCreator.MinEngagement {
 					total += contrib.ContentPoints
 				}
@@ -502,8 +502,8 @@ func (ut *UsageTracker) aggregateCurrentCycle() {
 			aggregate.ContentTotals[creatorID] = total
 		}
 	}
-	
-	// Aggregate network ops contributions  
+
+	// Aggregate network ops contributions
 	for providerID, contributions := range ut.networkOpsUsage {
 		var total float64
 		for _, contrib := range contributions {
@@ -515,9 +515,9 @@ func (ut *UsageTracker) aggregateCurrentCycle() {
 			aggregate.NetworkOpsTotals[providerID] = total
 		}
 	}
-	
+
 	aggregate.LastUpdated = time.Now()
-	
+
 	ut.logger.Debug().
 		Str("cycle_id", cycle.ID).
 		Int("storage_providers", len(aggregate.StorageTotals)).
@@ -532,12 +532,12 @@ func (ut *UsageTracker) aggregateCurrentCycle() {
 func (ut *UsageTracker) GetCycleAggregate(cycleID string) *CycleAggregate {
 	ut.mu.RLock()
 	defer ut.mu.RUnlock()
-	
+
 	aggregate := ut.cycleAggregates[cycleID]
 	if aggregate == nil {
 		return nil
 	}
-	
+
 	// Return a copy
 	copy := *aggregate
 	copy.StorageTotals = make(map[string]float64)
@@ -545,7 +545,7 @@ func (ut *UsageTracker) GetCycleAggregate(cycleID string) *CycleAggregate {
 	copy.ComputeTotals = make(map[string]float64)
 	copy.ContentTotals = make(map[string]float64)
 	copy.NetworkOpsTotals = make(map[string]float64)
-	
+
 	for k, v := range aggregate.StorageTotals {
 		copy.StorageTotals[k] = v
 	}
@@ -561,6 +561,6 @@ func (ut *UsageTracker) GetCycleAggregate(cycleID string) *CycleAggregate {
 	for k, v := range aggregate.NetworkOpsTotals {
 		copy.NetworkOpsTotals[k] = v
 	}
-	
+
 	return &copy
 }

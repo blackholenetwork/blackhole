@@ -119,7 +119,7 @@ if hourly_access > 10 * daily_average:
     # Immediate response
     new_parity = current_parity + 3
     distribute_urgently(new_parity_chunks)
-    
+
     # Schedule review in 24 hours
     schedule_redundancy_review(file_hash, "24h")
 ```
@@ -130,7 +130,7 @@ if hourly_access > 10 * daily_average:
 if is_scheduled_pattern(access_history):
     # Boost before business hours
     schedule_daily_boost(file_hash, "08:00", boost=2)
-    
+
     # Reduce after hours
     schedule_daily_reduction(file_hash, "18:00", reduce=2)
 ```
@@ -141,7 +141,7 @@ if is_scheduled_pattern(access_history):
 if is_seasonal_pattern(access_history):
     # Boost one month before expected access
     schedule_seasonal_boost(file_hash, date="Nov 1", boost=5)
-    
+
     # Reduce after season
     schedule_seasonal_reduction(file_hash, date="Jan 15", reduce=3)
 ```
@@ -196,15 +196,15 @@ kpis:
   storage_efficiency:
     target: 50% reduction in cold storage costs
     measure: tokens_spent_on_cold_files / total_storage_cost
-    
+
   availability:
     target: 99.9% for hot files, 99% for warm, 95% for cold
     measure: successful_reads / total_read_attempts
-    
+
   repair_traffic:
     target: 70% reduction
     measure: repair_bandwidth / total_bandwidth
-    
+
   user_satisfaction:
     target: <100ms retrieval for hot files
     measure: p99_latency_by_file_temperature

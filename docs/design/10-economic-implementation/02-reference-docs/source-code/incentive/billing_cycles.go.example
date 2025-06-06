@@ -19,17 +19,17 @@ type BillingCycleManager struct {
 	persistence *EconomicPersistenceLayer
 	logger      zerolog.Logger
 	mu          sync.RWMutex
-	
+
 	// Current active cycle
 	activeCycle     *BillingCycle
 	cycleStartTimer *time.Timer
 	cycleEndTimer   *time.Timer
-	
+
 	// Configuration
 	cycleDuration   time.Duration // Default: 30 days
 	autoGenerate    bool          // Auto-generate monthly cycles
 	nodeID          string
-	
+
 	// Aggregation state
 	aggregationInProgress bool
 	lastAggregation       time.Time
@@ -50,7 +50,7 @@ func NewBillingCycleManager(persistence *EconomicPersistenceLayer, nodeID string
 func (bcm *BillingCycleManager) StartBillingCycle(ctx context.Context, startDate time.Time) (*BillingCycle, error) {
 	bcm.mu.Lock()
 	defer bcm.mu.Unlock()
-	
+
 	// End current cycle if active
 	if bcm.activeCycle != nil && bcm.activeCycle.Status == CycleStatusActive {
 		if _, err := bcm.endCurrentCycle(ctx); err != nil {
@@ -60,11 +60,11 @@ func (bcm *BillingCycleManager) StartBillingCycle(ctx context.Context, startDate
 				Msg("Failed to end current cycle before starting new one")
 		}
 	}
-	
+
 	// Create new cycle
 	endDate := startDate.Add(bcm.cycleDuration)
 	cycleID := fmt.Sprintf("cycle_%s_%d", startDate.Format("2006_01"), startDate.Unix())
-	
+
 	cycle := &BillingCycle{
 		ID:              cycleID,
 		StartDate:       startDate,
@@ -75,25 +75,25 @@ func (bcm *BillingCycleManager) StartBillingCycle(ctx context.Context, startDate
 		FreeTierSubsidy: 0.0,
 		CreatedAt:       time.Now(),
 	}
-	
+
 	bcm.activeCycle = cycle
-	
+
 	// Store cycle information
 	if err := bcm.storeBillingCycle(ctx, cycle); err != nil {
 		return nil, fmt.Errorf("failed to store new billing cycle: %w", err)
 	}
-	
+
 	// Set up timers for automatic cycle management
 	if bcm.autoGenerate {
 		bcm.setupCycleTimers()
 	}
-	
+
 	bcm.logger.Info().
 		Str("cycle_id", cycle.ID).
 		Time("start_date", cycle.StartDate).
 		Time("end_date", cycle.EndDate).
 		Msg("New billing cycle started")
-	
+
 	return cycle, nil
 }
 
@@ -101,11 +101,11 @@ func (bcm *BillingCycleManager) StartBillingCycle(ctx context.Context, startDate
 func (bcm *BillingCycleManager) EndBillingCycle(ctx context.Context) (*CycleAggregateRecord, error) {
 	bcm.mu.Lock()
 	defer bcm.mu.Unlock()
-	
+
 	if bcm.activeCycle == nil {
 		return nil, fmt.Errorf("no active billing cycle to end")
 	}
-	
+
 	return bcm.endCurrentCycle(ctx)
 }
 
@@ -114,15 +114,15 @@ func (bcm *BillingCycleManager) endCurrentCycle(ctx context.Context) (*CycleAggr
 	if bcm.activeCycle == nil {
 		return nil, fmt.Errorf("no active cycle")
 	}
-	
+
 	bcm.logger.Info().
 		Str("cycle_id", bcm.activeCycle.ID).
 		Msg("Ending billing cycle and starting aggregation")
-	
+
 	// Update cycle status
 	bcm.activeCycle.Status = CycleStatusCalculating
 	bcm.activeCycle.CompletedAt = timePtr(time.Now())
-	
+
 	// Store updated cycle
 	if err := bcm.storeBillingCycle(ctx, bcm.activeCycle); err != nil {
 		bcm.logger.Error().
@@ -130,7 +130,7 @@ func (bcm *BillingCycleManager) endCurrentCycle(ctx context.Context) (*CycleAggr
 			Str("cycle_id", bcm.activeCycle.ID).
 			Msg("Failed to update cycle status")
 	}
-	
+
 	// Aggregate billing data for the cycle
 	aggregate, err := bcm.aggregateCycleData(ctx, bcm.activeCycle)
 	if err != nil {
@@ -138,13 +138,13 @@ func (bcm *BillingCycleManager) endCurrentCycle(ctx context.Context) (*CycleAggr
 		bcm.storeBillingCycle(ctx, bcm.activeCycle)
 		return nil, fmt.Errorf("failed to aggregate cycle data: %w", err)
 	}
-	
+
 	// Update cycle status to completed
 	bcm.activeCycle.Status = CycleStatusCompleted
 	bcm.activeCycle.TotalPoolAmount = aggregate.TotalPoolAmount
 	bcm.activeCycle.DistributedAmount = aggregate.DistributedAmount
 	bcm.activeCycle.FreeTierSubsidy = aggregate.FreeTierSubsidy
-	
+
 	// Store final cycle state
 	if err := bcm.storeBillingCycle(ctx, bcm.activeCycle); err != nil {
 		bcm.logger.Error().
@@ -152,7 +152,7 @@ func (bcm *BillingCycleManager) endCurrentCycle(ctx context.Context) (*CycleAggr
 			Str("cycle_id", bcm.activeCycle.ID).
 			Msg("Failed to store final cycle state")
 	}
-	
+
 	// Store cycle aggregate
 	if err := bcm.storeCycleAggregate(ctx, aggregate); err != nil {
 		bcm.logger.Error().
@@ -160,18 +160,18 @@ func (bcm *BillingCycleManager) endCurrentCycle(ctx context.Context) (*CycleAggr
 			Str("cycle_id", aggregate.CycleID).
 			Msg("Failed to store cycle aggregate")
 	}
-	
+
 	bcm.logger.Info().
 		Str("cycle_id", bcm.activeCycle.ID).
 		Float64("total_pool", aggregate.TotalPoolAmount).
 		Float64("distributed", aggregate.DistributedAmount).
 		Int64("event_count", aggregate.EventCount).
 		Msg("Billing cycle completed successfully")
-	
+
 	// Clear active cycle
 	completedCycle := bcm.activeCycle
 	bcm.activeCycle = nil
-	
+
 	// Auto-start next cycle if enabled
 	if bcm.autoGenerate {
 		nextStartDate := completedCycle.EndDate
@@ -182,7 +182,7 @@ func (bcm *BillingCycleManager) endCurrentCycle(ctx context.Context) (*CycleAggr
 				Msg("Failed to auto-start next billing cycle")
 		}
 	}
-	
+
 	return aggregate, nil
 }
 
@@ -190,7 +190,7 @@ func (bcm *BillingCycleManager) endCurrentCycle(ctx context.Context) (*CycleAggr
 func (bcm *BillingCycleManager) aggregateCycleData(ctx context.Context, cycle *BillingCycle) (*CycleAggregateRecord, error) {
 	bcm.aggregationInProgress = true
 	defer func() { bcm.aggregationInProgress = false }()
-	
+
 	// Query all billing events for this cycle
 	filter := BillingEventFilter{
 		BillingCycleID: cycle.ID,
@@ -200,17 +200,17 @@ func (bcm *BillingCycleManager) aggregateCycleData(ctx context.Context, cycle *B
 		SortBy:         "date",
 		SortOrder:      "asc",
 	}
-	
+
 	events, err := bcm.persistence.QueryBillingEvents(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query billing events: %w", err)
 	}
-	
+
 	bcm.logger.Info().
 		Str("cycle_id", cycle.ID).
 		Int("event_count", len(events)).
 		Msg("Aggregating billing events for cycle")
-	
+
 	// Initialize aggregation data
 	aggregate := &CycleAggregateRecord{
 		CycleID:           cycle.ID,
@@ -226,12 +226,12 @@ func (bcm *BillingCycleManager) aggregateCycleData(ctx context.Context, cycle *B
 		CompletedAt:       cycle.CompletedAt,
 		LastUpdated:       time.Now(),
 	}
-	
+
 	// Aggregate by provider
 	for _, event := range events {
 		// Update total pool amount
 		aggregate.TotalPoolAmount += event.TotalCost
-		
+
 		// Get or create provider totals
 		providerTotals, exists := aggregate.ProviderTotals[event.ProviderID]
 		if !exists {
@@ -250,7 +250,7 @@ func (bcm *BillingCycleManager) aggregateCycleData(ctx context.Context, cycle *B
 			}
 			aggregate.ProviderTotals[event.ProviderID] = providerTotals
 		}
-		
+
 		// Aggregate by resource type
 		switch event.ResourceType {
 		case "storage":
@@ -266,7 +266,7 @@ func (bcm *BillingCycleManager) aggregateCycleData(ctx context.Context, cycle *B
 				gbAmount := event.Amount / (1024 * 1024 * 1024)
 				providerTotals.StorageGBHours += gbAmount
 			}
-			
+
 		case "bandwidth":
 			if event.Unit == "gb" {
 				providerTotals.BandwidthGB += event.Amount
@@ -275,44 +275,44 @@ func (bcm *BillingCycleManager) aggregateCycleData(ctx context.Context, cycle *B
 				gbAmount := event.Amount / (1024 * 1024 * 1024)
 				providerTotals.BandwidthGB += gbAmount
 			}
-			
+
 		case "compute":
 			if event.Unit == "cpu_hours" {
 				providerTotals.ComputeCPUHours += event.Amount
 			} else if event.Unit == "gpu_hours" {
 				providerTotals.ComputeGPUHours += event.Amount
 			}
-			
+
 		case "memory":
 			if event.Unit == "gb" || event.Unit == "gb_hours" {
 				providerTotals.MemoryGBHours += event.Amount
 			}
 		}
-		
+
 		// Track reward (simplified - actual reward calculation would be more complex)
 		providerTotals.TotalReward += event.TotalCost
 		providerTotals.RewardBreakdown[event.ResourceType] += event.TotalCost
-		
+
 		// Count events by resource type
 		providerTotals.EventCounts[event.ResourceType]++
 	}
-	
+
 	// Calculate total distributed amount
 	for _, providerTotals := range aggregate.ProviderTotals {
 		aggregate.DistributedAmount += providerTotals.TotalReward
-		
+
 		// Generate verification hash for provider totals
 		providerTotals.VerificationHash = bcm.generateProviderTotalsHash(providerTotals)
 	}
-	
+
 	// Calculate free tier subsidy (simplified)
 	aggregate.FreeTierSubsidy = aggregate.TotalPoolAmount * 0.1 // 10% for free tier
-	
+
 	// Generate aggregate hash for integrity
 	aggregate.AggregateHash = bcm.generateAggregateHash(aggregate)
-	
+
 	bcm.lastAggregation = time.Now()
-	
+
 	return aggregate, nil
 }
 
@@ -320,7 +320,7 @@ func (bcm *BillingCycleManager) aggregateCycleData(ctx context.Context, cycle *B
 func (bcm *BillingCycleManager) GetCurrentCycle() *BillingCycle {
 	bcm.mu.RLock()
 	defer bcm.mu.RUnlock()
-	
+
 	return bcm.activeCycle
 }
 
@@ -328,36 +328,36 @@ func (bcm *BillingCycleManager) GetCurrentCycle() *BillingCycle {
 func (bcm *BillingCycleManager) GetCycleAggregates(ctx context.Context, cycleID string) (*CycleAggregateRecord, error) {
 	// Try to read from VFS storage
 	aggregatePath := filepath.Join(bcm.persistence.cycleAggregatesPath, fmt.Sprintf("%s.json", cycleID))
-	
+
 	data, err := bcm.persistence.vfs.ReadFile(ctx, aggregatePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read cycle aggregate: %w", err)
 	}
-	
+
 	var aggregate CycleAggregateRecord
 	if err := json.Unmarshal(data, &aggregate); err != nil {
 		return nil, fmt.Errorf("failed to parse cycle aggregate: %w", err)
 	}
-	
+
 	return &aggregate, nil
 }
 
 // ListBillingCycles lists all billing cycles
 func (bcm *BillingCycleManager) ListBillingCycles(ctx context.Context) ([]*BillingCycle, error) {
 	cycles := make([]*BillingCycle, 0)
-	
+
 	// List files in the cycles directory
 	cyclesPath := filepath.Join(bcm.persistence.cycleAggregatesPath, "../cycles/")
 	files, err := bcm.persistence.vfs.ListDir(ctx, cyclesPath)
 	if err != nil {
 		return cycles, nil // Return empty list if directory doesn't exist
 	}
-	
+
 	for _, file := range files {
 		if !strings.HasSuffix(file.Path, ".json") {
 			continue
 		}
-		
+
 		data, err := bcm.persistence.vfs.ReadFile(ctx, file.Path)
 		if err != nil {
 			bcm.logger.Warn().
@@ -366,7 +366,7 @@ func (bcm *BillingCycleManager) ListBillingCycles(ctx context.Context) ([]*Billi
 				Msg("Failed to read billing cycle file")
 			continue
 		}
-		
+
 		var cycle BillingCycle
 		if err := json.Unmarshal(data, &cycle); err != nil {
 			bcm.logger.Warn().
@@ -375,10 +375,10 @@ func (bcm *BillingCycleManager) ListBillingCycles(ctx context.Context) ([]*Billi
 				Msg("Failed to parse billing cycle")
 			continue
 		}
-		
+
 		cycles = append(cycles, &cycle)
 	}
-	
+
 	return cycles, nil
 }
 
@@ -388,7 +388,7 @@ func (bcm *BillingCycleManager) setupCycleTimers() {
 	if bcm.activeCycle == nil {
 		return
 	}
-	
+
 	// Set timer to automatically end the cycle
 	timeUntilEnd := time.Until(bcm.activeCycle.EndDate)
 	if timeUntilEnd > 0 {
@@ -409,7 +409,7 @@ func (bcm *BillingCycleManager) storeBillingCycle(ctx context.Context, cycle *Bi
 	if err != nil {
 		return fmt.Errorf("failed to marshal billing cycle: %w", err)
 	}
-	
+
 	metadata := map[string]string{
 		"cycle_id":     cycle.ID,
 		"status":       string(cycle.Status),
@@ -419,14 +419,14 @@ func (bcm *BillingCycleManager) storeBillingCycle(ctx context.Context, cycle *Bi
 		"node_id":      bcm.nodeID,
 		"compliance":   "regulatory",
 	}
-	
+
 	if cycle.CompletedAt != nil {
 		metadata["completed_at"] = cycle.CompletedAt.Format(time.RFC3339)
 	}
-	
+
 	// Store in cycles directory
 	cyclePath := filepath.Join(bcm.persistence.cycleAggregatesPath, "../cycles/", fmt.Sprintf("%s.json", cycle.ID))
-	
+
 	return bcm.persistence.vfs.WriteFile(ctx, cyclePath, data, metadata)
 }
 
@@ -435,7 +435,7 @@ func (bcm *BillingCycleManager) storeCycleAggregate(ctx context.Context, aggrega
 	if err != nil {
 		return fmt.Errorf("failed to marshal cycle aggregate: %w", err)
 	}
-	
+
 	metadata := map[string]string{
 		"cycle_id":           aggregate.CycleID,
 		"status":             aggregate.Status,
@@ -449,13 +449,13 @@ func (bcm *BillingCycleManager) storeCycleAggregate(ctx context.Context, aggrega
 		"node_id":            bcm.nodeID,
 		"compliance":         "regulatory",
 	}
-	
+
 	if aggregate.CompletedAt != nil {
 		metadata["completed_at"] = aggregate.CompletedAt.Format(time.RFC3339)
 	}
-	
+
 	aggregatePath := filepath.Join(bcm.persistence.cycleAggregatesPath, fmt.Sprintf("%s.json", aggregate.CycleID))
-	
+
 	return bcm.persistence.vfs.WriteFile(ctx, aggregatePath, data, metadata)
 }
 
@@ -471,7 +471,7 @@ func (bcm *BillingCycleManager) generateProviderTotalsHash(totals *ProviderCycle
 		totals.NetworkOpsUnits,
 		totals.TotalReward,
 	)
-	
+
 	hash := sha256.Sum256([]byte(hashData))
 	return hex.EncodeToString(hash[:])
 }
@@ -486,7 +486,7 @@ func (bcm *BillingCycleManager) generateAggregateHash(aggregate *CycleAggregateR
 		aggregate.FreeTierSubsidy,
 		aggregate.LastUpdated.Format(time.RFC3339Nano),
 	)
-	
+
 	hash := sha256.Sum256([]byte(hashData))
 	return hex.EncodeToString(hash[:])
 }

@@ -28,20 +28,20 @@ func (pvfs *PrivateVFS) GetDeletionPlan(ctx context.Context, path string, option
 	if err := validateDeletionOptions(options); err != nil {
 		return nil, fmt.Errorf("invalid deletion options: %w", err)
 	}
-	
+
 	// Normalize path
 	path = pvfs.normalizePath(path)
-	
+
 	// Validate path and permissions
 	if err := pvfs.validateDeletionPath(ctx, path); err != nil {
 		return nil, fmt.Errorf("invalid deletion path: %w", err)
 	}
-	
+
 	// Check base permissions
 	if err := pvfs.checkWritePermission(ctx, path); err != nil {
 		return nil, fmt.Errorf("permission denied: %w", err)
 	}
-	
+
 	plan := &DeletionPlan{
 		RootPath:         path,
 		Items:           make([]DeletionItem, 0),
@@ -49,12 +49,12 @@ func (pvfs *PrivateVFS) GetDeletionPlan(ctx context.Context, path string, option
 		CreatedAt:       time.Now(),
 		ConfirmationCode: generateConfirmationCode(),
 	}
-	
+
 	// Start scanning from the root path
 	if err := pvfs.scanForDeletion(ctx, path, 0, options, plan); err != nil {
 		return nil, fmt.Errorf("failed to scan deletion targets: %w", err)
 	}
-	
+
 	// Sort items by depth (deepest first for proper deletion order)
 	sort.Slice(plan.Items, func(i, j int) bool {
 		if plan.Items[i].Depth != plan.Items[j].Depth {
@@ -62,10 +62,10 @@ func (pvfs *PrivateVFS) GetDeletionPlan(ctx context.Context, path string, option
 		}
 		return plan.Items[i].Path > plan.Items[j].Path // Alphabetical within same depth
 	})
-	
+
 	// Calculate totals and warnings
 	pvfs.finalizeDeletionPlan(plan, options)
-	
+
 	return plan, nil
 }
 
@@ -82,7 +82,7 @@ func (pvfs *PrivateVFS) scanForDeletion(ctx context.Context, path string, depth 
 			return fmt.Errorf("maximum depth exceeded (%d) at path: %s (use Force=true to skip or increase MaxDepth)", options.MaxDepth, path)
 		}
 	}
-	
+
 	// Check item limit - return error for critical violations
 	if len(plan.Items) >= options.MaxItems {
 		if options.Force {
@@ -94,7 +94,7 @@ func (pvfs *PrivateVFS) scanForDeletion(ctx context.Context, path string, depth 
 			return fmt.Errorf("maximum items limit reached (%d) (use Force=true to proceed with partial deletion or increase MaxItems)", options.MaxItems)
 		}
 	}
-	
+
 	// Check if it's a file or directory
 	if strings.HasSuffix(path, "/") {
 		// It's a directory
@@ -113,13 +113,13 @@ func (pvfs *PrivateVFS) scanFileForDeletion(ctx context.Context, filePath string
 		plan.Warnings = append(plan.Warnings, fmt.Sprintf("Cannot access file: %s (%v)", filePath, err))
 		return nil
 	}
-	
+
 	// Check permissions
 	if err := pvfs.checkWritePermission(ctx, filePath); err != nil {
 		plan.Warnings = append(plan.Warnings, fmt.Sprintf("No delete permission: %s", filePath))
 		return nil
 	}
-	
+
 	// Add to deletion plan
 	item := DeletionItem{
 		Path:         filePath,
@@ -131,15 +131,15 @@ func (pvfs *PrivateVFS) scanFileForDeletion(ctx context.Context, filePath string
 		Depth:        depth,
 		Permissions:  "write",
 	}
-	
+
 	plan.Items = append(plan.Items, item)
 	plan.TotalFiles++
 	plan.TotalSize += fileInfo.Size
-	
+
 	if depth > plan.MaxDepth {
 		plan.MaxDepth = depth
 	}
-	
+
 	return nil
 }
 
@@ -150,14 +150,14 @@ func (pvfs *PrivateVFS) scanDirectoryForDeletion(ctx context.Context, dirPath st
 		plan.Warnings = append(plan.Warnings, fmt.Sprintf("No delete permission for directory: %s", dirPath))
 		return nil
 	}
-	
+
 	// List directory contents
 	entries, err := pvfs.ListDirectoryInNamespace(ctx, dirPath)
 	if err != nil {
 		plan.Warnings = append(plan.Warnings, fmt.Sprintf("Cannot list directory: %s (%v)", dirPath, err))
 		return nil
 	}
-	
+
 	// Create directory item
 	dirItem := DeletionItem{
 		Path:        dirPath,
@@ -167,7 +167,7 @@ func (pvfs *PrivateVFS) scanDirectoryForDeletion(ctx context.Context, dirPath st
 		HasChildren: len(entries) > 0,
 		Permissions: "write",
 	}
-	
+
 	// If recursive deletion is enabled, scan children
 	if options.Recursive && len(entries) > 0 {
 		for _, entry := range entries {
@@ -180,15 +180,15 @@ func (pvfs *PrivateVFS) scanDirectoryForDeletion(ctx context.Context, dirPath st
 		plan.Warnings = append(plan.Warnings, fmt.Sprintf("Directory not empty (use recursive): %s", dirPath))
 		return nil
 	}
-	
+
 	// Add directory to plan (after children for proper deletion order)
 	plan.Items = append(plan.Items, dirItem)
 	plan.TotalDirectories++
-	
+
 	if depth > plan.MaxDepth {
 		plan.MaxDepth = depth
 	}
-	
+
 	return nil
 }
 
@@ -199,19 +199,19 @@ func (pvfs *PrivateVFS) finalizeDeletionPlan(plan *DeletionPlan, options Deletio
 	if totalItems > 0 {
 		plan.EstimatedDuration = time.Duration(totalItems/100+1) * time.Second
 	}
-	
+
 	// Determine if confirmation is required
 	plan.RequiresConfirmation = shouldRequireConfirmation(plan, options)
-	
+
 	// Add warnings for large operations
 	if plan.TotalFiles > 1000 {
 		plan.Warnings = append(plan.Warnings, fmt.Sprintf("Large deletion: %d files", plan.TotalFiles))
 	}
-	
+
 	if plan.TotalSize > 1024*1024*1024 { // 1GB
 		plan.Warnings = append(plan.Warnings, fmt.Sprintf("Large deletion: %.2f GB", float64(plan.TotalSize)/1024/1024/1024))
 	}
-	
+
 	if plan.MaxDepth > 20 {
 		plan.Warnings = append(plan.Warnings, fmt.Sprintf("Deep directory structure: %d levels", plan.MaxDepth))
 	}
@@ -222,14 +222,14 @@ func shouldRequireConfirmation(plan *DeletionPlan, options DeletionOptions) bool
 	if options.Force {
 		return false
 	}
-	
+
 	// Require confirmation for:
 	// - More than 10 files
 	// - Any recursive deletion
 	// - Large size deletions
 	// - Protected paths
-	return plan.TotalFiles > 10 || 
-		   plan.TotalDirectories > 1 || 
+	return plan.TotalFiles > 10 ||
+		   plan.TotalDirectories > 1 ||
 		   plan.TotalSize > 10*1024*1024 || // 10MB
 		   isProtectedPath(plan.RootPath)
 }
@@ -242,20 +242,20 @@ func (pvfs *PrivateVFS) ExecuteDeletionPlan(ctx context.Context, plan *DeletionP
 			return nil, fmt.Errorf("invalid confirmation code")
 		}
 	}
-	
+
 	// Check plan age (plans expire after 1 hour for safety)
 	if time.Since(plan.CreatedAt) > time.Hour {
 		return nil, fmt.Errorf("deletion plan expired, please create a new plan")
 	}
-	
+
 	result := &DeletionResult{
 		Success:     true,
 		Errors:      make([]DeletionError, 0),
 		ContentCleaned: make([]string, 0),
 	}
-	
+
 	startTime := time.Now()
-	
+
 	// Create backup if requested
 	if options.BackupBeforeDelete {
 		backupLocation, err := pvfs.createDeletionBackup(ctx, plan)
@@ -266,7 +266,7 @@ func (pvfs *PrivateVFS) ExecuteDeletionPlan(ctx context.Context, plan *DeletionP
 			result.BackupLocation = backupLocation
 		}
 	}
-	
+
 	// Execute deletion in order (deepest first)
 	for i, item := range plan.Items {
 		if options.ProgressCallback != nil {
@@ -282,13 +282,13 @@ func (pvfs *PrivateVFS) ExecuteDeletionPlan(ctx context.Context, plan *DeletionP
 			}
 			options.ProgressCallback(progress)
 		}
-		
+
 		// Skip if dry run
 		if options.DryRun {
 			pvfs.logger.Info().Str("path", item.Path).Msg("DRY RUN: Would delete")
 			continue
 		}
-		
+
 		// Perform the actual deletion
 		if err := pvfs.deleteItem(ctx, item); err != nil {
 			result.Success = false
@@ -300,7 +300,7 @@ func (pvfs *PrivateVFS) ExecuteDeletionPlan(ctx context.Context, plan *DeletionP
 			})
 			continue
 		}
-		
+
 		// Update statistics
 		if item.Type == "file" {
 			result.DeletedFiles++
@@ -309,7 +309,7 @@ func (pvfs *PrivateVFS) ExecuteDeletionPlan(ctx context.Context, plan *DeletionP
 			result.DeletedDirs++
 		}
 	}
-	
+
 	// Cleanup unreferenced content if requested
 	if options.CleanupContent && !options.DryRun {
 		cleanedCIDs, err := pvfs.cleanupUnreferencedContent(ctx, plan)
@@ -319,9 +319,9 @@ func (pvfs *PrivateVFS) ExecuteDeletionPlan(ctx context.Context, plan *DeletionP
 			result.ContentCleaned = cleanedCIDs
 		}
 	}
-	
+
 	result.Duration = time.Since(startTime)
-	
+
 	pvfs.logger.Info().
 		Str("root_path", plan.RootPath).
 		Int("deleted_files", result.DeletedFiles).
@@ -330,7 +330,7 @@ func (pvfs *PrivateVFS) ExecuteDeletionPlan(ctx context.Context, plan *DeletionP
 		Int("errors", len(result.Errors)).
 		Dur("duration", result.Duration).
 		Msg("Deletion operation completed")
-	
+
 	return result, nil
 }
 
@@ -338,13 +338,13 @@ func (pvfs *PrivateVFS) ExecuteDeletionPlan(ctx context.Context, plan *DeletionP
 func (pvfs *PrivateVFS) DeleteRecursive(ctx context.Context, path string, options DeletionOptions) (*DeletionResult, error) {
 	// Note: options.Recursive is set by the caller, not forced here
 	// This allows both single file deletion (Recursive=false) and recursive directory deletion (Recursive=true)
-	
+
 	// Create deletion plan
 	plan, err := pvfs.GetDeletionPlan(ctx, path, options)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create deletion plan: %w", err)
 	}
-	
+
 	// Execute the plan
 	return pvfs.ExecuteDeletionPlan(ctx, plan, plan.ConfirmationCode, options)
 }
@@ -360,7 +360,7 @@ func validateDeletionOptions(options DeletionOptions) error {
 	if options.MaxDepth > 1000 {
 		return fmt.Errorf("MaxDepth too large (max 1000): %d", options.MaxDepth)
 	}
-	
+
 	// Check MaxItems limits
 	if options.MaxItems < 0 {
 		return fmt.Errorf("MaxItems cannot be negative: %d", options.MaxItems)
@@ -368,7 +368,7 @@ func validateDeletionOptions(options DeletionOptions) error {
 	if options.MaxItems > 100000 {
 		return fmt.Errorf("MaxItems too large (max 100,000): %d", options.MaxItems)
 	}
-	
+
 	// Check for problematic zero values that could cause silent failures
 	if options.MaxDepth == 0 {
 		return fmt.Errorf("MaxDepth cannot be zero (use DefaultDeletionOptions() for safe defaults)")
@@ -376,7 +376,7 @@ func validateDeletionOptions(options DeletionOptions) error {
 	if options.MaxItems == 0 {
 		return fmt.Errorf("MaxItems cannot be zero (use DefaultDeletionOptions() for safe defaults)")
 	}
-	
+
 	return nil
 }
 
@@ -385,19 +385,19 @@ func (pvfs *PrivateVFS) validateDeletionPath(ctx context.Context, path string) e
 	if path == "/" {
 		return fmt.Errorf("cannot delete root directory")
 	}
-	
+
 	// Prevent deletion of critical system paths
 	protectedPaths := []string{
 		"/system/",
 		"/governance/",
 	}
-	
+
 	for _, protected := range protectedPaths {
 		if strings.HasPrefix(path, protected) {
 			return fmt.Errorf("cannot delete protected system path: %s", path)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -410,7 +410,7 @@ func (pvfs *PrivateVFS) deleteItem(ctx context.Context, item DeletionItem) error
 		// Delete directory metadata
 		parentDir := filepath.Dir(strings.TrimSuffix(item.Path, "/")) + "/"
 		dirName := filepath.Base(strings.TrimSuffix(item.Path, "/"))
-		
+
 		// Remove from parent directory metadata
 		if parentDir != "./" && parentDir != "/" {
 			dirMetadata, err := pvfs.loadDirectoryMetadata(ctx, parentDir)
@@ -422,10 +422,10 @@ func (pvfs *PrivateVFS) deleteItem(ctx context.Context, item DeletionItem) error
 				}
 			}
 		}
-		
+
 		// Delete the directory metadata file itself
 		metadataPath := item.Path + ".vfs_directory.json"
-		
+
 		// Get the content hash of the directory metadata file and delete it
 		if fileInfo, err := pvfs.Stat(ctx, metadataPath); err == nil {
 			// Delete the metadata content from storage
@@ -435,7 +435,7 @@ func (pvfs *PrivateVFS) deleteItem(ctx context.Context, item DeletionItem) error
 				}
 			}
 		}
-		
+
 		return nil
 	}
 }
@@ -444,30 +444,30 @@ func (pvfs *PrivateVFS) deleteItem(ctx context.Context, item DeletionItem) error
 func (pvfs *PrivateVFS) createDeletionBackup(ctx context.Context, plan *DeletionPlan) (string, error) {
 	// Create backup location
 	timestamp := time.Now().Format("2006-01-02-15-04-05")
-	backupPath := fmt.Sprintf("/system/backups/deletion_%s_%s.backup", 
+	backupPath := fmt.Sprintf("/system/backups/deletion_%s_%s.backup",
 		strings.ReplaceAll(plan.RootPath, "/", "_"), timestamp)
-	
+
 	// TODO: Implement backup creation
 	// This would involve creating a compressed archive of all files/directories in the plan
-	
+
 	return backupPath, nil
 }
 
 // cleanupUnreferencedContent removes CIDs that are no longer referenced
 func (pvfs *PrivateVFS) cleanupUnreferencedContent(ctx context.Context, plan *DeletionPlan) ([]string, error) {
 	cleanedCIDs := make([]string, 0)
-	
+
 	// Note: Content cleanup is now handled directly in deleteItem() method
 	// Each file and directory metadata content is deleted immediately when the item is deleted
 	// This ensures content is removed from storage, not just from VFS metadata
-	
+
 	// Future enhancement could implement reference counting for shared content:
 	// 1. Check if any other paths/users reference the same CIDs
 	// 2. Only delete CIDs that have no remaining references
 	// 3. Implement content deduplication aware cleanup
-	
+
 	pvfs.logger.Debug().Msg("Content cleanup handled directly during deletion - no additional cleanup needed")
-	
+
 	return cleanedCIDs, nil
 }
 
@@ -483,12 +483,12 @@ func isProtectedPath(path string) bool {
 		"/system/",
 		"/governance/",
 	}
-	
+
 	for _, prefix := range protectedPrefixes {
 		if strings.HasPrefix(path, prefix) {
 			return true
 		}
 	}
-	
+
 	return false
 }

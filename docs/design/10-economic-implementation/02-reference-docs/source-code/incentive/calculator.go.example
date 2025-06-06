@@ -17,13 +17,13 @@ type RewardCalculator struct {
 	config   *Config
 	pool     *SubscriptionPool
 	tracker  *UsageTracker
-	
+
 	// Market pricing model
 	marketPricing *MarketPricingModel
-	
+
 	// Calculation results
 	calculations map[string]*RewardCalculation // cycleID -> calculation
-	
+
 	// Processing state
 	processing   map[string]bool // cycleID -> isProcessing
 }
@@ -35,7 +35,7 @@ func NewRewardCalculator(config *Config, pool *SubscriptionPool, tracker *UsageT
 		BaseRates: config.MarketRates,
 		Config:    config.MarketPricing,
 	}
-	
+
 	return &RewardCalculator{
 		logger:        logger.With().Str("component", "reward_calculator").Logger(),
 		config:        config,
@@ -51,45 +51,45 @@ func NewRewardCalculator(config *Config, pool *SubscriptionPool, tracker *UsageT
 func (rc *RewardCalculator) CalculateRewards(ctx context.Context, cycleID string) (*RewardCalculation, error) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
-	
+
 	// Check if already processing
 	if rc.processing[cycleID] {
 		return nil, fmt.Errorf("calculation already in progress for cycle: %s", cycleID)
 	}
-	
+
 	// Check if already calculated
 	if existing := rc.calculations[cycleID]; existing != nil {
 		return existing, nil
 	}
-	
+
 	rc.processing[cycleID] = true
 	defer func() {
 		rc.processing[cycleID] = false
 	}()
-	
+
 	rc.logger.Info().
 		Str("cycle_id", cycleID).
 		Msg("Starting reward calculation")
-	
+
 	// Get cycle aggregate data
 	aggregate := rc.tracker.GetCycleAggregate(cycleID)
 	if aggregate == nil {
 		return nil, fmt.Errorf("no usage data found for cycle: %s", cycleID)
 	}
-	
+
 	// Get total pool amount (will be implemented via pool.GetCyclePool(cycleID))
 	totalPool := rc.pool.GetPoolAmount() // For now, use current pool
-	
+
 	if totalPool <= 0 {
 		return nil, fmt.Errorf("no subscription pool funds for cycle: %s", cycleID)
 	}
-	
+
 	// Calculate network totals
 	networkContribution := rc.calculateNetworkTotals(aggregate)
-	
+
 	// Calculate individual provider rewards
 	providerRewards := rc.calculateProviderRewards(totalPool, networkContribution, aggregate)
-	
+
 	// Create calculation result
 	calculation := &RewardCalculation{
 		BillingCycleID:      cycleID,
@@ -100,15 +100,15 @@ func (rc *RewardCalculator) CalculateRewards(ctx context.Context, cycleID string
 		CalculatedAt:        time.Now(),
 		Status:              CalculationCompleted,
 	}
-	
+
 	rc.calculations[cycleID] = calculation
-	
+
 	rc.logger.Info().
 		Str("cycle_id", cycleID).
 		Float64("total_pool", totalPool).
 		Int("provider_count", len(providerRewards)).
 		Msg("Reward calculation completed")
-	
+
 	return calculation, nil
 }
 
@@ -120,7 +120,7 @@ func (rc *RewardCalculator) calculateNetworkTotals(aggregate *CycleAggregate) *N
 		ProviderCount:  make(map[ResourceType]int),
 		LastUpdated:    time.Now(),
 	}
-	
+
 	// Calculate storage totals
 	var storageTotal float64
 	storageProviders := 0
@@ -132,7 +132,7 @@ func (rc *RewardCalculator) calculateNetworkTotals(aggregate *CycleAggregate) *N
 	}
 	networkContrib.Totals[ResourceStorage] = storageTotal
 	networkContrib.ProviderCount[ResourceStorage] = storageProviders
-	
+
 	// Calculate bandwidth totals
 	var bandwidthTotal float64
 	bandwidthProviders := 0
@@ -144,7 +144,7 @@ func (rc *RewardCalculator) calculateNetworkTotals(aggregate *CycleAggregate) *N
 	}
 	networkContrib.Totals[ResourceBandwidth] = bandwidthTotal
 	networkContrib.ProviderCount[ResourceBandwidth] = bandwidthProviders
-	
+
 	// Calculate compute totals
 	var computeTotal float64
 	computeProviders := 0
@@ -156,7 +156,7 @@ func (rc *RewardCalculator) calculateNetworkTotals(aggregate *CycleAggregate) *N
 	}
 	networkContrib.Totals[ResourceCompute] = computeTotal
 	networkContrib.ProviderCount[ResourceCompute] = computeProviders
-	
+
 	// Calculate content totals
 	var contentTotal float64
 	contentCreators := 0
@@ -168,7 +168,7 @@ func (rc *RewardCalculator) calculateNetworkTotals(aggregate *CycleAggregate) *N
 	}
 	networkContrib.Totals[ResourceContent] = contentTotal
 	networkContrib.ProviderCount[ResourceContent] = contentCreators
-	
+
 	// Calculate network ops totals
 	var networkOpsTotal float64
 	networkOpsProviders := 0
@@ -180,7 +180,7 @@ func (rc *RewardCalculator) calculateNetworkTotals(aggregate *CycleAggregate) *N
 	}
 	networkContrib.Totals[ResourceNetworkOps] = networkOpsTotal
 	networkContrib.ProviderCount[ResourceNetworkOps] = networkOpsProviders
-	
+
 	rc.logger.Debug().
 		Float64("storage_total", storageTotal).
 		Float64("bandwidth_total", bandwidthTotal).
@@ -193,37 +193,37 @@ func (rc *RewardCalculator) calculateNetworkTotals(aggregate *CycleAggregate) *N
 		Int("content_creators", contentCreators).
 		Int("network_ops_providers", networkOpsProviders).
 		Msg("Network totals calculated")
-	
+
 	return networkContrib
 }
 
 // calculateProviderRewards calculates individual provider rewards using market-based pricing
 func (rc *RewardCalculator) calculateProviderRewards(totalPool float64, networkContrib *NetworkContribution, aggregate *CycleAggregate) []ProviderReward {
 	var rewards []ProviderReward
-	
+
 	// Get all unique providers
 	providers := rc.getAllProviders(aggregate)
-	
+
 	// Convert aggregate data to provider contributions for market pricing
 	providerContributions := rc.convertToProviderContributions(aggregate, providers)
-	
+
 	// Calculate infrastructure pool (29% of total, content creators get 70%, network ops get 1%)
 	infrastructurePool := totalPool * rc.config.MarketPricing.InfrastructurePercentage
-	
+
 	// Use market pricing model to calculate rewards
 	marketRewards := rc.marketPricing.CalculateProviderRewards(infrastructurePool, providerContributions)
-	
+
 	rc.logger.Debug().
 		Float64("infrastructure_pool", infrastructurePool).
 		Int("provider_count", len(marketRewards)).
 		Msg("Market-based rewards calculated")
-	
+
 	// Convert market rewards to ProviderReward format
 	for providerID, rewardAmount := range marketRewards {
 		if rewardAmount >= rc.config.Payment.MinPayoutAmount {
 			// Get provider's contribution details for breakdown
 			contribution := providerContributions[providerID]
-			
+
 			reward := ProviderReward{
 				ProviderID:     providerID,
 				BillingCycleID: aggregate.CycleID,
@@ -232,7 +232,7 @@ func (rc *RewardCalculator) calculateProviderRewards(totalPool float64, networkC
 				CalculatedAt:   time.Now(),
 				Status:         RewardPending,
 			}
-			
+
 			rewards = append(rewards, reward)
 		} else {
 			rc.logger.Debug().
@@ -242,7 +242,7 @@ func (rc *RewardCalculator) calculateProviderRewards(totalPool float64, networkC
 				Msg("Provider reward below minimum payout threshold")
 		}
 	}
-	
+
 	return rewards
 }
 
@@ -253,7 +253,7 @@ func (rc *RewardCalculator) calculateSingleProviderReward(
 	networkContrib *NetworkContribution,
 	storagePool, bandwidthPool, computePool, contentPool, networkOpsPool float64,
 ) ProviderReward {
-	
+
 	reward := ProviderReward{
 		ProviderID:      providerID,
 		BillingCycleID:  aggregate.CycleID,
@@ -263,75 +263,75 @@ func (rc *RewardCalculator) calculateSingleProviderReward(
 		CalculatedAt:    time.Now(),
 		Status:          RewardPending,
 	}
-	
+
 	// Calculate storage reward
 	if storageContrib := aggregate.StorageTotals[providerID]; storageContrib >= rc.config.MinContribution.Storage {
 		if networkTotal := networkContrib.Totals[ResourceStorage]; networkTotal > 0 {
 			sharePercentage := storageContrib / networkTotal
 			storageReward := storagePool * sharePercentage
-			
+
 			reward.Breakdown[ResourceStorage] = storageReward
 			reward.Contributions[ResourceStorage] = storageContrib
 			reward.SharePercentage[ResourceStorage] = sharePercentage
 			reward.TotalReward += storageReward
 		}
 	}
-	
+
 	// Calculate bandwidth reward
 	if bandwidthContrib := aggregate.BandwidthTotals[providerID]; bandwidthContrib >= rc.config.MinContribution.Bandwidth {
 		if networkTotal := networkContrib.Totals[ResourceBandwidth]; networkTotal > 0 {
 			sharePercentage := bandwidthContrib / networkTotal
 			bandwidthReward := bandwidthPool * sharePercentage
-			
+
 			reward.Breakdown[ResourceBandwidth] = bandwidthReward
 			reward.Contributions[ResourceBandwidth] = bandwidthContrib
 			reward.SharePercentage[ResourceBandwidth] = sharePercentage
 			reward.TotalReward += bandwidthReward
 		}
 	}
-	
+
 	// Calculate compute reward
 	if computeContrib := aggregate.ComputeTotals[providerID]; computeContrib >= rc.config.MinContribution.Compute {
 		if networkTotal := networkContrib.Totals[ResourceCompute]; networkTotal > 0 {
 			sharePercentage := computeContrib / networkTotal
 			computeReward := computePool * sharePercentage
-			
+
 			reward.Breakdown[ResourceCompute] = computeReward
 			reward.Contributions[ResourceCompute] = computeContrib
 			reward.SharePercentage[ResourceCompute] = sharePercentage
 			reward.TotalReward += computeReward
 		}
 	}
-	
+
 	// Calculate content reward (for content creators)
 	if contentContrib := aggregate.ContentTotals[providerID]; contentContrib >= rc.config.MinContribution.Content {
 		if networkTotal := networkContrib.Totals[ResourceContent]; networkTotal > 0 {
 			sharePercentage := contentContrib / networkTotal
 			contentReward := contentPool * sharePercentage
-			
+
 			reward.Breakdown[ResourceContent] = contentReward
 			reward.Contributions[ResourceContent] = contentContrib
 			reward.SharePercentage[ResourceContent] = sharePercentage
 			reward.TotalReward += contentReward
 		}
 	}
-	
+
 	// Calculate network ops reward
 	if networkOpsContrib := aggregate.NetworkOpsTotals[providerID]; networkOpsContrib >= rc.config.MinContribution.NetworkOps {
 		if networkTotal := networkContrib.Totals[ResourceNetworkOps]; networkTotal > 0 {
 			sharePercentage := networkOpsContrib / networkTotal
 			networkOpsReward := networkOpsPool * sharePercentage
-			
+
 			reward.Breakdown[ResourceNetworkOps] = networkOpsReward
 			reward.Contributions[ResourceNetworkOps] = networkOpsContrib
 			reward.SharePercentage[ResourceNetworkOps] = sharePercentage
 			reward.TotalReward += networkOpsReward
 		}
 	}
-	
+
 	// Round to 2 decimal places to avoid floating point issues
 	reward.TotalReward = math.Round(reward.TotalReward*100) / 100
-	
+
 	rc.logger.Debug().
 		Str("provider_id", providerID).
 		Float64("total_reward", reward.TotalReward).
@@ -341,14 +341,14 @@ func (rc *RewardCalculator) calculateSingleProviderReward(
 		Float64("content_reward", reward.Breakdown[ResourceContent]).
 		Float64("network_ops_reward", reward.Breakdown[ResourceNetworkOps]).
 		Msg("Provider reward calculated")
-	
+
 	return reward
 }
 
 // getAllProviders gets all unique provider IDs from the aggregate (includes content creators)
 func (rc *RewardCalculator) getAllProviders(aggregate *CycleAggregate) []string {
 	providers := make(map[string]bool)
-	
+
 	for providerID := range aggregate.StorageTotals {
 		providers[providerID] = true
 	}
@@ -364,12 +364,12 @@ func (rc *RewardCalculator) getAllProviders(aggregate *CycleAggregate) []string 
 	for providerID := range aggregate.NetworkOpsTotals {
 		providers[providerID] = true
 	}
-	
+
 	var result []string
 	for providerID := range providers {
 		result = append(result, providerID)
 	}
-	
+
 	return result
 }
 
@@ -377,17 +377,17 @@ func (rc *RewardCalculator) getAllProviders(aggregate *CycleAggregate) []string 
 func (rc *RewardCalculator) GetCalculation(cycleID string) (*RewardCalculation, error) {
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()
-	
+
 	calculation := rc.calculations[cycleID]
 	if calculation == nil {
 		return nil, fmt.Errorf("calculation not found for cycle: %s", cycleID)
 	}
-	
+
 	// Return a copy to prevent external modification
 	calc := *calculation
 	calc.ProviderRewards = make([]ProviderReward, len(calculation.ProviderRewards))
 	copy(calc.ProviderRewards, calculation.ProviderRewards)
-	
+
 	return &calc, nil
 }
 
@@ -397,7 +397,7 @@ func (rc *RewardCalculator) GetProviderReward(cycleID, providerID string) (*Prov
 	if err != nil {
 		return nil, err
 	}
-	
+
 	for _, reward := range calculation.ProviderRewards {
 		if reward.ProviderID == providerID {
 			// Return a copy
@@ -405,7 +405,7 @@ func (rc *RewardCalculator) GetProviderReward(cycleID, providerID string) (*Prov
 			r.Breakdown = make(map[ResourceType]float64)
 			r.Contributions = make(map[ResourceType]float64)
 			r.SharePercentage = make(map[ResourceType]float64)
-			
+
 			for k, v := range reward.Breakdown {
 				r.Breakdown[k] = v
 			}
@@ -415,11 +415,11 @@ func (rc *RewardCalculator) GetProviderReward(cycleID, providerID string) (*Prov
 			for k, v := range reward.SharePercentage {
 				r.SharePercentage[k] = v
 			}
-			
+
 			return &r, nil
 		}
 	}
-	
+
 	return nil, fmt.Errorf("reward not found for provider %s in cycle %s", providerID, cycleID)
 }
 
@@ -430,39 +430,39 @@ func (rc *RewardCalculator) ValidateCalculation(calculation *RewardCalculation) 
 	for _, reward := range calculation.ProviderRewards {
 		totalDistributed += reward.TotalReward
 	}
-	
+
 	// Allow for content creators and network ops (only 29% goes to infrastructure)
 	maxDistribution := calculation.TotalPool * rc.config.MarketPricing.InfrastructurePercentage
-	
+
 	if totalDistributed > maxDistribution {
 		return fmt.Errorf("total distributed (%f) exceeds maximum allowed (%f)", totalDistributed, maxDistribution)
 	}
-	
+
 	// Validate individual reward percentages
 	for _, reward := range calculation.ProviderRewards {
 		var totalPercentage float64
 		for _, percentage := range reward.SharePercentage {
 			totalPercentage += percentage
 		}
-		
+
 		if totalPercentage > 5.0 { // Each provider can contribute to max 5 resource types (including content)
 			return fmt.Errorf("provider %s has invalid total percentage: %f", reward.ProviderID, totalPercentage)
 		}
 	}
-	
+
 	return nil
 }
 
 // convertToProviderContributions converts aggregate data to ProviderContribution format for market pricing
 func (rc *RewardCalculator) convertToProviderContributions(aggregate *CycleAggregate, providers []string) map[string]ProviderContribution {
 	contributions := make(map[string]ProviderContribution)
-	
+
 	for _, providerID := range providers {
 		contribution := ProviderContribution{
 			ProviderID:     providerID,
 			BillingCycleID: aggregate.CycleID,
 		}
-		
+
 		// Storage contributions (GB-hours)
 		if gbHours, ok := aggregate.StorageTotals[providerID]; ok && gbHours >= rc.config.MinContribution.Storage {
 			contribution.StorageGBHours = gbHours
@@ -471,14 +471,14 @@ func (rc *RewardCalculator) convertToProviderContributions(aggregate *CycleAggre
 			contribution.StorageReads = int64(gbHours * 100)  // Rough estimate
 			contribution.StorageWrites = int64(gbHours * 10)  // Rough estimate
 		}
-		
+
 		// Bandwidth contributions (GB)
 		if gb, ok := aggregate.BandwidthTotals[providerID]; ok && gb >= rc.config.MinContribution.Bandwidth {
 			contribution.BandwidthGB = gb
 			// Assume 10% of bandwidth is content delivery, rest is general data transfer
 			contribution.ContentDeliveryGB = gb * 0.1
 		}
-		
+
 		// Compute contributions (CPU-hours)
 		if hours, ok := aggregate.ComputeTotals[providerID]; ok && hours >= rc.config.MinContribution.Compute {
 			contribution.CPUHours = hours
@@ -487,34 +487,34 @@ func (rc *RewardCalculator) convertToProviderContributions(aggregate *CycleAggre
 			contribution.GPUHours = hours * 0.05
 			contribution.MemoryGBHours = hours * 4.0
 		}
-		
+
 		// Only add if provider has meaningful contributions
 		if contribution.StorageGBHours > 0 || contribution.BandwidthGB > 0 || contribution.CPUHours > 0 {
 			contributions[providerID] = contribution
 		}
 	}
-	
+
 	return contributions
 }
 
 // calculateResourceBreakdown creates a breakdown of rewards by resource type
 func (rc *RewardCalculator) calculateResourceBreakdown(contribution ProviderContribution, totalReward float64) map[ResourceType]float64 {
 	breakdown := make(map[ResourceType]float64)
-	
+
 	// Calculate market values for each resource type
 	storageValue := contribution.StorageGBHours * rc.marketPricing.BaseRates.StoragePerGBMonth
 	storageValue += float64(contribution.StorageReads) / 1000.0 * rc.marketPricing.BaseRates.StorageReadPer1K
 	storageValue += float64(contribution.StorageWrites) / 1000.0 * rc.marketPricing.BaseRates.StorageWritePer1K
-	
+
 	bandwidthValue := contribution.BandwidthGB * rc.marketPricing.BaseRates.BandwidthPerGB
 	bandwidthValue += contribution.ContentDeliveryGB * rc.marketPricing.BaseRates.ContentDeliveryPerGB
-	
+
 	computeValue := contribution.CPUHours * rc.marketPricing.BaseRates.ComputePerCPUHour
 	computeValue += contribution.GPUHours * rc.marketPricing.BaseRates.GPUComputePerHour
 	computeValue += contribution.MemoryGBHours * rc.marketPricing.BaseRates.MemoryPerGBHour
-	
+
 	totalMarketValue := storageValue + bandwidthValue + computeValue
-	
+
 	// Distribute total reward proportionally
 	if totalMarketValue > 0 {
 		if storageValue > 0 {
@@ -527,6 +527,6 @@ func (rc *RewardCalculator) calculateResourceBreakdown(contribution ProviderCont
 			breakdown[ResourceCompute] = (computeValue / totalMarketValue) * totalReward
 		}
 	}
-	
+
 	return breakdown
 }

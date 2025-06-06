@@ -6,7 +6,7 @@ import (
 	"io"
 	"sync"
 	"time"
-	
+
 	"github.com/blackholenetwork/blackhole/pkg/core"
 	"github.com/rs/zerolog"
 )
@@ -14,35 +14,35 @@ import (
 // CIDEnhancedStorageService implements the Storage Service interface with pure content-based CIDs
 type CIDEnhancedStorageService struct {
 	*core.BaseService
-	
+
 	config *Config
 	logger zerolog.Logger
-	
+
 	// Core CID system
 	cidSystem    *CIDSystem
 	erasureCoder *AdaptiveErasureCoder
-	
+
 	// Storage components
 	chunkStore   *ChunkStore
-	
+
 	// Virtual bucket system with node management
 	bucketSystem     *SimpleBucketSystem
 	nodeManager      *NodeManager
 	negotiationEngine *PositionNegotiationEngine
 	healthMonitor    *PositionHealthMonitor
-	
+
 	// Local node information
 	localNodeID   NodeID
 	localNodeInfo *NodeDetails
-	
+
 	// Minimal operational tracking (optional)
 	accessTracker *AccessTracker
 	accessMutex   sync.RWMutex
-	
+
 	// CID to chunk mapping cache
 	cidChunkCache map[ContentCID][]ChunkCID
 	cacheMutex    sync.RWMutex
-	
+
 	// Virtual filesystem
 	vfs        *VirtualFilesystem
 	privateVFS *PrivateVFS
@@ -61,16 +61,16 @@ func NewCIDEnhancedStorageService(config *Config, logger zerolog.Logger, metrics
 	cidSystem := NewCIDSystem()
 	erasureCoder := NewAdaptiveErasureCoder(config.Erasure.BaselineDataShards)
 	chunkStore := NewChunkStore(config.DataDir + "/chunks")
-	
+
 	// Create local node ID (in real system would use network service node ID)
 	localNodeID := NodeID("cid-node-" + fmt.Sprintf("%d", time.Now().Unix()))
-	
+
 	// Create virtual bucket system
 	bucketSystem := NewSimpleBucketSystem()
 	nodeManager := NewNodeManager(bucketSystem, localNodeID)
 	negotiationEngine := NewPositionNegotiationEngine(nodeManager)
 	healthMonitor := NewPositionHealthMonitor(nodeManager)
-	
+
 	// Create local node info
 	localNodeInfo := &NodeDetails{
 		ID:               localNodeID,
@@ -82,14 +82,14 @@ func NewCIDEnhancedStorageService(config *Config, logger zerolog.Logger, metrics
 		LastSeen:         time.Now(),
 		JoinedAt:         time.Now(),
 	}
-	
+
 	// Optional access tracking
 	accessTracker := &AccessTracker{
 		lastAccess:  make(map[ContentCID]time.Time),
 		accessCount: make(map[ContentCID]int64),
 		chunkAccess: make(map[ChunkCID]time.Time),
 	}
-	
+
 	// Create storage service first
 	service := &CIDEnhancedStorageService{
 		BaseService:       core.NewBaseService("storage"),
@@ -107,26 +107,26 @@ func NewCIDEnhancedStorageService(config *Config, logger zerolog.Logger, metrics
 		accessTracker:     accessTracker,
 		cidChunkCache:     make(map[ContentCID][]ChunkCID),
 	}
-	
+
 	// Initialize VFS with this service
 	vfsConfig := config.VFS
 	if vfsConfig == nil {
 		vfsConfig = DefaultVFSConfig()
 	}
-	
+
 	vfs, err := NewVirtualFilesystem(service, vfsConfig, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create virtual filesystem: %w", err)
 	}
 	service.vfs = vfs
-	
+
 	// Initialize PrivateVFS if user DID is provided
 	if config.UserDID != "" {
 		privateVFS, err := NewPrivateVFSWithExistingVFS(vfs, logger, config.UserDID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create private virtual filesystem: %w", err)
 		}
-		
+
 		// Load or generate user secret
 		if config.UserSecret != "" {
 			if err := privateVFS.LoadUserSecret(config.UserSecret); err != nil {
@@ -143,27 +143,27 @@ func NewCIDEnhancedStorageService(config *Config, logger zerolog.Logger, metrics
 				Str("user_secret", secret).
 				Msg("Generated new user secret for private VFS - SAVE THIS SECRET!")
 		}
-		
+
 		service.privateVFS = privateVFS
 	}
-	
+
 	return service, nil
 }
 
 // Start starts the CID enhanced storage service
 func (ces *CIDEnhancedStorageService) Start(ctx context.Context) error {
 	ces.logger.Info().Msg("Starting CID enhanced storage service")
-	
+
 	// Initialize chunk store
 	if err := ces.chunkStore.Initialize(); err != nil {
 		return fmt.Errorf("failed to initialize chunk store: %w", err)
 	}
-	
+
 	// Register local node
 	if err := ces.nodeManager.RegisterNode(ces.localNodeInfo); err != nil {
 		return fmt.Errorf("failed to register local node: %w", err)
 	}
-	
+
 	// Claim initial positions
 	claimResult, err := ces.nodeManager.ClaimPositions(ces.localNodeID)
 	if err != nil {
@@ -174,50 +174,50 @@ func (ces *CIDEnhancedStorageService) Start(ctx context.Context) error {
 			Str("strategy", string(ces.localNodeInfo.PositionStrategy.Type)).
 			Msg("Successfully claimed initial positions")
 	}
-	
+
 	// Start VFS
 	if ces.vfs != nil {
 		if err := ces.vfs.Start(ctx); err != nil {
 			return fmt.Errorf("failed to start virtual filesystem: %w", err)
 		}
 	}
-	
+
 	// Start PrivateVFS
 	if ces.privateVFS != nil {
 		if err := ces.privateVFS.Start(ctx); err != nil {
 			return fmt.Errorf("failed to start private virtual filesystem: %w", err)
 		}
 	}
-	
+
 	ces.MarkStarted()
 	ces.logger.Info().
 		Str("node_id", string(ces.localNodeID)).
 		Int("claimed_positions", len(ces.localNodeInfo.ClaimedPositions)).
 		Msg("CID enhanced storage service started with pure content-based addressing")
-	
+
 	return nil
 }
 
 // Stop stops the CID enhanced storage service
 func (ces *CIDEnhancedStorageService) Stop(ctx context.Context) error {
 	ces.logger.Info().Msg("Stopping CID enhanced storage service")
-	
+
 	// Stop PrivateVFS
 	if ces.privateVFS != nil {
 		if err := ces.privateVFS.Stop(ctx); err != nil {
 			ces.logger.Warn().Err(err).Msg("Failed to stop private virtual filesystem")
 		}
 	}
-	
+
 	// Stop VFS
 	if ces.vfs != nil {
 		if err := ces.vfs.Stop(ctx); err != nil {
 			ces.logger.Warn().Err(err).Msg("Failed to stop virtual filesystem")
 		}
 	}
-	
+
 	ces.chunkStore.Close()
-	
+
 	ces.logger.Info().Msg("CID enhanced storage service stopped")
 	return nil
 }
@@ -225,13 +225,13 @@ func (ces *CIDEnhancedStorageService) Stop(ctx context.Context) error {
 // Store stores content and returns only the CID (no metadata needed)
 func (ces *CIDEnhancedStorageService) Store(ctx context.Context, reader io.Reader) (ContentCID, error) {
 	startTime := time.Now()
-	
+
 	// Generate CID from content
 	cid, content, err := ces.cidSystem.GenerateFileCIDFromReader(reader)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate CID: %w", err)
 	}
-	
+
 	// Check if content already exists (deduplication)
 	if ces.HasContent(ctx, cid) {
 		ces.logger.Info().
@@ -239,30 +239,30 @@ func (ces *CIDEnhancedStorageService) Store(ctx context.Context, reader io.Reade
 			Msg("Content already exists - deduplication applied")
 		return cid, nil
 	}
-	
+
 	ces.logger.Info().
 		Str("cid", string(cid)).
 		Int("size", len(content)).
 		Msg("Storing new content by CID")
-	
+
 	// Calculate file properties
 	fileProps := ces.cidSystem.CalculateFileProperties(content)
-	
+
 	// Chunk the content using content-based IDs
 	chunks := ces.chunkContentToCIDs(content)
-	
+
 	// Store all data chunks with position claiming
 	for _, chunk := range chunks {
 		if err := ces.storeChunkWithPositionClaiming(chunk); err != nil {
 			return "", fmt.Errorf("failed to store chunk %s: %w", chunk.CID, err)
 		}
 	}
-	
+
 	// Generate and store parity chunks
 	if err := ces.generateAndStoreParityChunks(chunks, cid, fileProps); err != nil {
 		ces.logger.Warn().Err(err).Str("cid", string(cid)).Msg("Failed to generate parity chunks")
 	}
-	
+
 	// Cache chunk CIDs for this content CID
 	chunkCIDs := make([]ChunkCID, len(chunks))
 	for i, chunk := range chunks {
@@ -271,10 +271,10 @@ func (ces *CIDEnhancedStorageService) Store(ctx context.Context, reader io.Reade
 	ces.cacheMutex.Lock()
 	ces.cidChunkCache[cid] = chunkCIDs
 	ces.cacheMutex.Unlock()
-	
+
 	// Track access
 	ces.trackContentAccess(cid)
-	
+
 	duration := time.Since(startTime)
 	ces.logger.Info().
 		Str("cid", string(cid)).
@@ -282,46 +282,46 @@ func (ces *CIDEnhancedStorageService) Store(ctx context.Context, reader io.Reade
 		Int("blocks", fileProps.BlockCount).
 		Dur("duration", duration).
 		Msg("Content stored successfully with CID-based addressing")
-	
+
 	return cid, nil
 }
 
 // Retrieve reconstructs content from CID with virtual bucket system
 func (ces *CIDEnhancedStorageService) Retrieve(ctx context.Context, cid ContentCID) (io.ReadCloser, error) {
 	startTime := time.Now()
-	
+
 	ces.logger.Info().Str("cid", string(cid)).Msg("Retrieving content by CID")
-	
+
 	// Track access
 	ces.trackContentAccess(cid)
-	
+
 	// Create pipe for streaming
 	reader, writer := io.Pipe()
-	
+
 	// Start reconstruction in background
 	go func() {
 		defer writer.Close()
-		
+
 		if err := ces.reconstructContentFromCID(cid, writer); err != nil {
 			ces.logger.Error().Err(err).Str("cid", string(cid)).Msg("Failed to reconstruct content")
 			writer.CloseWithError(err)
 			return
 		}
-		
+
 		duration := time.Since(startTime)
 		ces.logger.Info().
 			Str("cid", string(cid)).
 			Dur("duration", duration).
 			Msg("Content retrieved successfully by CID")
 	}()
-	
+
 	return reader, nil
 }
 
 // Delete removes all chunks for a CID
 func (ces *CIDEnhancedStorageService) Delete(ctx context.Context, cid ContentCID) error {
 	ces.logger.Info().Str("cid", string(cid)).Msg("Deleting content by CID")
-	
+
 	// Get chunk CIDs for this content
 	chunkCIDs, err := ces.getChunkCIDsForContent(ctx, cid)
 	if err != nil {
@@ -330,7 +330,7 @@ func (ces *CIDEnhancedStorageService) Delete(ctx context.Context, cid ContentCID
 	if len(chunkCIDs) == 0 {
 		return fmt.Errorf("content not found: %s", cid)
 	}
-	
+
 	// Delete all chunks
 	deletedCount := 0
 	for _, chunkCID := range chunkCIDs {
@@ -340,24 +340,24 @@ func (ces *CIDEnhancedStorageService) Delete(ctx context.Context, cid ContentCID
 			deletedCount++
 		}
 	}
-	
+
 	// Remove from cache
 	ces.cacheMutex.Lock()
 	delete(ces.cidChunkCache, cid)
 	ces.cacheMutex.Unlock()
-	
+
 	// Remove from access tracking
 	ces.accessMutex.Lock()
 	delete(ces.accessTracker.lastAccess, cid)
 	delete(ces.accessTracker.accessCount, cid)
 	ces.accessMutex.Unlock()
-	
+
 	ces.logger.Info().
 		Str("cid", string(cid)).
 		Int("chunks_deleted", deletedCount).
 		Int("total_chunks", len(chunkCIDs)).
 		Msg("Content deleted by CID")
-	
+
 	return nil
 }
 
@@ -367,7 +367,7 @@ func (ces *CIDEnhancedStorageService) HasContent(ctx context.Context, cid Conten
 	if err != nil || len(chunkCIDs) == 0 {
 		return false
 	}
-	
+
 	// Check if we have enough chunks to reconstruct (need at least k data chunks per block)
 	availableChunks := 0
 	for _, chunkCID := range chunkCIDs {
@@ -375,7 +375,7 @@ func (ces *CIDEnhancedStorageService) HasContent(ctx context.Context, cid Conten
 			availableChunks++
 		}
 	}
-	
+
 	// Simplified check: if we have any chunks, consider content available
 	// In practice, this would be more sophisticated with erasure coding awareness
 	return availableChunks > 0
@@ -387,7 +387,7 @@ func (ces *CIDEnhancedStorageService) GetContentInfo(ctx context.Context, cid Co
 		CID:       cid,
 		Available: ces.HasContent(ctx, cid),
 	}
-	
+
 	// Add access information if tracked
 	ces.accessMutex.RLock()
 	if lastAccess, exists := ces.accessTracker.lastAccess[cid]; exists {
@@ -395,7 +395,7 @@ func (ces *CIDEnhancedStorageService) GetContentInfo(ctx context.Context, cid Co
 		info.AccessCount = ces.accessTracker.accessCount[cid]
 	}
 	ces.accessMutex.RUnlock()
-	
+
 	// Try to derive size from chunks if available
 	chunkCIDs, err := ces.getChunkCIDsForContent(ctx, cid)
 	if err == nil && len(chunkCIDs) > 0 {
@@ -412,7 +412,7 @@ func (ces *CIDEnhancedStorageService) GetContentInfo(ctx context.Context, cid Co
 			info.ParityLevel = fmt.Sprintf("%d+%d", ces.config.Erasure.BaselineDataShards, ces.config.Erasure.BaselineParityShards)
 		}
 	}
-	
+
 	return info, nil
 }
 
@@ -428,10 +428,10 @@ func (ces *CIDEnhancedStorageService) GetChunkStorageLocation(chunkCID ChunkCID)
 func (ces *CIDEnhancedStorageService) FindChunkNodes(chunkCID ChunkCID) ([]*NodeInfo, error) {
 	// Get storage locations for the chunk
 	locations := ces.cidSystem.DeriveStorageLocations(chunkCID)
-	
+
 	var nodes []*NodeInfo
 	positions := []GlobalPosition{locations.Primary.Global, locations.Secondary.Global, locations.Tertiary.Global}
-	
+
 	for _, position := range positions {
 		if nodeID, claimed := ces.nodeManager.GetNodeForPosition(position); claimed {
 			if nodeDetails, _, err := ces.nodeManager.GetNodeStats(nodeID); err == nil {
@@ -439,7 +439,7 @@ func (ces *CIDEnhancedStorageService) FindChunkNodes(chunkCID ChunkCID) ([]*Node
 			}
 		}
 	}
-	
+
 	return nodes, nil
 }
 
@@ -466,7 +466,7 @@ func (ces *CIDEnhancedStorageService) StoreChunkInBucket(bucketID int, chunkID s
 		Data:     data,
 		IsParity: false,
 	}
-	
+
 	// Store chunk using existing chunk storage
 	return ces.chunkStore.Store(chunk)
 }
@@ -478,7 +478,7 @@ func (ces *CIDEnhancedStorageService) RetrieveChunkFromBucket(bucketID int, chun
 	if err != nil {
 		return nil, fmt.Errorf("chunk not found: %s", chunkID)
 	}
-	
+
 	return chunk.Data, nil
 }
 

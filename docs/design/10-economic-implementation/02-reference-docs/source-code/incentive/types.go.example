@@ -11,7 +11,7 @@ type ResourceType string
 
 const (
 	ResourceStorage   ResourceType = "storage"   // ~8.75% of pool (25/100 * 35%)
-	ResourceBandwidth ResourceType = "bandwidth" // ~10% of pool (25/100 * 40%) 
+	ResourceBandwidth ResourceType = "bandwidth" // ~10% of pool (25/100 * 40%)
 	ResourceCompute   ResourceType = "compute"   // ~6.25% of pool (25/100 * 25%)
 	ResourceContent   ResourceType = "content"   // 70% of pool (fixed allocation)
 	ResourceNetworkOps ResourceType = "network_ops" // 2.5% of pool

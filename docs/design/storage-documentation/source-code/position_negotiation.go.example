@@ -7,19 +7,19 @@ import (
 // PositionNegotiationEngine handles advanced position claiming negotiations in mature networks
 type PositionNegotiationEngine struct {
 	nodeManager *NodeManager
-	
+
 	// Network maturity thresholds
 	bootstrapThreshold     int     // Positions claimed across all nodes before considering mature
 	networkMaturityRatio  float64 // Ratio of claimed to total positions for mature network
-	
+
 	// Load balancing parameters
 	maxLoadImbalanceRatio  float64 // Maximum acceptable load imbalance between nodes
 	newNodeOpportunityRate float64 // Chance for new nodes to compete against established nodes
-	
+
 	// Reputation vs load balancing weights
 	reputationWeight       float64 // Weight for reputation in negotiation (0.0-1.0)
 	loadBalanceWeight      float64 // Weight for load balancing in negotiation (0.0-1.0)
-	
+
 	// Marginal reputation handling
 	marginalReputationThreshold float64 // When reputation difference is considered marginal (e.g., 0.05 = 5%)
 	largeLoadGapThreshold       float64 // When load gap is considered large (e.g., 2.0 = 2x difference)
@@ -46,7 +46,7 @@ type NegotiationResult struct {
 	CombinedScore        float64            `json:"combined_score"`
 	NewNodeOpportunity   bool               `json:"new_node_opportunity"`
 	HandoverRequested    bool               `json:"handover_requested"`
-	
+
 	// Marginal reputation analysis
 	ReputationDifference float64            `json:"reputation_difference"`
 	LoadGapRatio         float64            `json:"load_gap_ratio"`
@@ -77,7 +77,7 @@ func NewPositionNegotiationEngine(nodeManager *NodeManager) *PositionNegotiation
 		reputationWeight:      0.5,  // 50% weight on reputation
 		loadBalanceWeight:     0.3,  // 30% weight on load balancing
 		// Note: 20% weight will be allocated to health scores in calculateNegotiationScore
-		
+
 		// Marginal reputation parameters
 		marginalReputationThreshold: 0.05, // 5% reputation difference considered marginal
 		largeLoadGapThreshold:       2.0,  // 2x position difference considered large load gap
@@ -89,7 +89,7 @@ func NewPositionNegotiationEngine(nodeManager *NodeManager) *PositionNegotiation
 func (pne *PositionNegotiationEngine) NegotiatePositionClaim(challengerID NodeID, position GlobalPosition) (*NegotiationResult, error) {
 	// Get current position owner
 	currentOwnerID, isOwned := pne.nodeManager.GetNodeForPosition(position)
-	
+
 	// If position is not owned, challenger can claim it (bootstrap behavior)
 	if !isOwned {
 		return &NegotiationResult{
@@ -98,15 +98,15 @@ func (pne *PositionNegotiationEngine) NegotiatePositionClaim(challengerID NodeID
 			Reason:      "position unclaimed - bootstrap claiming allowed",
 		}, nil
 	}
-	
+
 	// Get network state to determine negotiation strategy
 	networkState := pne.calculateNetworkState()
-	
+
 	// Bootstrap network: simple reputation-based competition
 	if networkState.IsBootstrap {
 		return pne.handleBootstrapNegotiation(challengerID, currentOwnerID, position)
 	}
-	
+
 	// Mature network: sophisticated negotiation with load balancing
 	return pne.handleMatureNetworkNegotiation(challengerID, currentOwnerID, position, networkState)
 }
@@ -116,19 +116,19 @@ func (pne *PositionNegotiationEngine) calculateNetworkState() *NetworkState {
 	nodes := pne.nodeManager.ListNodes()
 	totalNodes := len(nodes)
 	totalClaimedPositions := 0
-	
+
 	if totalNodes == 0 {
 		return &NetworkState{IsBootstrap: true}
 	}
-	
+
 	// Calculate total claimed positions and load distribution
 	minPositions := int(^uint(0) >> 1) // Max int
 	maxPositions := 0
-	
+
 	for _, node := range nodes {
 		positionCount := len(node.ClaimedPositions)
 		totalClaimedPositions += positionCount
-		
+
 		if positionCount < minPositions {
 			minPositions = positionCount
 		}
@@ -136,15 +136,15 @@ func (pne *PositionNegotiationEngine) calculateNetworkState() *NetworkState {
 			maxPositions = positionCount
 		}
 	}
-	
+
 	if minPositions == int(^uint(0) >> 1) {
 		minPositions = 0
 	}
-	
+
 	// Calculate metrics
 	avgPositionsPerNode := float64(totalClaimedPositions) / float64(totalNodes)
 	networkMaturityRatio := float64(totalClaimedPositions) / float64(TotalPositions)
-	
+
 	var loadImbalanceRatio float64
 	if minPositions > 0 {
 		loadImbalanceRatio = float64(maxPositions) / float64(minPositions)
@@ -153,11 +153,11 @@ func (pne *PositionNegotiationEngine) calculateNetworkState() *NetworkState {
 	} else {
 		loadImbalanceRatio = 1.0
 	}
-	
+
 	// Determine if network is still in bootstrap phase
-	isBootstrap := totalClaimedPositions < pne.bootstrapThreshold || 
+	isBootstrap := totalClaimedPositions < pne.bootstrapThreshold ||
 		networkMaturityRatio < pne.networkMaturityRatio
-	
+
 	return &NetworkState{
 		IsBootstrap:             isBootstrap,
 		TotalNodes:              totalNodes,
@@ -172,7 +172,7 @@ func (pne *PositionNegotiationEngine) calculateNetworkState() *NetworkState {
 func (pne *PositionNegotiationEngine) handleBootstrapNegotiation(challengerID, ownerID NodeID, position GlobalPosition) (*NegotiationResult, error) {
 	challengerRep := pne.nodeManager.reputations[challengerID]
 	ownerRep := pne.nodeManager.reputations[ownerID]
-	
+
 	if challengerRep == nil || ownerRep == nil {
 		return &NegotiationResult{
 			Outcome:     OwnerKeepsPosition,
@@ -180,10 +180,10 @@ func (pne *PositionNegotiationEngine) handleBootstrapNegotiation(challengerID, o
 			Reason:      "missing reputation data - owner keeps position",
 		}, nil
 	}
-	
+
 	// Simple reputation threshold during bootstrap
 	reputationThreshold := 0.1 // Must be 10% better
-	
+
 	if challengerRep.TotalScore > ownerRep.TotalScore + reputationThreshold {
 		return &NegotiationResult{
 			Outcome:        ChallengerWinsPosition,
@@ -192,7 +192,7 @@ func (pne *PositionNegotiationEngine) handleBootstrapNegotiation(challengerID, o
 			ReputationScore: challengerRep.TotalScore - ownerRep.TotalScore,
 		}, nil
 	}
-	
+
 	return &NegotiationResult{
 		Outcome:     OwnerKeepsPosition,
 		WinningNode: ownerID,
@@ -207,7 +207,7 @@ func (pne *PositionNegotiationEngine) handleMatureNetworkNegotiation(challengerI
 	ownerNode := pne.nodeManager.nodes[ownerID]
 	challengerRep := pne.nodeManager.reputations[challengerID]
 	ownerRep := pne.nodeManager.reputations[ownerID]
-	
+
 	if challengerNode == nil || ownerNode == nil || challengerRep == nil || ownerRep == nil {
 		return &NegotiationResult{
 			Outcome:     OwnerKeepsPosition,
@@ -215,12 +215,12 @@ func (pne *PositionNegotiationEngine) handleMatureNetworkNegotiation(challengerI
 			Reason:      "missing node or reputation data",
 		}, nil
 	}
-	
+
 	// Calculate marginal reputation and load gap analysis
 	reputationDifference := challengerRep.TotalScore - ownerRep.TotalScore
 	challengerPositions := float64(len(challengerNode.ClaimedPositions))
 	ownerPositions := float64(len(ownerNode.ClaimedPositions))
-	
+
 	var loadGapRatio float64
 	if challengerPositions > 0 {
 		loadGapRatio = ownerPositions / challengerPositions
@@ -229,20 +229,20 @@ func (pne *PositionNegotiationEngine) handleMatureNetworkNegotiation(challengerI
 	} else {
 		loadGapRatio = 1.0 // Both have 0 positions
 	}
-	
+
 	isMarginalReputation := abs(reputationDifference) <= pne.marginalReputationThreshold
 	isLargeLoadGap := loadGapRatio >= pne.largeLoadGapThreshold
-	
+
 	// Calculate scores for both nodes
 	challengerScore := pne.calculateNegotiationScore(challengerNode, challengerRep, networkState, true)
 	ownerScore := pne.calculateNegotiationScore(ownerNode, ownerRep, networkState, false)
-	
+
 	// Check for new node opportunity (give new nodes a chance)
 	newNodeOpportunity := pne.isNewNodeOpportunity(challengerNode, challengerRep)
-	
+
 	// Check if owner is over-loaded compared to network average
 	ownerOverloaded := pne.isNodeOverloaded(ownerNode, networkState)
-	
+
 	// NEW: Check for marginal reputation + large load gap scenario
 	if pne.loadBalancingPriority && isMarginalReputation && isLargeLoadGap {
 		return &NegotiationResult{
@@ -260,7 +260,7 @@ func (pne *PositionNegotiationEngine) handleMatureNetworkNegotiation(challengerI
 			LoadBalancingOverride: true,
 		}, nil
 	}
-	
+
 	// Determine negotiation outcome (existing logic)
 	if newNodeOpportunity && challengerScore > ownerScore * 0.8 { // New nodes get 20% bonus
 		return &NegotiationResult{
@@ -277,7 +277,7 @@ func (pne *PositionNegotiationEngine) handleMatureNetworkNegotiation(challengerI
 			IsLargeLoadGap:        isLargeLoadGap,
 		}, nil
 	}
-	
+
 	if ownerOverloaded && challengerScore > ownerScore * 0.9 { // Load balancing incentive
 		return &NegotiationResult{
 			Outcome:               HandoverNegotiated,
@@ -293,7 +293,7 @@ func (pne *PositionNegotiationEngine) handleMatureNetworkNegotiation(challengerI
 			IsLargeLoadGap:        isLargeLoadGap,
 		}, nil
 	}
-	
+
 	if challengerScore > ownerScore { // Pure score-based competition
 		return &NegotiationResult{
 			Outcome:               ChallengerWinsPosition,
@@ -308,7 +308,7 @@ func (pne *PositionNegotiationEngine) handleMatureNetworkNegotiation(challengerI
 			IsLargeLoadGap:        isLargeLoadGap,
 		}, nil
 	}
-	
+
 	// Owner keeps position
 	return &NegotiationResult{
 		Outcome:               OwnerKeepsPosition,
@@ -328,38 +328,38 @@ func (pne *PositionNegotiationEngine) handleMatureNetworkNegotiation(challengerI
 func (pne *PositionNegotiationEngine) calculateNegotiationScore(node *NodeDetails, reputation *NodeReputation, networkState *NetworkState, isChallenger bool) float64 {
 	// Reputation component (0.0-1.0)
 	reputationScore := reputation.TotalScore
-	
+
 	// Load balance component (higher score for nodes with fewer positions)
 	loadBalanceScore := pne.calculateLoadBalanceScore(node, networkState, isChallenger)
-	
+
 	// Health score component (average health of node's positions)
 	healthScore := pne.calculateNodeHealthScore(node.ID)
-	
+
 	// Health weight is dynamically calculated (remaining weight after reputation and load balance)
 	healthWeight := 1.0 - pne.reputationWeight - pne.loadBalanceWeight
-	
+
 	// Combine scores with weights
-	combinedScore := (pne.reputationWeight * reputationScore) + 
+	combinedScore := (pne.reputationWeight * reputationScore) +
 		(pne.loadBalanceWeight * loadBalanceScore) +
 		(healthWeight * healthScore)
-	
+
 	return combinedScore
 }
 
 // calculateLoadBalanceScore calculates load balancing score for a node
 func (pne *PositionNegotiationEngine) calculateLoadBalanceScore(node *NodeDetails, networkState *NetworkState, isChallenger bool) float64 {
 	nodePositions := float64(len(node.ClaimedPositions))
-	
+
 	// If challenger, assume they would have one more position
 	if isChallenger {
 		nodePositions += 1
 	}
-	
+
 	// Score is higher for nodes with fewer positions relative to average
 	if networkState.AveragePositionsPerNode > 0 {
 		// Invert the ratio so lower position count = higher score
 		ratio := nodePositions / networkState.AveragePositionsPerNode
-		
+
 		// Score from 0.0 to 1.0, where 1.0 is for nodes well below average
 		if ratio <= 0.5 {
 			return 1.0 // Significantly below average gets max score
@@ -371,7 +371,7 @@ func (pne *PositionNegotiationEngine) calculateLoadBalanceScore(node *NodeDetail
 			return 0.0 // Well above average gets minimum score
 		}
 	}
-	
+
 	return 0.5 // Default neutral score
 }
 
@@ -381,14 +381,14 @@ func (pne *PositionNegotiationEngine) isNewNodeOpportunity(node *NodeDetails, re
 	// and has fewer than 10 positions
 	nodeAge := time.Since(node.JoinedAt)
 	isNew := nodeAge < 24*time.Hour && len(node.ClaimedPositions) < 10
-	
+
 	// Random opportunity for new nodes
 	if isNew {
 		// Use reputation score as randomness seed (deterministic but varied)
 		randomValue := reputation.TotalScore - float64(int(reputation.TotalScore))
 		return randomValue < pne.newNodeOpportunityRate
 	}
-	
+
 	return false
 }
 
@@ -397,10 +397,10 @@ func (pne *PositionNegotiationEngine) isNodeOverloaded(node *NodeDetails, networ
 	if networkState.AveragePositionsPerNode == 0 {
 		return false
 	}
-	
+
 	nodePositions := float64(len(node.ClaimedPositions))
 	ratio := nodePositions / networkState.AveragePositionsPerNode
-	
+
 	return ratio > pne.maxLoadImbalanceRatio
 }
 
@@ -416,10 +416,10 @@ func (pne *PositionNegotiationEngine) calculateNodeHealthScore(nodeID NodeID) fl
 	if node == nil || len(node.ClaimedPositions) == 0 {
 		return 0.8 // Default good health score for nodes without positions yet
 	}
-	
+
 	totalHealthScore := 0.0
 	validPositions := 0
-	
+
 	// Calculate average health score across all owned positions
 	for _, position := range node.ClaimedPositions {
 		if healthMetrics, exists := pne.nodeManager.healthMonitor.GetPositionHealth(position); exists {
@@ -427,11 +427,11 @@ func (pne *PositionNegotiationEngine) calculateNodeHealthScore(nodeID NodeID) fl
 			validPositions++
 		}
 	}
-	
+
 	if validPositions == 0 {
 		return 0.8 // Default good health score if no health data available
 	}
-	
+
 	return totalHealthScore / float64(validPositions)
 }
 
@@ -439,7 +439,7 @@ func (pne *PositionNegotiationEngine) calculateNodeHealthScore(nodeID NodeID) fl
 func (pne *PositionNegotiationEngine) GetNegotiationStats() map[string]interface{} {
 	networkState := pne.calculateNetworkState()
 	healthWeight := 1.0 - pne.reputationWeight - pne.loadBalanceWeight
-	
+
 	return map[string]interface{}{
 		"network_state":                    networkState,
 		"bootstrap_threshold":              pne.bootstrapThreshold,

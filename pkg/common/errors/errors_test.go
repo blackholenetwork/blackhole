@@ -18,11 +18,11 @@ func TestNew(t *testing.T) {
 func TestWrap(t *testing.T) {
 	original := errors.New("original error")
 	wrapped := Wrap(original, "wrapped")
-	
+
 	if wrapped == nil {
 		t.Fatal("expected error, got nil")
 	}
-	
+
 	// Check that the wrapped error contains both messages
 	if err := wrapped.Error(); err != "wrapped: original error" {
 		t.Errorf("expected 'wrapped: original error', got %q", err)

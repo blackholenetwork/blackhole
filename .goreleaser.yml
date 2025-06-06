@@ -109,29 +109,29 @@ release:
   name_template: "{{.ProjectName}} v{{.Version}}"
   footer: |
     ## What's Changed
-    
+
     **Full Changelog**: https://github.com/blackholenetwork/blackhole/compare/{{ .PreviousTag }}...{{ .Tag }}
-    
+
     ## Installation
-    
+
     ### macOS
     ```bash
     # Homebrew
     brew install blackholenetwork/tap/blackhole
-    
+
     # Or download directly
     curl -L https://github.com/blackholenetwork/blackhole/releases/download/{{ .Tag }}/blackhole_{{ .Version }}_Darwin_x86_64.tar.gz | tar xz
     ```
-    
+
     ### Linux
     ```bash
     # Download and extract (AMD64)
     curl -L https://github.com/blackholenetwork/blackhole/releases/download/{{ .Tag }}/blackhole_{{ .Version }}_Linux_x86_64.tar.gz | tar xz
-    
+
     # Download and extract (ARM64)
     curl -L https://github.com/blackholenetwork/blackhole/releases/download/{{ .Tag }}/blackhole_{{ .Version }}_Linux_arm64.tar.gz | tar xz
     ```
-    
+
     ### Windows
     Download the ZIP file from the [releases page](https://github.com/blackholenetwork/blackhole/releases/tag/{{ .Tag }})
 
@@ -215,21 +215,21 @@ nfpms:
         if ! id -u blackhole >/dev/null 2>&1; then
           useradd --system --user-group --home-dir /var/lib/blackhole --shell /bin/false blackhole
         fi
-        
+
         # Create directories
         mkdir -p /var/lib/blackhole
         mkdir -p /var/log/blackhole
         mkdir -p /etc/blackhole
-        
+
         # Set permissions
         chown -R blackhole:blackhole /var/lib/blackhole
         chown -R blackhole:blackhole /var/log/blackhole
         chown -R blackhole:blackhole /etc/blackhole
-        
+
         # Enable service
         systemctl daemon-reload
         systemctl enable blackhole.service
-        
+
         echo "Blackhole Network has been installed!"
         echo "Start the service with: sudo systemctl start blackhole"
         echo "View logs with: sudo journalctl -u blackhole -f"
@@ -297,7 +297,7 @@ announce:
     enabled: true
     message_template: |
       **Blackhole Network {{ .Tag }} is out!** 🚀
-      
+
       Check out the release notes: {{ .ReleaseURL }}
     icon_url: https://github.com/blackholenetwork.png
     author: Blackhole Network
@@ -307,9 +307,9 @@ announce:
     enabled: true
     message_template: |
       Blackhole Network {{ .Tag }} is out! 🎉
-      
+
       {{ .ReleaseURL }}
-      
+
       #blackholenetwork #decentralized #infrastructure
 
 completions:

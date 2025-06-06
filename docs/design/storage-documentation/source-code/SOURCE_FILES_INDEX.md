@@ -1,6 +1,6 @@
 # Storage Source Code Files Index
 
-**Generated:** December 5, 2024  
+**Generated:** December 5, 2024
 **Source Location:** `pkg/resources/storage/`
 
 ## Core Storage Implementation Files
@@ -53,18 +53,18 @@
 ```go
 type Service interface {
     core.Service
-    
+
     // Pure content operations (no metadata required)
     Store(ctx context.Context, reader io.Reader) (ContentCID, error)
     Retrieve(ctx context.Context, cid ContentCID) (io.ReadCloser, error)
     Delete(ctx context.Context, cid ContentCID) error
     HasContent(ctx context.Context, cid ContentCID) bool
     GetContentInfo(ctx context.Context, cid ContentCID) (ContentInfo, error)
-    
+
     // Chunk operations (content-based)
     StoreChunk(ctx context.Context, chunk *ContentBasedChunk) error
     RetrieveChunk(ctx context.Context, chunkCID ChunkCID) (*ContentBasedChunk, error)
-    
+
     // Virtual Filesystem operations
     GetVFS() VirtualFilesystemInterface
     GetPrivateVFS() PrivateVFSInterface
@@ -93,8 +93,8 @@ type AdaptiveErasureCoder struct {
 
 // Adaptive parity generation
 func (aec *AdaptiveErasureCoder) GenerateAdditionalParity(
-    dataChunks [][]byte, 
-    currentParity int, 
+    dataChunks [][]byte,
+    currentParity int,
     targetParity int,
 ) ([][]byte, error)
 ```
@@ -182,7 +182,7 @@ func DevelopmentConfig() *Config
 
 Located in `tests/integration/storage/`:
 - `storage_test.go` - Core storage service tests
-- `vfs_test.go` - Virtual filesystem tests  
+- `vfs_test.go` - Virtual filesystem tests
 - `private_vfs_test.go` - Private VFS tests
 - `erasure_test.go` - Erasure coding tests
 - `directory_autocreate_test.go` - Directory auto-creation tests

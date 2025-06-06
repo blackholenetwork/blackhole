@@ -18,19 +18,19 @@ type NetworkSchemaPolicy struct {
 	Version     string    `json:"version"`
 	UpdatedAt   time.Time `json:"updated_at"`
 	UpdatedBy   string    `json:"updated_by"`  // Network governance DID
-	
+
 	// Global network settings
 	NetworkDefaults NetworkSchemaDefaults `json:"network_defaults"`
-	
+
 	// Standardized use case policies (network-defined)
 	StandardUseCases map[string]SchemaPolicy `json:"standard_use_cases"`
-	
+
 	// User-defined use case policies (app developer-defined)
 	UserDefinedUseCases map[string]UserDefinedUseCase `json:"user_defined_use_cases"`
-	
+
 	// Content-type routing to use cases
 	ContentTypeMapping map[string]string `json:"content_type_mapping"`
-	
+
 	// User-defined use case configuration
 	UserUseCaseConfig UserUseCaseConfiguration `json:"user_use_case_config"`
 }
@@ -52,11 +52,11 @@ type SchemaPolicy struct {
 	AllowUserMetadataOverride bool    `json:"allow_user_metadata_override"`
 	MinQualityScore          float64  `json:"min_quality_score"`
 	MinCompletenessScore     float64  `json:"min_completeness_score"`
-	
+
 	// Use-case specific settings
 	AutoClassification       bool     `json:"auto_classification"`          // Auto-detect content classification
 	RecommendedSchemas      []string `json:"recommended_schemas"`           // Suggested schemas for this use case
-	
+
 	// Network policy enforcement
 	IsStandardUseCase       bool     `json:"is_standard_use_case"`         // Whether this is a network standard
 	EnforcementLevel        string   `json:"enforcement_level"`            // "strict", "moderate", "lenient"
@@ -66,25 +66,25 @@ type SchemaPolicy struct {
 type UserDefinedUseCase struct {
 	// Basic policy (inherits from SchemaPolicy)
 	SchemaPolicy
-	
+
 	// User-defined use case metadata
 	CreatorDID              string    `json:"creator_did"`               // App developer who created this
 	CreatedAt               time.Time `json:"created_at"`
 	LastModified            time.Time `json:"last_modified"`
-	
+
 	// Inheritance and constraints
 	BasedOnStandardUseCase  string    `json:"based_on_standard_use_case,omitempty"`  // Inherit from standard use case
 	AllowedOverrides        []string  `json:"allowed_overrides"`                     // Which fields can be customized
-	
+
 	// App-specific configuration
 	AppIdentifier           string                 `json:"app_identifier"`              // App/service identifier
 	CustomFields            map[string]interface{} `json:"custom_fields,omitempty"`     // App-specific metadata
-	
+
 	// Usage and validation
 	IsActive                bool      `json:"is_active"`                 // Whether use case is active
 	UsageCount              int64     `json:"usage_count"`               // How many times used
 	LastUsed                time.Time `json:"last_used"`                 // Last usage timestamp
-	
+
 	// Network validation
 	NetworkApproved         bool      `json:"network_approved"`          // Whether approved by network
 	ValidationErrors        []string  `json:"validation_errors,omitempty"` // Any validation issues
@@ -96,11 +96,11 @@ type UserUseCaseConfiguration struct {
 	RequireNetworkApproval   bool     `json:"require_network_approval"`     // Whether custom use cases need approval
 	MaxUserUseCasesPerApp    int      `json:"max_user_use_cases_per_app"`   // Limit per app
 	AllowInheritance         bool     `json:"allow_inheritance"`            // Can inherit from standard use cases
-	
+
 	// Constraints on user-defined use cases
 	MinQualityScoreLimit     float64  `json:"min_quality_score_limit"`      // Users cannot go below this
 	MinCompletenessLimit     float64  `json:"min_completeness_limit"`       // Users cannot go below this
-	
+
 	// Review and governance
 	AutoApprovalCriteria     AutoApprovalCriteria `json:"auto_approval_criteria"`
 	ReviewRequired           []string             `json:"review_required"`          // Which changes require review
@@ -120,14 +120,14 @@ func GetStandardNetworkPolicy() *NetworkSchemaPolicy {
 		Version:   "1.0.0",
 		UpdatedAt: time.Now(),
 		UpdatedBy: "network-governance",
-		
+
 		NetworkDefaults: NetworkSchemaDefaults{
 			EnableSchemaProcessing:    true,
 			DefaultUseCase:           "personal",
 			RequireUseCaseSelection:  false,
 			AllowUserDefinedUseCases: true,
 		},
-		
+
 		StandardUseCases: map[string]SchemaPolicy{
 			"research": {
 				Name:                     "Research Data",
@@ -142,7 +142,7 @@ func GetStandardNetworkPolicy() *NetworkSchemaPolicy {
 				IsStandardUseCase:       true,
 				EnforcementLevel:        "strict",
 			},
-			
+
 			"content": {
 				Name:                     "Content Creation",
 				Description:              "Creative content, media, and published materials",
@@ -156,7 +156,7 @@ func GetStandardNetworkPolicy() *NetworkSchemaPolicy {
 				IsStandardUseCase:       true,
 				EnforcementLevel:        "moderate",
 			},
-			
+
 			"personal": {
 				Name:                     "Personal Data",
 				Description:              "Personal files, documents, and private content",
@@ -170,7 +170,7 @@ func GetStandardNetworkPolicy() *NetworkSchemaPolicy {
 				IsStandardUseCase:       true,
 				EnforcementLevel:        "lenient",
 			},
-			
+
 			"enterprise": {
 				Name:                     "Enterprise Data",
 				Description:              "Business documents and corporate content",
@@ -184,7 +184,7 @@ func GetStandardNetworkPolicy() *NetworkSchemaPolicy {
 				IsStandardUseCase:       true,
 				EnforcementLevel:        "strict",
 			},
-			
+
 			"archive": {
 				Name:                     "Archive & Preservation",
 				Description:              "Long-term storage and historical preservation",
@@ -199,9 +199,9 @@ func GetStandardNetworkPolicy() *NetworkSchemaPolicy {
 				EnforcementLevel:        "strict",
 			},
 		},
-		
+
 		UserDefinedUseCases: make(map[string]UserDefinedUseCase),
-		
+
 		ContentTypeMapping: map[string]string{
 			"image/*":           "content",
 			"video/*":           "content",
@@ -211,7 +211,7 @@ func GetStandardNetworkPolicy() *NetworkSchemaPolicy {
 			"application/json":  "research",
 			"text/*":            "personal",
 		},
-		
+
 		UserUseCaseConfig: UserUseCaseConfiguration{
 			EnableUserUseCases:       true,
 			RequireNetworkApproval:   false,  // Allow immediate usage, review later
@@ -219,17 +219,17 @@ func GetStandardNetworkPolicy() *NetworkSchemaPolicy {
 			AllowInheritance:         true,   // Enable inheritance from standard use cases
 			MinQualityScoreLimit:     0.1,    // Cannot go below 10% quality
 			MinCompletenessLimit:     0.05,   // Cannot go below 5% completeness
-			
+
 			AutoApprovalCriteria: AutoApprovalCriteria{
 				BasedOnStandardUseCase:   true,  // Auto-approve if inheriting from standard
 				MinQualityAboveLimit:     true,  // Auto-approve if quality is reasonable
 				OnlyStrictenRequirements: true,  // Auto-approve if making things stricter
 				CreatorHasGoodReputation: false, // Require manual review for now
 			},
-			
+
 			ReviewRequired: []string{
 				"min_quality_score_below_standard",
-				"min_completeness_score_below_standard", 
+				"min_completeness_score_below_standard",
 				"allow_user_metadata_override_disabled",
 			},
 		},
@@ -242,12 +242,12 @@ type NetworkSchemaIntegratedService struct {
 	schemaService     *schema.Service
 	vfs              interfaces.VFS
 	logger           zerolog.Logger
-	
+
 	// Network-wide configuration
 	networkPolicy     *NetworkSchemaPolicy
 	lastPolicyUpdate  time.Time
 	policyMutex      sync.RWMutex
-	
+
 	// User-defined use case management
 	userUseCaseCache map[string]*UserDefinedUseCase
 	cacheExpiry      time.Time
@@ -261,7 +261,7 @@ func NewNetworkSchemaIntegratedService(
 	vfs interfaces.VFS,
 	logger zerolog.Logger,
 ) (*NetworkSchemaIntegratedService, error) {
-	
+
 	service := &NetworkSchemaIntegratedService{
 		storage:          storage,
 		schemaService:    schemaService,
@@ -269,114 +269,114 @@ func NewNetworkSchemaIntegratedService(
 		logger:          logger.With().Str("component", "network_schema_integrated_storage").Logger(),
 		userUseCaseCache: make(map[string]*UserDefinedUseCase),
 	}
-	
+
 	// Initialize with default policy (will load from VFS on first use)
 	service.networkPolicy = GetStandardNetworkPolicy()
-	
+
 	// Defer VFS operations until first use to avoid VFS timing issues
 	// Policy loading will happen lazily in ensurePolicyLoaded()
-	
+
 	return service, nil
 }
 
 // loadNetworkPolicy loads the network-wide policy from VFS
 func (nsis *NetworkSchemaIntegratedService) loadNetworkPolicy() error {
 	const policyPath = "/system/schema/network_policy.json"
-	
+
 	data, err := nsis.vfs.ReadFile(context.Background(), policyPath)
 	if err != nil {
 		return fmt.Errorf("failed to load network policy: %w", err)
 	}
-	
+
 	var policy NetworkSchemaPolicy
 	if err := json.Unmarshal(data, &policy); err != nil {
 		return fmt.Errorf("failed to parse network policy: %w", err)
 	}
-	
+
 	nsis.policyMutex.Lock()
 	nsis.networkPolicy = &policy
 	nsis.lastPolicyUpdate = time.Now()
 	nsis.policyMutex.Unlock()
-	
+
 	nsis.logger.Info().
 		Str("version", policy.Version).
 		Time("updated_at", policy.UpdatedAt).
 		Int("standard_use_cases", len(policy.StandardUseCases)).
 		Int("user_defined_use_cases", len(policy.UserDefinedUseCases)).
 		Msg("Network schema policy loaded")
-	
+
 	return nil
 }
 
 // saveNetworkPolicy saves the current policy to VFS
 func (nsis *NetworkSchemaIntegratedService) saveNetworkPolicy() error {
 	const policyPath = "/system/schema/network_policy.json"
-	
+
 	nsis.policyMutex.RLock()
 	policy := nsis.networkPolicy
 	nsis.policyMutex.RUnlock()
-	
+
 	data, err := json.MarshalIndent(policy, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal network policy: %w", err)
 	}
-	
+
 	metadata := map[string]string{
 		"content-type": "application/json",
 		"updated-at":   time.Now().Format(time.RFC3339),
 		"version":      policy.Version,
 	}
-	
+
 	if err := nsis.vfs.WriteFile(context.Background(), policyPath, data, metadata); err != nil {
 		return fmt.Errorf("failed to save network policy: %w", err)
 	}
-	
+
 	return nil
 }
 
 // loadUserDefinedUseCases loads user-defined use cases from VFS
 func (nsis *NetworkSchemaIntegratedService) loadUserDefinedUseCases() error {
 	const userUseCasesPath = "/system/schema/user_use_cases/"
-	
+
 	// List all user-defined use case files
 	files, err := nsis.vfs.ListDir(context.Background(), userUseCasesPath)
 	if err != nil {
 		// Directory might not exist yet - that's OK
 		return nil
 	}
-	
+
 	nsis.cacheMutex.Lock()
 	defer nsis.cacheMutex.Unlock()
-	
+
 	for _, file := range files {
 		if !strings.HasSuffix(file.Path, ".json") {
 			continue
 		}
-		
+
 		filePath := userUseCasesPath + file.Path
 		data, err := nsis.vfs.ReadFile(context.Background(), filePath)
 		if err != nil {
 			nsis.logger.Warn().Err(err).Str("file", filePath).Msg("Failed to load user use case")
 			continue
 		}
-		
+
 		var userUseCase UserDefinedUseCase
 		if err := json.Unmarshal(data, &userUseCase); err != nil {
 			nsis.logger.Warn().Err(err).Str("file", filePath).Msg("Failed to parse user use case")
 			continue
 		}
-		
+
 		// Store in cache
 		useCaseID := strings.TrimSuffix(file.Path, ".json")
 		nsis.userUseCaseCache[useCaseID] = &userUseCase
 	}
-	
+
 	nsis.cacheExpiry = time.Now().Add(10 * time.Minute)
-	
+
 	nsis.logger.Info().
 		Int("loaded_user_use_cases", len(nsis.userUseCaseCache)).
 		Msg("User-defined use cases loaded")
-	
+
 	return nil
 }
 
@@ -384,12 +384,12 @@ func (nsis *NetworkSchemaIntegratedService) loadUserDefinedUseCases() error {
 func (nsis *NetworkSchemaIntegratedService) policyUpdateWorker() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
-	
+
 	for range ticker.C {
 		nsis.policyMutex.Lock()
 		err := nsis.loadNetworkPolicyUnsafe()
 		nsis.policyMutex.Unlock()
-		
+
 		if err != nil {
 			nsis.logger.Warn().Err(err).Msg("Failed to update network policy")
 		}
@@ -400,12 +400,12 @@ func (nsis *NetworkSchemaIntegratedService) policyUpdateWorker() {
 func (nsis *NetworkSchemaIntegratedService) useCaseCacheCleanupWorker() {
 	ticker := time.NewTicker(10 * time.Minute)
 	defer ticker.Stop()
-	
+
 	for range ticker.C {
 		nsis.cacheMutex.RLock()
 		expired := time.Now().After(nsis.cacheExpiry)
 		nsis.cacheMutex.RUnlock()
-		
+
 		if expired {
 			if err := nsis.loadUserDefinedUseCasesUnsafe(); err != nil {
 				nsis.logger.Warn().Err(err).Msg("Failed to refresh user use case cache")
@@ -418,29 +418,29 @@ func (nsis *NetworkSchemaIntegratedService) useCaseCacheCleanupWorker() {
 func (nsis *NetworkSchemaIntegratedService) ensurePolicyLoaded() {
 	nsis.policyMutex.Lock()
 	defer nsis.policyMutex.Unlock()
-	
+
 	// Check if we've already attempted to load from VFS
 	if nsis.lastPolicyUpdate.IsZero() {
 		// First time - try to load from VFS
 		if err := nsis.loadNetworkPolicyUnsafe(); err != nil {
 			// Fall back to default policy if network policy not available
 			nsis.logger.Warn().Err(err).Msg("Using default network policy")
-			
+
 			// Try to store default policy in VFS for future nodes
 			if err := nsis.saveNetworkPolicyUnsafe(); err != nil {
 				nsis.logger.Warn().Err(err).Msg("Failed to save default policy to VFS")
 			}
 		}
-		
+
 		// Load user-defined use cases
 		if err := nsis.loadUserDefinedUseCasesUnsafe(); err != nil {
 			nsis.logger.Warn().Err(err).Msg("Failed to load user-defined use cases")
 		}
-		
+
 		// Start background workers (only once)
 		go nsis.policyUpdateWorker()
 		go nsis.useCaseCacheCleanupWorker()
-		
+
 		nsis.lastPolicyUpdate = time.Now()
 	}
 }
@@ -448,96 +448,96 @@ func (nsis *NetworkSchemaIntegratedService) ensurePolicyLoaded() {
 // loadNetworkPolicyUnsafe loads policy without acquiring mutex (caller must hold lock)
 func (nsis *NetworkSchemaIntegratedService) loadNetworkPolicyUnsafe() error {
 	const policyPath = "/system/schema/network_policy.json"
-	
+
 	data, err := nsis.vfs.ReadFile(context.Background(), policyPath)
 	if err != nil {
 		return fmt.Errorf("failed to load network policy: %w", err)
 	}
-	
+
 	var policy NetworkSchemaPolicy
 	if err := json.Unmarshal(data, &policy); err != nil {
 		return fmt.Errorf("failed to parse network policy: %w", err)
 	}
-	
+
 	nsis.networkPolicy = &policy
-	
+
 	nsis.logger.Info().
 		Str("version", policy.Version).
 		Time("updated_at", policy.UpdatedAt).
 		Int("standard_use_cases", len(policy.StandardUseCases)).
 		Int("user_defined_use_cases", len(policy.UserDefinedUseCases)).
 		Msg("Network schema policy loaded")
-	
+
 	return nil
 }
 
 // saveNetworkPolicyUnsafe saves policy without acquiring mutex (caller must hold lock)
 func (nsis *NetworkSchemaIntegratedService) saveNetworkPolicyUnsafe() error {
 	const policyPath = "/system/schema/network_policy.json"
-	
+
 	policy := nsis.networkPolicy
-	
+
 	data, err := json.MarshalIndent(policy, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal network policy: %w", err)
 	}
-	
+
 	metadata := map[string]string{
 		"content-type": "application/json",
 		"updated-at":   time.Now().Format(time.RFC3339),
 		"version":      policy.Version,
 	}
-	
+
 	if err := nsis.vfs.WriteFile(context.Background(), policyPath, data, metadata); err != nil {
 		return fmt.Errorf("failed to save network policy: %w", err)
 	}
-	
+
 	return nil
 }
 
 // loadUserDefinedUseCasesUnsafe loads use cases without acquiring mutex (caller must hold lock)
 func (nsis *NetworkSchemaIntegratedService) loadUserDefinedUseCasesUnsafe() error {
 	const userUseCasesPath = "/system/schema/user_use_cases/"
-	
+
 	// List all user-defined use case files
 	files, err := nsis.vfs.ListDir(context.Background(), userUseCasesPath)
 	if err != nil {
 		// Directory might not exist yet - that's OK
 		return nil
 	}
-	
+
 	nsis.cacheMutex.Lock()
 	defer nsis.cacheMutex.Unlock()
-	
+
 	for _, file := range files {
 		if !strings.HasSuffix(file.Path, ".json") {
 			continue
 		}
-		
+
 		filePath := userUseCasesPath + file.Path
 		data, err := nsis.vfs.ReadFile(context.Background(), filePath)
 		if err != nil {
 			nsis.logger.Warn().Err(err).Str("file", filePath).Msg("Failed to load user use case")
 			continue
 		}
-		
+
 		var userUseCase UserDefinedUseCase
 		if err := json.Unmarshal(data, &userUseCase); err != nil {
 			nsis.logger.Warn().Err(err).Str("file", filePath).Msg("Failed to parse user use case")
 			continue
 		}
-		
+
 		// Store in cache
 		useCaseID := strings.TrimSuffix(file.Path, ".json")
 		nsis.userUseCaseCache[useCaseID] = &userUseCase
 	}
-	
+
 	nsis.cacheExpiry = time.Now().Add(10 * time.Minute)
-	
+
 	nsis.logger.Info().
 		Int("loaded_user_use_cases", len(nsis.userUseCaseCache)).
 		Msg("User-defined use cases loaded")
-	
+
 	return nil
 }
 

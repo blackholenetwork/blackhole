@@ -13,14 +13,14 @@ type ResourceIntegrationBridge struct {
 	mu              sync.RWMutex
 	logger          zerolog.Logger
 	config          *Config
-	
+
 	// Connected systems
 	realTimeEngine  *RealTimeEngine
 	usageAggregator *LiveUsageAggregator
-	
+
 	// Conversion and mapping
 	providerMapping map[string]string // nodeID -> providerID mapping
-	
+
 	// Processing control
 	started         bool
 	eventQueue      chan *ResourceUpdateEvent
@@ -40,14 +40,14 @@ type RealTimeUsageAggregate struct {
 	ProviderID       string    `json:"provider_id"`
 	WindowStart      time.Time `json:"window_start"`
 	LastUpdate       time.Time `json:"last_update"`
-	
+
 	// Resource usage totals (accumulated since window start)
 	StorageBytes     int64     `json:"storage_bytes"`      // Total bytes stored
 	StorageOps       int64     `json:"storage_ops"`        // Total operations
 	BandwidthBytes   int64     `json:"bandwidth_bytes"`    // Total bytes transferred
 	ComputeSeconds   float64   `json:"compute_seconds"`    // Total CPU seconds
 	MemoryByteSeconds int64    `json:"memory_byte_seconds"` // Total memory usage
-	
+
 	// Content activity
 	ContentViews     int64     `json:"content_views"`      // Total content views served
 	ContentBytes     int64     `json:"content_bytes"`      // Total content bytes delivered
@@ -70,17 +70,17 @@ func NewResourceIntegrationBridge(config *Config, logger zerolog.Logger, realTim
 func (rib *ResourceIntegrationBridge) Start(ctx context.Context) error {
 	rib.mu.Lock()
 	defer rib.mu.Unlock()
-	
+
 	if rib.started {
 		return nil
 	}
-	
+
 	rib.logger.Info().Msg("Starting resource integration bridge")
-	
+
 	// Start event processor
 	rib.wg.Add(1)
 	go rib.eventProcessor(ctx)
-	
+
 	rib.started = true
 	return nil
 }
@@ -89,16 +89,16 @@ func (rib *ResourceIntegrationBridge) Start(ctx context.Context) error {
 func (rib *ResourceIntegrationBridge) Stop(ctx context.Context) error {
 	rib.mu.Lock()
 	defer rib.mu.Unlock()
-	
+
 	if !rib.started {
 		return nil
 	}
-	
+
 	rib.logger.Info().Msg("Stopping resource integration bridge")
-	
+
 	close(rib.stopChan)
 	rib.wg.Wait()
-	
+
 	rib.started = false
 	return nil
 }
@@ -112,7 +112,7 @@ func (rib *ResourceIntegrationBridge) NotifyUsageUpdate(providerID string, aggre
 		Aggregate:  aggregate,
 		Timestamp:  time.Now(),
 	}
-	
+
 	// Queue the event for processing
 	select {
 	case rib.eventQueue <- event:
@@ -134,9 +134,9 @@ func (rib *ResourceIntegrationBridge) NotifyUsageUpdate(providerID string, aggre
 // eventProcessor processes queued resource update events
 func (rib *ResourceIntegrationBridge) eventProcessor(ctx context.Context) {
 	defer rib.wg.Done()
-	
+
 	rib.logger.Debug().Msg("Resource integration event processor started")
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -152,36 +152,36 @@ func (rib *ResourceIntegrationBridge) eventProcessor(ctx context.Context) {
 // processResourceUpdate processes a single resource update event
 func (rib *ResourceIntegrationBridge) processResourceUpdate(event *ResourceUpdateEvent) {
 	aggregate := event.Aggregate
-	
+
 	// Convert storage usage: bytes to GB-seconds (assume 1 second window)
 	if aggregate.StorageBytes > 0 {
 		storageGB := float64(aggregate.StorageBytes) / (1024 * 1024 * 1024)
 		rib.usageAggregator.RecordUsage(event.ProviderID, "storage", storageGB, "gb")
 	}
-	
+
 	// Convert bandwidth usage: bytes to GB
 	if aggregate.BandwidthBytes > 0 {
 		bandwidthGB := float64(aggregate.BandwidthBytes) / (1024 * 1024 * 1024)
 		rib.usageAggregator.RecordUsage(event.ProviderID, "bandwidth", bandwidthGB, "gb")
 	}
-	
+
 	// Convert compute usage: already in seconds
 	if aggregate.ComputeSeconds > 0 {
 		rib.usageAggregator.RecordUsage(event.ProviderID, "compute", aggregate.ComputeSeconds, "seconds")
 	}
-	
+
 	// Convert memory usage: byte-seconds to GB-seconds
 	if aggregate.MemoryByteSeconds > 0 {
 		memoryGBSeconds := float64(aggregate.MemoryByteSeconds) / (1024 * 1024 * 1024)
 		rib.usageAggregator.RecordUsage(event.ProviderID, "memory", memoryGBSeconds, "gb")
 	}
-	
+
 	// Record content activity if present
 	if aggregate.ContentViews > 0 && aggregate.ContentBytes > 0 {
 		// Calculate average view duration (assume 30 seconds per view as default)
 		avgViewSeconds := 30.0
 		totalViewSeconds := float64(aggregate.ContentViews) * avgViewSeconds
-		
+
 		// Record content activity (using provider ID as creator ID for infrastructure providers)
 		rib.usageAggregator.RecordContentActivity(
 			event.ProviderID,    // creatorID (provider serving content)
@@ -190,13 +190,13 @@ func (rib *ResourceIntegrationBridge) processResourceUpdate(event *ResourceUpdat
 			aggregate.ContentBytes, // dataConsumed
 		)
 	}
-	
+
 	// Record service metrics
 	if aggregate.StorageOps > 0 {
 		// Assume successful operations for now (success rate tracking would need more data)
 		rib.usageAggregator.RecordServiceMetrics(event.ProviderID, true, 50.0) // 50ms avg latency
 	}
-	
+
 	rib.logger.Debug().
 		Str("provider_id", event.ProviderID).
 		Float64("storage_gb", float64(aggregate.StorageBytes)/(1024*1024*1024)).
@@ -211,7 +211,7 @@ func (rib *ResourceIntegrationBridge) processResourceUpdate(event *ResourceUpdat
 func (rib *ResourceIntegrationBridge) RegisterProviderMapping(nodeID, providerID string) {
 	rib.mu.Lock()
 	defer rib.mu.Unlock()
-	
+
 	rib.providerMapping[nodeID] = providerID
 	rib.logger.Info().
 		Str("node_id", nodeID).
@@ -223,7 +223,7 @@ func (rib *ResourceIntegrationBridge) RegisterProviderMapping(nodeID, providerID
 func (rib *ResourceIntegrationBridge) UnregisterProviderMapping(nodeID string) {
 	rib.mu.Lock()
 	defer rib.mu.Unlock()
-	
+
 	if providerID, exists := rib.providerMapping[nodeID]; exists {
 		delete(rib.providerMapping, nodeID)
 		rib.logger.Info().
@@ -237,7 +237,7 @@ func (rib *ResourceIntegrationBridge) UnregisterProviderMapping(nodeID string) {
 func (rib *ResourceIntegrationBridge) GetProviderMapping(nodeID string) (string, bool) {
 	rib.mu.RLock()
 	defer rib.mu.RUnlock()
-	
+
 	providerID, exists := rib.providerMapping[nodeID]
 	return providerID, exists
 }
@@ -246,13 +246,13 @@ func (rib *ResourceIntegrationBridge) GetProviderMapping(nodeID string) (string,
 func (rib *ResourceIntegrationBridge) GetActiveProviders() map[string]string {
 	rib.mu.RLock()
 	defer rib.mu.RUnlock()
-	
+
 	// Return a copy to avoid concurrent access
 	result := make(map[string]string)
 	for nodeID, providerID := range rib.providerMapping {
 		result[nodeID] = providerID
 	}
-	
+
 	return result
 }
 
@@ -260,9 +260,9 @@ func (rib *ResourceIntegrationBridge) GetActiveProviders() map[string]string {
 func (rib *ResourceIntegrationBridge) GetStats() *ResourceIntegrationStats {
 	rib.mu.RLock()
 	defer rib.mu.RUnlock()
-	
+
 	queueLength := len(rib.eventQueue)
-	
+
 	return &ResourceIntegrationStats{
 		Started:              rib.started,
 		ActiveProviders:      len(rib.providerMapping),
@@ -286,7 +286,7 @@ func (rib *ResourceIntegrationBridge) TestResourceUpdate(providerID string, stor
 	if !rib.started {
 		return nil
 	}
-	
+
 	// Create a test aggregate
 	aggregate := &RealTimeUsageAggregate{
 		ProviderID:        providerID,
@@ -300,6 +300,6 @@ func (rib *ResourceIntegrationBridge) TestResourceUpdate(providerID string, stor
 		ContentViews:      5,
 		ContentBytes:      int64(bandwidthGB * 1024 * 1024 * 1024 * 0.5), // 50% of bandwidth is content
 	}
-	
+
 	return rib.NotifyUsageUpdate(providerID, aggregate)
 }

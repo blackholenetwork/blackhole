@@ -1,6 +1,6 @@
 # Blackhole Network Storage Architecture Overview
 
-**Generated:** December 5, 2024  
+**Generated:** December 5, 2024
 **Based on:** Current implementation analysis and design documents
 
 ## Executive Summary

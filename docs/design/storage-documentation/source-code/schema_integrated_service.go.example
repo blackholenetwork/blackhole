@@ -30,7 +30,7 @@ type SchemaIntegrationConfig struct {
 	RequireSchemaForAllFiles bool     `json:"require_schema_for_all_files"`  // Reject files without schemas
 	RequiredContentTypes     []string `json:"required_content_types"`        // Content types that MUST have schemas
 	AllowUserMetadataOverride bool    `json:"allow_user_metadata_override"`  // Let users override auto-extracted metadata
-	
+
 	// Quality controls
 	MinQualityScore    float64 `json:"min_quality_score"`     // Minimum metadata quality to accept
 	MinCompletenessScore float64 `json:"min_completeness_score"` // Minimum completeness to accept
@@ -41,12 +41,12 @@ type SchemaAwareStoreRequest struct {
 	// Required fields
 	Content     io.Reader `json:"-"`           // File content
 	ContentType string    `json:"content_type"` // MIME type
-	
+
 	// Optional schema information
 	SchemaID      schema.SchemaID            `json:"schema_id,omitempty"`       // Explicit schema to use
 	UserMetadata  map[string]interface{}     `json:"user_metadata,omitempty"`   // User-provided metadata
 	Filename      string                     `json:"filename,omitempty"`        // Original filename for extraction
-	
+
 	// User context
 	OwnerDID     string                      `json:"owner_did"`               // Content owner
 	Permissions  map[string]schema.FieldPermission `json:"permissions,omitempty"` // Field-level permissions
@@ -57,7 +57,7 @@ type SchemaAwareStoreResult struct {
 	// Storage result
 	ContentCID ContentCID `json:"content_cid"`  // Content identifier
 	Size       int64      `json:"size"`         // File size
-	
+
 	// Schema processing result
 	MetadataContainer *schema.MetadataContainer `json:"metadata"`      // Rich metadata
 	SchemaUsed        schema.SchemaID           `json:"schema_used"`   // Schema that was applied
@@ -69,7 +69,7 @@ type SchemaAwareStoreResult struct {
 type SchemaAwareRetrieveResult struct {
 	Content  io.ReadCloser             `json:"-"`         // File content
 	Metadata *schema.MetadataContainer `json:"metadata"`  // Associated metadata
-	
+
 	// Content information
 	ContentType string    `json:"content_type"`
 	Size        int64     `json:"size"`
@@ -84,11 +84,11 @@ func NewSchemaIntegratedService(
 	config *SchemaIntegrationConfig,
 	logger zerolog.Logger,
 ) *SchemaIntegratedService {
-	
+
 	if config == nil {
 		config = DefaultSchemaIntegrationConfig()
 	}
-	
+
 	return &SchemaIntegratedService{
 		storage:       storage,
 		schemaService: schemaService,
@@ -115,18 +115,18 @@ func (sis *SchemaIntegratedService) StoreWithSchema(ctx context.Context, req *Sc
 		Str("content_type", req.ContentType).
 		Str("owner", req.OwnerDID).
 		Msg("Starting schema-integrated storage")
-	
+
 	// Step 1: Read content into memory for processing
 	content, err := io.ReadAll(req.Content)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read content: %w", err)
 	}
-	
+
 	// Step 2: Detect/validate content type
 	if req.ContentType == "" {
 		req.ContentType = sis.detectContentType(req.Filename, content)
 	}
-	
+
 	// Step 3: Determine appropriate schema
 	schemaID := req.SchemaID
 	if schemaID == "" {
@@ -140,18 +140,18 @@ func (sis *SchemaIntegratedService) StoreWithSchema(ctx context.Context, req *Sc
 			schemaID = schema.SchemaID("generic/v1")
 		}
 	}
-	
+
 	// Step 4: Extract basic metadata from content (simplified for now)
 	extractionResult := &schema.ExtractionResult{
 		ExtractedData: sis.extractBasicMetadata(req.ContentType, content),
 		Confidence:    make(map[string]float64),
 	}
-	
+
 	// Set confidence for basic extracted fields
 	for field := range extractionResult.ExtractedData {
 		extractionResult.Confidence[field] = 0.8 // Basic confidence
 	}
-	
+
 	// Step 5: Extract metadata from filename if provided
 	if req.Filename != "" {
 		filenameMetadata := sis.extractMetadataFromFilename(req.Filename)
@@ -163,17 +163,17 @@ func (sis *SchemaIntegratedService) StoreWithSchema(ctx context.Context, req *Sc
 			}
 		}
 	}
-	
+
 	// Step 6: Merge user-provided metadata with auto-extracted metadata
 	finalMetadata := make(map[string]interface{})
 	autoExtracted := make(map[string]bool)
-	
+
 	// Start with auto-extracted data
 	for field, value := range extractionResult.ExtractedData {
 		finalMetadata[field] = value
 		autoExtracted[field] = true
 	}
-	
+
 	// Override with user-provided data if allowed
 	if sis.config.AllowUserMetadataOverride {
 		for field, value := range req.UserMetadata {
@@ -181,7 +181,7 @@ func (sis *SchemaIntegratedService) StoreWithSchema(ctx context.Context, req *Sc
 			autoExtracted[field] = false // User provided
 		}
 	}
-	
+
 	// Step 7: Create metadata creation request
 	metadataReq := &schema.CreateMetadataRequest{
 		ContentHash: "", // Will be set after storage
@@ -192,21 +192,21 @@ func (sis *SchemaIntegratedService) StoreWithSchema(ctx context.Context, req *Sc
 		Content:     content,
 		ContentType: req.ContentType,
 	}
-	
+
 	// Step 8: Store content in underlying storage
 	contentReader := strings.NewReader(string(content))
 	contentCID, err := sis.storage.Store(ctx, contentReader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to store content: %w", err)
 	}
-	
+
 	// Step 9: Update metadata with content hash and create metadata container
 	metadataReq.ContentHash = string(contentCID)
 	metadataContainer, err := sis.schemaService.CreateMetadata(ctx, metadataReq)
 	if err != nil {
 		// Storage succeeded but metadata creation failed - this is recoverable
 		sis.logger.Warn().Err(err).Str("cid", string(contentCID)).Msg("Content stored but metadata creation failed")
-		
+
 		// Create minimal metadata container
 		metadataContainer = &schema.MetadataContainer{
 			ContentHash:       string(contentCID),
@@ -219,7 +219,7 @@ func (sis *SchemaIntegratedService) StoreWithSchema(ctx context.Context, req *Sc
 			AutoExtracted:     autoExtracted,
 		}
 	}
-	
+
 	// Step 10: Quality control checks
 	if err := sis.validateQuality(metadataContainer); err != nil {
 		// Quality check failed - could delete content or warn user
@@ -230,19 +230,19 @@ func (sis *SchemaIntegratedService) StoreWithSchema(ctx context.Context, req *Sc
 			return nil, fmt.Errorf("content rejected due to insufficient metadata quality: %w", err)
 		}
 	}
-	
+
 	// Step 11: Get storage info for response
 	storageInfo, err := sis.storage.GetContentInfo(ctx, contentCID)
 	if err != nil {
 		sis.logger.Warn().Err(err).Msg("Failed to get content info")
 	}
-	
+
 	// Convert uint64 to int64 for response
 	var size int64
 	if storageInfo.Size > 0 {
 		size = int64(storageInfo.Size)
 	}
-	
+
 	// Step 12: Return comprehensive result
 	result := &SchemaAwareStoreResult{
 		ContentCID:        contentCID,
@@ -252,13 +252,13 @@ func (sis *SchemaIntegratedService) StoreWithSchema(ctx context.Context, req *Sc
 		QualityScore:      metadataContainer.QualityScore,
 		CompletenessScore: metadataContainer.CompletenessScore,
 	}
-	
+
 	sis.logger.Info().
 		Str("cid", string(contentCID)).
 		Str("schema", string(schemaID)).
 		Float64("quality", result.QualityScore).
 		Msg("Schema-integrated storage completed")
-	
+
 	return result, nil
 }
 
@@ -269,7 +269,7 @@ func (sis *SchemaIntegratedService) RetrieveWithMetadata(ctx context.Context, co
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve content: %w", err)
 	}
-	
+
 	// Load associated metadata using GetMetadata method
 	metadataContainer, err := sis.schemaService.GetMetadata(ctx, string(contentCID))
 	if err != nil {
@@ -283,14 +283,14 @@ func (sis *SchemaIntegratedService) RetrieveWithMetadata(ctx context.Context, co
 			SchemaID:    "",
 		}, nil
 	}
-	
+
 	// Get content info
 	contentInfo, err := sis.storage.GetContentInfo(ctx, contentCID)
 	var size int64
 	if err == nil {
 		size = int64(contentInfo.Size) // Convert uint64 to int64
 	}
-	
+
 	return &SchemaAwareRetrieveResult{
 		Content:     content,
 		Metadata:    metadataContainer,
@@ -310,7 +310,7 @@ func (sis *SchemaIntegratedService) detectContentType(filename string, content [
 			return mimeType
 		}
 	}
-	
+
 	// Try to detect from content (basic detection)
 	if len(content) > 0 {
 		// Basic magic number detection
@@ -325,7 +325,7 @@ func (sis *SchemaIntegratedService) detectContentType(filename string, content [
 			return "application/rar"
 		}
 	}
-	
+
 	return "application/octet-stream" // Default fallback
 }
 
@@ -390,59 +390,59 @@ func (sis *SchemaIntegratedService) suggestSchemaFromContentType(contentType str
 
 func (sis *SchemaIntegratedService) extractBasicMetadata(contentType string, content []byte) map[string]interface{} {
 	metadata := make(map[string]interface{})
-	
+
 	// Always include basic information
 	metadata["content_type"] = contentType
 	metadata["size"] = len(content)
 	metadata["content_hash"] = fmt.Sprintf("%x", content[:min(len(content), 32)]) // First 32 bytes as hex
-	
+
 	// Content-type specific extraction
 	switch {
 	case strings.HasPrefix(contentType, "image/"):
 		metadata["media_type"] = "image"
 		metadata["category"] = "visual"
 		// Could add image dimension detection here
-		
+
 	case strings.HasPrefix(contentType, "video/"):
 		metadata["media_type"] = "video"
 		metadata["category"] = "visual"
 		// Could add video metadata extraction here
-		
+
 	case strings.HasPrefix(contentType, "audio/"):
 		metadata["media_type"] = "audio"
 		metadata["category"] = "audio"
 		// Could add audio metadata extraction here
-		
+
 	case strings.HasPrefix(contentType, "text/"):
 		metadata["media_type"] = "text"
 		metadata["category"] = "document"
 		if len(content) < 10000 { // Small text files
 			metadata["word_count"] = len(strings.Fields(string(content)))
 		}
-		
+
 	default:
 		metadata["media_type"] = "binary"
 		metadata["category"] = "data"
 	}
-	
+
 	return metadata
 }
 
 func (sis *SchemaIntegratedService) extractMetadataFromFilename(filename string) map[string]interface{} {
 	metadata := make(map[string]interface{})
-	
+
 	// Extract basic filename information
 	metadata["original_filename"] = filename
-	
+
 	// Extract file extension
 	if ext := filepath.Ext(filename); ext != "" {
 		metadata["file_extension"] = strings.ToLower(ext[1:]) // Remove the dot
 	}
-	
+
 	// Extract base name without extension
 	baseName := strings.TrimSuffix(filename, filepath.Ext(filename))
 	metadata["base_name"] = baseName
-	
+
 	// Try to extract semantic information from filename
 	if strings.Contains(strings.ToLower(baseName), "screenshot") {
 		metadata["content_hint"] = "screenshot"
@@ -451,12 +451,11 @@ func (sis *SchemaIntegratedService) extractMetadataFromFilename(filename string)
 	} else if strings.Contains(strings.ToLower(baseName), "document") {
 		metadata["content_hint"] = "document"
 	}
-	
+
 	// Extract date from filename if present (basic pattern matching)
 	if matches := regexp.MustCompile(`(\d{4}[-_](\d{2})[-_](\d{2}))`).FindStringSubmatch(baseName); len(matches) > 0 {
 		metadata["date_hint"] = matches[1]
 	}
-	
+
 	return metadata
 }
-

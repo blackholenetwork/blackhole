@@ -177,7 +177,7 @@ Get usage statistics for the current billing period.
     {
       "resource_type": "bandwidth",
       "amount": 45.8,
-      "unit": "GB", 
+      "unit": "GB",
       "cost": 4.12
     }
   ],

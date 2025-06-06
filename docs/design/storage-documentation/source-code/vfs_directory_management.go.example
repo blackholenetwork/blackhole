@@ -33,24 +33,24 @@ func (pvfs *PrivateVFS) ensureParentDirectories(ctx context.Context, filePath st
 	if !options.AutoCreateParents {
 		return nil
 	}
-	
+
 	// Get parent directory path
 	parentDir := filepath.Dir(filePath)
 	if parentDir == "." || parentDir == "/" {
 		return nil // No parent to create
 	}
-	
+
 	// Normalize parent directory path
 	parentDir = pvfs.normalizePath(parentDir)
 	if !strings.HasSuffix(parentDir, "/") {
 		parentDir += "/"
 	}
-	
+
 	// Validate the full path structure
 	if err := pvfs.validateDirectoryPath(parentDir, options); err != nil {
 		return fmt.Errorf("invalid directory path: %w", err)
 	}
-	
+
 	// Create parent directories recursively
 	return pvfs.createDirectoryPath(ctx, parentDir, options)
 }
@@ -61,23 +61,23 @@ func (pvfs *PrivateVFS) createDirectoryPath(ctx context.Context, dirPath string,
 	if pvfs.directoryExists(ctx, dirPath) {
 		return nil
 	}
-	
+
 	// Get parent of this directory
 	parentDir := filepath.Dir(strings.TrimSuffix(dirPath, "/"))
 	if parentDir != "." && parentDir != "/" {
 		parentDir = pvfs.normalizePath(parentDir) + "/"
-		
+
 		// Recursively ensure parent exists
 		if err := pvfs.createDirectoryPath(ctx, parentDir, options); err != nil {
 			return fmt.Errorf("failed to create parent directory %s: %w", parentDir, err)
 		}
 	}
-	
+
 	// Check permissions for creating this directory
 	if err := pvfs.checkWritePermission(ctx, dirPath); err != nil {
 		return fmt.Errorf("permission denied for directory creation %s: %w", dirPath, err)
 	}
-	
+
 	// Create the directory metadata
 	return pvfs.createDirectory(ctx, dirPath)
 }
@@ -99,18 +99,18 @@ func (pvfs *PrivateVFS) createDirectory(ctx context.Context, dirPath string) err
 		},
 		Entries: make(map[string]EntryInfo),
 	}
-	
+
 	// Store directory metadata
 	if err := pvfs.storeDirectoryMetadata(ctx, dirPath, dirMetadata); err != nil {
 		return fmt.Errorf("failed to store directory metadata: %w", err)
 	}
-	
+
 	// Update parent directory to include this directory
 	parentDir := filepath.Dir(strings.TrimSuffix(dirPath, "/"))
 	if parentDir != "." && parentDir != "/" {
 		parentDir = pvfs.normalizePath(parentDir) + "/"
 		dirName := filepath.Base(strings.TrimSuffix(dirPath, "/"))
-		
+
 		entryInfo := EntryInfo{
 			Name:      dirName,
 			Type:      "directory",
@@ -118,18 +118,18 @@ func (pvfs *PrivateVFS) createDirectory(ctx context.Context, dirPath string) err
 			Modified:  time.Now(),
 			CreatedBy: pvfs.userDID,
 		}
-		
+
 		if err := pvfs.updateDirectoryMetadata(ctx, parentDir, entryInfo); err != nil {
 			pvfs.logger.Warn().Err(err).Str("parent", parentDir).Msg("Failed to update parent directory")
 			// Don't fail the operation, directory was created successfully
 		}
 	}
-	
+
 	pvfs.logger.Info().
 		Str("directory", dirPath).
 		Str("created_by", pvfs.userDID).
 		Msg("Created directory")
-	
+
 	return nil
 }
 
@@ -144,35 +144,35 @@ func (pvfs *PrivateVFS) validateDirectoryPath(dirPath string, options DirectoryC
 	if !options.ValidateNames {
 		return nil
 	}
-	
+
 	// Check overall path length
 	if len(dirPath) > 1000 {
 		return fmt.Errorf("path too long: %d characters (max 1000)", len(dirPath))
 	}
-	
+
 	// Split path into components
 	components := strings.Split(strings.Trim(dirPath, "/"), "/")
-	
+
 	// Check depth limit
 	if len(components) > options.MaxDepth {
 		return fmt.Errorf("path too deep: %d levels (max %d)", len(components), options.MaxDepth)
 	}
-	
+
 	// Validate each path component
 	for i, component := range components {
 		if component == "" && i > 0 { // Allow empty first component for absolute paths
 			return fmt.Errorf("empty path component at level %d", i)
 		}
-		
+
 		if component == "" {
 			continue
 		}
-		
+
 		if err := pvfs.validatePathComponent(component); err != nil {
 			return fmt.Errorf("invalid path component '%s' at level %d: %w", component, i, err)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -182,12 +182,12 @@ func (pvfs *PrivateVFS) validatePathComponent(component string) error {
 	if len(component) > 255 {
 		return fmt.Errorf("component too long: %d characters (max 255)", len(component))
 	}
-	
+
 	// Check for dangerous patterns
 	if component == "." || component == ".." {
 		return fmt.Errorf("dangerous path component: %s", component)
 	}
-	
+
 	// Check for invalid characters
 	invalidChars := []rune{'<', '>', ':', '"', '|', '?', '*', '\x00'}
 	for _, char := range component {
@@ -195,7 +195,7 @@ func (pvfs *PrivateVFS) validatePathComponent(component string) error {
 		if unicode.IsControl(char) {
 			return fmt.Errorf("control character not allowed: U+%04X", char)
 		}
-		
+
 		// Check for explicitly invalid characters
 		for _, invalid := range invalidChars {
 			if char == invalid {
@@ -203,7 +203,7 @@ func (pvfs *PrivateVFS) validatePathComponent(component string) error {
 			}
 		}
 	}
-	
+
 	// Check for Windows reserved names (for cross-platform compatibility)
 	reserved := []string{"CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"}
 	upperComponent := strings.ToUpper(component)
@@ -212,12 +212,12 @@ func (pvfs *PrivateVFS) validatePathComponent(component string) error {
 			return fmt.Errorf("reserved name not allowed: %s", component)
 		}
 	}
-	
+
 	// Check for trailing dots or spaces (Windows compatibility)
 	if strings.HasSuffix(component, ".") || strings.HasSuffix(component, " ") {
 		return fmt.Errorf("component cannot end with dot or space: %s", component)
 	}
-	
+
 	return nil
 }
 
@@ -228,21 +228,21 @@ func (pvfs *PrivateVFS) CreateDirectoryExplicit(ctx context.Context, dirPath str
 	if !strings.HasSuffix(dirPath, "/") {
 		dirPath += "/"
 	}
-	
+
 	// Validate path
 	if err := pvfs.validatePath(dirPath); err != nil {
 		return fmt.Errorf("invalid path: %w", err)
 	}
-	
+
 	// Check if directory already exists
 	if pvfs.directoryExists(ctx, dirPath) {
 		return fmt.Errorf("directory already exists: %s", dirPath)
 	}
-	
+
 	// Configure options based on recursive flag
 	options := DefaultDirectoryOptions()
 	options.AutoCreateParents = recursive
-	
+
 	if recursive {
 		// Create parent directories if needed
 		return pvfs.createDirectoryPath(ctx, dirPath, options)
@@ -255,7 +255,7 @@ func (pvfs *PrivateVFS) CreateDirectoryExplicit(ctx context.Context, dirPath str
 				return fmt.Errorf("parent directory does not exist: %s", parentDir)
 			}
 		}
-		
+
 		// Create just this directory
 		return pvfs.createDirectory(ctx, dirPath)
 	}
@@ -270,7 +270,7 @@ func (pvfs *PrivateVFS) GetDirectoryCreationStats(ctx context.Context, basePath 
 		CreatedBy:     make(map[string]int),
 		LastModified:  time.Time{},
 	}
-	
+
 	// Walk directory tree and collect stats
 	err := pvfs.walkDirectoryTree(ctx, basePath, 0, &stats)
 	return stats, err
@@ -284,20 +284,20 @@ func (pvfs *PrivateVFS) walkDirectoryTree(ctx context.Context, dirPath string, d
 	if depth > stats.MaxDepth {
 		stats.MaxDepth = depth
 	}
-	
+
 	// Load directory metadata
 	metadata, err := pvfs.loadDirectoryMetadata(ctx, dirPath)
 	if err != nil {
 		return nil // Skip inaccessible directories
 	}
-	
+
 	// Update stats
 	stats.TotalDirs++
 	stats.CreatedBy[metadata.CreatedBy]++
 	if metadata.Updated.After(stats.LastModified) {
 		stats.LastModified = metadata.Updated
 	}
-	
+
 	// Walk subdirectories
 	for _, entry := range metadata.Entries {
 		if entry.Type == "directory" {
@@ -307,6 +307,6 @@ func (pvfs *PrivateVFS) walkDirectoryTree(ctx context.Context, dirPath string, d
 			}
 		}
 	}
-	
+
 	return nil
 }

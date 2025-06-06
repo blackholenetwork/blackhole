@@ -12,24 +12,24 @@ import (
 type PaymentProcessor interface {
 	// Initialize the payment processor
 	Initialize(config PaymentProcessorConfig) error
-	
+
 	// Payment method management
 	CreatePaymentMethod(ctx context.Context, req PaymentMethodRequest) (*PaymentMethod, error)
 	ValidatePaymentMethod(ctx context.Context, paymentMethodID string) (bool, error)
 	DeletePaymentMethod(ctx context.Context, paymentMethodID string) error
-	
+
 	// Payment processing
 	ProcessPayment(ctx context.Context, payment *Payment) (*PaymentResult, error)
 	RefundPayment(ctx context.Context, paymentID string, amount float64, reason string) (*RefundResult, error)
-	
+
 	// Subscription management (if supported by provider)
 	CreateSubscription(ctx context.Context, subscription *Subscription) (*ProviderSubscription, error)
 	UpdateSubscription(ctx context.Context, subscriptionID string, updates SubscriptionUpdateRequest) error
 	CancelSubscription(ctx context.Context, subscriptionID string) error
-	
+
 	// Webhook handling
 	HandleWebhook(ctx context.Context, payload []byte, signature string) (*WebhookEvent, error)
-	
+
 	// Provider information
 	GetProviderName() string
 	GetSupportedCurrencies() []string
@@ -96,7 +96,7 @@ type MockPaymentProcessor struct {
 	payments     map[string]*Payment
 	paymentMethods map[string]*PaymentMethod
 	subscriptions map[string]*ProviderSubscription
-	
+
 	// Mock behavior settings
 	failPayments      bool
 	paymentFailureRate float64
@@ -139,7 +139,7 @@ func (mpp *MockPaymentProcessor) CreatePaymentMethod(ctx context.Context, req Pa
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
 	}
-	
+
 	// Mock card details
 	if req.Type == "card" {
 		paymentMethod.CardLast4 = "4242"
@@ -147,15 +147,15 @@ func (mpp *MockPaymentProcessor) CreatePaymentMethod(ctx context.Context, req Pa
 		paymentMethod.CardExpMonth = 12
 		paymentMethod.CardExpYear = 2030
 	}
-	
+
 	mpp.paymentMethods[paymentMethod.ID] = paymentMethod
-	
+
 	mpp.logger.Info().
 		Str("payment_method_id", paymentMethod.ID).
 		Str("user_id", req.UserID).
 		Str("type", req.Type).
 		Msg("Created mock payment method")
-	
+
 	return paymentMethod, nil
 }
 
@@ -181,7 +181,7 @@ func (mpp *MockPaymentProcessor) DeletePaymentMethod(ctx context.Context, paymen
 func (mpp *MockPaymentProcessor) ProcessPayment(ctx context.Context, payment *Payment) (*PaymentResult, error) {
 	// Simulate processing delay
 	time.Sleep(mpp.processingDelay)
-	
+
 	result := &PaymentResult{
 		TransactionID:     fmt.Sprintf("txn_mock_%d", time.Now().UnixNano()),
 		ExternalPaymentID: fmt.Sprintf("pay_mock_%d", time.Now().UnixNano()),
@@ -190,7 +190,7 @@ func (mpp *MockPaymentProcessor) ProcessPayment(ctx context.Context, payment *Pa
 		ProcessedAt:       time.Now(),
 		Metadata:          make(map[string]string),
 	}
-	
+
 	// Simulate payment failures based on failure rate
 	if mpp.failPayments || (mpp.paymentFailureRate > 0 && time.Now().UnixNano()%100 < int64(mpp.paymentFailureRate*100)) {
 		result.Success = false
@@ -200,16 +200,16 @@ func (mpp *MockPaymentProcessor) ProcessPayment(ctx context.Context, payment *Pa
 		result.Success = true
 		result.Status = PaymentCompleted
 	}
-	
+
 	mpp.payments[payment.ID] = payment
-	
+
 	mpp.logger.Info().
 		Str("payment_id", payment.ID).
 		Bool("success", result.Success).
 		Float64("amount", payment.Amount).
 		Str("status", string(result.Status)).
 		Msg("Processed mock payment")
-	
+
 	return result, nil
 }
 
@@ -223,13 +223,13 @@ func (mpp *MockPaymentProcessor) RefundPayment(ctx context.Context, paymentID st
 		ProcessedAt: time.Now(),
 		Reason:      reason,
 	}
-	
+
 	mpp.logger.Info().
 		Str("payment_id", paymentID).
 		Float64("amount", amount).
 		Str("reason", reason).
 		Msg("Processed mock refund")
-	
+
 	return result, nil
 }
 
@@ -242,14 +242,14 @@ func (mpp *MockPaymentProcessor) CreateSubscription(ctx context.Context, subscri
 		CurrentPeriodEnd:   subscription.EndDate,
 		Metadata:           make(map[string]string),
 	}
-	
+
 	mpp.subscriptions[subscription.ID] = providerSub
-	
+
 	mpp.logger.Info().
 		Str("subscription_id", subscription.ID).
 		Str("external_id", providerSub.ExternalID).
 		Msg("Created mock subscription")
-	
+
 	return providerSub, nil
 }
 
@@ -266,7 +266,7 @@ func (mpp *MockPaymentProcessor) CancelSubscription(ctx context.Context, subscri
 	if providerSub, exists := mpp.subscriptions[subscriptionID]; exists {
 		providerSub.Status = "cancelled"
 	}
-	
+
 	mpp.logger.Info().
 		Str("subscription_id", subscriptionID).
 		Msg("Cancelled mock subscription")
@@ -281,12 +281,12 @@ func (mpp *MockPaymentProcessor) HandleWebhook(ctx context.Context, payload []by
 		Timestamp: time.Now(),
 		Data:      make(map[string]interface{}),
 	}
-	
+
 	mpp.logger.Info().
 		Str("event_id", event.ID).
 		Str("event_type", event.Type).
 		Msg("Processed mock webhook")
-	
+
 	return event, nil
 }
 

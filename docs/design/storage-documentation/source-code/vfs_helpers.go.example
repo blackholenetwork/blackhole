@@ -27,14 +27,14 @@ func (vfs *VirtualFilesystem) initializePathRegistry(ctx context.Context) error 
 	if err == nil {
 		return nil // Registry already exists
 	}
-	
+
 	// Create new registry
 	registry := &PathRegistry{
 		Mappings: make(map[string]VFSFileInfo),
 		Updated:  time.Now(),
 		Version:  1,
 	}
-	
+
 	return vfs.storePathRegistry(ctx, registry)
 }
 
@@ -44,21 +44,21 @@ func (vfs *VirtualFilesystem) loadPathRegistry(ctx context.Context) (*PathRegist
 	if registry, found := vfs.getCachedPathRegistry(); found {
 		return registry, nil
 	}
-	
+
 	// Load from storage directly (avoid recursion)
 	data, err := vfs.readFileRaw(ctx, vfs.registryPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read path registry: %w", err)
 	}
-	
+
 	var registry PathRegistry
 	if err := json.Unmarshal(data, &registry); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal path registry: %w", err)
 	}
-	
+
 	// Cache for future use
 	vfs.cachePathRegistry(&registry)
-	
+
 	return &registry, nil
 }
 
@@ -66,20 +66,20 @@ func (vfs *VirtualFilesystem) loadPathRegistry(ctx context.Context) (*PathRegist
 func (vfs *VirtualFilesystem) storePathRegistry(ctx context.Context, registry *PathRegistry) error {
 	registry.Updated = time.Now()
 	registry.Version++
-	
+
 	data, err := json.Marshal(registry)
 	if err != nil {
 		return fmt.Errorf("failed to marshal path registry: %w", err)
 	}
-	
+
 	// Store using WriteFile (but need to avoid recursion)
 	if err := vfs.writeFileRaw(ctx, vfs.registryPath, data); err != nil {
 		return fmt.Errorf("failed to store path registry: %w", err)
 	}
-	
+
 	// Update cache
 	vfs.cachePathRegistry(registry)
-	
+
 	return nil
 }
 
@@ -127,10 +127,10 @@ func (vfs *VirtualFilesystem) writeFileRaw(ctx context.Context, path string, dat
 	if err != nil {
 		return fmt.Errorf("failed to store content: %w", err)
 	}
-	
+
 	// Cache content for future reads
 	vfs.cacheContent(string(contentCID), data)
-	
+
 	return nil
 }
 
@@ -145,9 +145,9 @@ func (vfs *VirtualFilesystem) updatePathRegistry(ctx context.Context, path strin
 			Version:  1,
 		}
 	}
-	
+
 	registry.Mappings[path] = fileInfo
-	
+
 	return vfs.storePathRegistry(ctx, registry)
 }
 
@@ -157,9 +157,9 @@ func (vfs *VirtualFilesystem) removeFromPathRegistry(ctx context.Context, path s
 	if err != nil {
 		return err
 	}
-	
+
 	delete(registry.Mappings, path)
-	
+
 	return vfs.storePathRegistry(ctx, registry)
 }
 
@@ -169,20 +169,20 @@ func (vfs *VirtualFilesystem) getFileInfo(ctx context.Context, path string) (*VF
 	if fileInfo, found := vfs.getCachedFileInfo(path); found {
 		return fileInfo, nil
 	}
-	
+
 	registry, err := vfs.loadPathRegistry(ctx)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	fileInfo, exists := registry.Mappings[path]
 	if !exists {
 		return nil, fmt.Errorf("file not found: %s", path)
 	}
-	
+
 	// Cache for future use
 	vfs.cacheFileInfo(path, fileInfo)
-	
+
 	return &fileInfo, nil
 }
 
@@ -190,14 +190,14 @@ func (vfs *VirtualFilesystem) getFileInfo(ctx context.Context, path string) (*VF
 func (vfs *VirtualFilesystem) updateDirectoryListings(ctx context.Context, filePath string, fileInfo VFSFileInfo) error {
 	// Update all parent directories
 	dir := filepath.Dir(filePath)
-	
+
 	for dir != "/" && dir != "." {
 		if err := vfs.addToDirectoryListing(ctx, dir, fileInfo); err != nil {
 			return err
 		}
 		dir = filepath.Dir(dir)
 	}
-	
+
 	// Update root directory
 	return vfs.addToDirectoryListing(ctx, "/", fileInfo)
 }
@@ -205,14 +205,14 @@ func (vfs *VirtualFilesystem) updateDirectoryListings(ctx context.Context, fileP
 // removeFromDirectoryListings removes a file from parent directory listings
 func (vfs *VirtualFilesystem) removeFromDirectoryListings(ctx context.Context, filePath string) error {
 	dir := filepath.Dir(filePath)
-	
+
 	for dir != "/" && dir != "." {
 		if err := vfs.removeFromDirectoryListing(ctx, dir, filePath); err != nil {
 			return err
 		}
 		dir = filepath.Dir(dir)
 	}
-	
+
 	// Update root directory
 	return vfs.removeFromDirectoryListing(ctx, "/", filePath)
 }
@@ -225,7 +225,7 @@ func (vfs *VirtualFilesystem) addToDirectoryListing(ctx context.Context, dirPath
 	return nil
 }
 
-// removeFromDirectoryListing removes a file from a directory listing  
+// removeFromDirectoryListing removes a file from a directory listing
 func (vfs *VirtualFilesystem) removeFromDirectoryListing(ctx context.Context, dirPath string, filePath string) error {
 	// Simplified - rely on path registry
 	return nil
@@ -238,10 +238,10 @@ func (vfs *VirtualFilesystem) cacheFileInfo(path string, fileInfo VFSFileInfo) {
 	if vfs.cache == nil {
 		return
 	}
-	
+
 	key := CacheKeyFileInfo + path
 	data, _ := json.Marshal(fileInfo)
-	
+
 	vfs.cache.Update(func(txn *badger.Txn) error {
 		entry := badger.NewEntry([]byte(key), data).WithTTL(vfs.config.CacheTimeout)
 		return txn.SetEntry(entry)
@@ -253,25 +253,25 @@ func (vfs *VirtualFilesystem) getCachedFileInfo(path string) (*VFSFileInfo, bool
 	if vfs.cache == nil {
 		return nil, false
 	}
-	
+
 	key := CacheKeyFileInfo + path
 	var fileInfo VFSFileInfo
-	
+
 	err := vfs.cache.View(func(txn *badger.Txn) error {
 		item, err := txn.Get([]byte(key))
 		if err != nil {
 			return err
 		}
-		
+
 		return item.Value(func(val []byte) error {
 			return json.Unmarshal(val, &fileInfo)
 		})
 	})
-	
+
 	if err != nil {
 		return nil, false
 	}
-	
+
 	return &fileInfo, true
 }
 
@@ -280,9 +280,9 @@ func (vfs *VirtualFilesystem) cacheContent(contentHash string, data []byte) {
 	if vfs.cache == nil {
 		return
 	}
-	
+
 	key := CacheKeyContent + contentHash
-	
+
 	vfs.cache.Update(func(txn *badger.Txn) error {
 		entry := badger.NewEntry([]byte(key), data).WithTTL(vfs.config.CacheTimeout)
 		return txn.SetEntry(entry)
@@ -296,7 +296,7 @@ func (vfs *VirtualFilesystem) getCachedContent(path string) ([]byte, bool) {
 	if !found {
 		return nil, false
 	}
-	
+
 	return vfs.getCachedContentByHash(fileInfo.ContentHash)
 }
 
@@ -305,27 +305,27 @@ func (vfs *VirtualFilesystem) getCachedContentByHash(contentHash string) ([]byte
 	if vfs.cache == nil {
 		return nil, false
 	}
-	
+
 	key := CacheKeyContent + contentHash
 	var data []byte
-	
+
 	err := vfs.cache.View(func(txn *badger.Txn) error {
 		item, err := txn.Get([]byte(key))
 		if err != nil {
 			return err
 		}
-		
+
 		return item.Value(func(val []byte) error {
 			data = make([]byte, len(val))
 			copy(data, val)
 			return nil
 		})
 	})
-	
+
 	if err != nil {
 		return nil, false
 	}
-	
+
 	return data, true
 }
 
@@ -334,10 +334,10 @@ func (vfs *VirtualFilesystem) cachePathRegistry(registry *PathRegistry) {
 	if vfs.cache == nil {
 		return
 	}
-	
+
 	key := CacheKeyRegistry
 	data, _ := json.Marshal(registry)
-	
+
 	vfs.cache.Update(func(txn *badger.Txn) error {
 		entry := badger.NewEntry([]byte(key), data).WithTTL(vfs.config.CacheTimeout)
 		return txn.SetEntry(entry)
@@ -349,25 +349,25 @@ func (vfs *VirtualFilesystem) getCachedPathRegistry() (*PathRegistry, bool) {
 	if vfs.cache == nil {
 		return nil, false
 	}
-	
+
 	key := CacheKeyRegistry
 	var registry PathRegistry
-	
+
 	err := vfs.cache.View(func(txn *badger.Txn) error {
 		item, err := txn.Get([]byte(key))
 		if err != nil {
 			return err
 		}
-		
+
 		return item.Value(func(val []byte) error {
 			return json.Unmarshal(val, &registry)
 		})
 	})
-	
+
 	if err != nil {
 		return nil, false
 	}
-	
+
 	return &registry, true
 }
 
@@ -376,10 +376,10 @@ func (vfs *VirtualFilesystem) cacheDirectoryListing(dirPath string, listing Dire
 	if vfs.cache == nil {
 		return
 	}
-	
+
 	key := CacheKeyDirectory + dirPath
 	data, _ := json.Marshal(listing)
-	
+
 	vfs.cache.Update(func(txn *badger.Txn) error {
 		entry := badger.NewEntry([]byte(key), data).WithTTL(vfs.config.CacheTimeout)
 		return txn.SetEntry(entry)
@@ -391,25 +391,25 @@ func (vfs *VirtualFilesystem) getCachedDirectoryListing(dirPath string) (*Direct
 	if vfs.cache == nil {
 		return nil, false
 	}
-	
+
 	key := CacheKeyDirectory + dirPath
 	var listing DirectoryListing
-	
+
 	err := vfs.cache.View(func(txn *badger.Txn) error {
 		item, err := txn.Get([]byte(key))
 		if err != nil {
 			return err
 		}
-		
+
 		return item.Value(func(val []byte) error {
 			return json.Unmarshal(val, &listing)
 		})
 	})
-	
+
 	if err != nil {
 		return nil, false
 	}
-	
+
 	return &listing, true
 }
 
@@ -427,7 +427,7 @@ func (vfs *VirtualFilesystem) removeCachedContent(key string) {
 	if vfs.cache == nil {
 		return
 	}
-	
+
 	vfs.cache.Update(func(txn *badger.Txn) error {
 		// Remove by path
 		txn.Delete([]byte(CacheKeyFileInfo + key))

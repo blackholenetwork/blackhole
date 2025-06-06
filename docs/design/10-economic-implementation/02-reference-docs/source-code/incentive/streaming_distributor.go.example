@@ -13,26 +13,26 @@ type StreamingDistributor struct {
 	mu     sync.RWMutex
 	logger zerolog.Logger
 	config *Config
-	
+
 	// Payment accumulation
 	providerBalances     map[string]*ProviderBalance
 	contentCreatorBalances map[string]*CreatorBalance
 	networkOpsBalance    float64
-	
+
 	// Pool management
 	accumulatedPool      float64
 	lastDistribution     time.Time
 	totalDistributedToday float64
-	
+
 	// Payment processing
 	paymentProcessor     PaymentProcessor
 	paymentQueue         chan PaymentInstruction
-	
+
 	// Processing control
 	started              bool
 	stopChan             chan struct{}
 	wg                   sync.WaitGroup
-	
+
 	// Configuration
 	minPayoutThreshold   float64   // Minimum amount before payout
 	payoutInterval       time.Duration // How often to process payouts
@@ -101,21 +101,21 @@ func NewStreamingDistributor(config *Config, logger zerolog.Logger) *StreamingDi
 func (sd *StreamingDistributor) Start(ctx context.Context) error {
 	sd.mu.Lock()
 	defer sd.mu.Unlock()
-	
+
 	if sd.started {
 		return nil
 	}
-	
+
 	sd.logger.Info().Msg("Starting streaming distributor")
-	
+
 	// Start payment processor worker
 	sd.wg.Add(1)
 	go sd.paymentWorker(ctx)
-	
+
 	// Start payout processor worker
 	sd.wg.Add(1)
 	go sd.payoutWorker(ctx)
-	
+
 	sd.started = true
 	return nil
 }
@@ -124,16 +124,16 @@ func (sd *StreamingDistributor) Start(ctx context.Context) error {
 func (sd *StreamingDistributor) Stop(ctx context.Context) error {
 	sd.mu.Lock()
 	defer sd.mu.Unlock()
-	
+
 	if !sd.started {
 		return nil
 	}
-	
+
 	sd.logger.Info().Msg("Stopping streaming distributor")
-	
+
 	close(sd.stopChan)
 	sd.wg.Wait()
-	
+
 	sd.started = false
 	return nil
 }
@@ -142,38 +142,38 @@ func (sd *StreamingDistributor) Stop(ctx context.Context) error {
 func (sd *StreamingDistributor) DistributePayments(distribution *DistributionResult) error {
 	sd.mu.Lock()
 	defer sd.mu.Unlock()
-	
+
 	now := time.Now()
-	
+
 	// Accumulate provider rewards
 	for providerID, amount := range distribution.ProviderRewards {
 		if amount > 0 {
 			sd.accumulateProviderEarnings(providerID, amount, now)
 		}
 	}
-	
+
 	// Accumulate content creator rewards
 	for creatorID, amount := range distribution.ContentCreatorRewards {
 		if amount > 0 {
 			sd.accumulateCreatorEarnings(creatorID, amount, now)
 		}
 	}
-	
+
 	// Accumulate network ops rewards
 	if distribution.NetworkOpsReward > 0 {
 		sd.networkOpsBalance += distribution.NetworkOpsReward
 	}
-	
+
 	sd.lastDistribution = now
 	sd.totalDistributedToday += distribution.TotalRevenue
-	
+
 	sd.logger.Debug().
 		Float64("total_revenue", distribution.TotalRevenue).
 		Int("providers", len(distribution.ProviderRewards)).
 		Int("creators", len(distribution.ContentCreatorRewards)).
 		Float64("network_ops", distribution.NetworkOpsReward).
 		Msg("Distributed payments to balances")
-	
+
 	return nil
 }
 
@@ -181,9 +181,9 @@ func (sd *StreamingDistributor) DistributePayments(distribution *DistributionRes
 func (sd *StreamingDistributor) AccumulateToPool(amount float64) {
 	sd.mu.Lock()
 	defer sd.mu.Unlock()
-	
+
 	sd.accumulatedPool += amount
-	
+
 	sd.logger.Debug().
 		Float64("amount", amount).
 		Float64("total_pool", sd.accumulatedPool).
@@ -200,11 +200,11 @@ func (sd *StreamingDistributor) accumulateProviderEarnings(providerID string, am
 		}
 		sd.providerBalances[providerID] = balance
 	}
-	
+
 	balance.AccumulatedEarnings += amount
 	balance.TotalEarned += amount
 	balance.LastUpdated = timestamp
-	
+
 	// Queue payment if threshold is reached
 	if balance.AccumulatedEarnings >= sd.minPayoutThreshold {
 		sd.queuePayment(PaymentInstruction{
@@ -214,7 +214,7 @@ func (sd *StreamingDistributor) accumulateProviderEarnings(providerID string, am
 			Timestamp:     timestamp,
 			Description:   "Real-time infrastructure reward",
 		})
-		
+
 		// Reset accumulated earnings after queuing payment
 		balance.AccumulatedEarnings = 0
 		balance.PayoutCount++
@@ -232,11 +232,11 @@ func (sd *StreamingDistributor) accumulateCreatorEarnings(creatorID string, amou
 		}
 		sd.contentCreatorBalances[creatorID] = balance
 	}
-	
+
 	balance.AccumulatedEarnings += amount
 	balance.TotalEarned += amount
 	balance.LastUpdated = timestamp
-	
+
 	// Queue payment if threshold is reached
 	if balance.AccumulatedEarnings >= sd.minPayoutThreshold {
 		sd.queuePayment(PaymentInstruction{
@@ -246,7 +246,7 @@ func (sd *StreamingDistributor) accumulateCreatorEarnings(creatorID string, amou
 			Timestamp:     timestamp,
 			Description:   "Real-time content creator reward",
 		})
-		
+
 		// Reset accumulated earnings after queuing payment
 		balance.AccumulatedEarnings = 0
 		balance.PayoutCount++
@@ -274,7 +274,7 @@ func (sd *StreamingDistributor) queuePayment(instruction PaymentInstruction) {
 // paymentWorker processes queued payments
 func (sd *StreamingDistributor) paymentWorker(ctx context.Context) {
 	defer sd.wg.Done()
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -290,10 +290,10 @@ func (sd *StreamingDistributor) paymentWorker(ctx context.Context) {
 // payoutWorker handles periodic payouts for small accumulated amounts
 func (sd *StreamingDistributor) payoutWorker(ctx context.Context) {
 	defer sd.wg.Done()
-	
+
 	ticker := time.NewTicker(sd.payoutInterval)
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -315,7 +315,7 @@ func (sd *StreamingDistributor) processPayment(instruction PaymentInstruction) {
 			Msg("No payment processor available, payment skipped")
 		return
 	}
-	
+
 	if err := sd.paymentProcessor.ProcessPayment(instruction); err != nil {
 		sd.logger.Error().
 			Err(err).
@@ -324,7 +324,7 @@ func (sd *StreamingDistributor) processPayment(instruction PaymentInstruction) {
 			Msg("Failed to process payment")
 		return
 	}
-	
+
 	sd.logger.Info().
 		Str("recipient_id", instruction.RecipientID).
 		Str("type", instruction.RecipientType).
@@ -336,10 +336,10 @@ func (sd *StreamingDistributor) processPayment(instruction PaymentInstruction) {
 func (sd *StreamingDistributor) processSmallPayouts() {
 	sd.mu.Lock()
 	defer sd.mu.Unlock()
-	
+
 	now := time.Now()
 	smallPayoutThreshold := sd.minPayoutThreshold / 10 // Pay out at 10% of normal threshold
-	
+
 	// Process small provider payouts
 	for providerID, balance := range sd.providerBalances {
 		if balance.AccumulatedEarnings >= smallPayoutThreshold {
@@ -350,13 +350,13 @@ func (sd *StreamingDistributor) processSmallPayouts() {
 				Timestamp:     now,
 				Description:   "Small payout - accumulated earnings",
 			})
-			
+
 			balance.AccumulatedEarnings = 0
 			balance.PayoutCount++
 			balance.LastPayout = now
 		}
 	}
-	
+
 	// Process small creator payouts
 	for creatorID, balance := range sd.contentCreatorBalances {
 		if balance.AccumulatedEarnings >= smallPayoutThreshold {
@@ -367,7 +367,7 @@ func (sd *StreamingDistributor) processSmallPayouts() {
 				Timestamp:     now,
 				Description:   "Small payout - accumulated earnings",
 			})
-			
+
 			balance.AccumulatedEarnings = 0
 			balance.PayoutCount++
 			balance.LastPayout = now
@@ -379,7 +379,7 @@ func (sd *StreamingDistributor) processSmallPayouts() {
 func (sd *StreamingDistributor) SetPaymentProcessor(processor PaymentProcessor) {
 	sd.mu.Lock()
 	defer sd.mu.Unlock()
-	
+
 	sd.paymentProcessor = processor
 	sd.logger.Info().Msg("Payment processor registered")
 }
@@ -388,7 +388,7 @@ func (sd *StreamingDistributor) SetPaymentProcessor(processor PaymentProcessor) 
 func (sd *StreamingDistributor) GetLastDistribution() time.Time {
 	sd.mu.RLock()
 	defer sd.mu.RUnlock()
-	
+
 	return sd.lastDistribution
 }
 
@@ -396,7 +396,7 @@ func (sd *StreamingDistributor) GetLastDistribution() time.Time {
 func (sd *StreamingDistributor) GetTotalDistributedToday() float64 {
 	sd.mu.RLock()
 	defer sd.mu.RUnlock()
-	
+
 	return sd.totalDistributedToday
 }
 
@@ -404,7 +404,7 @@ func (sd *StreamingDistributor) GetTotalDistributedToday() float64 {
 func (sd *StreamingDistributor) GetProviderBalances() map[string]*ProviderBalance {
 	sd.mu.RLock()
 	defer sd.mu.RUnlock()
-	
+
 	// Return a copy to avoid concurrent access
 	result := make(map[string]*ProviderBalance)
 	for providerID, balance := range sd.providerBalances {
@@ -417,7 +417,7 @@ func (sd *StreamingDistributor) GetProviderBalances() map[string]*ProviderBalanc
 			LastUpdated:         balance.LastUpdated,
 		}
 	}
-	
+
 	return result
 }
 
@@ -425,7 +425,7 @@ func (sd *StreamingDistributor) GetProviderBalances() map[string]*ProviderBalanc
 func (sd *StreamingDistributor) GetCreatorBalances() map[string]*CreatorBalance {
 	sd.mu.RLock()
 	defer sd.mu.RUnlock()
-	
+
 	// Return a copy to avoid concurrent access
 	result := make(map[string]*CreatorBalance)
 	for creatorID, balance := range sd.contentCreatorBalances {
@@ -438,6 +438,6 @@ func (sd *StreamingDistributor) GetCreatorBalances() map[string]*CreatorBalance 
 			LastUpdated:         balance.LastUpdated,
 		}
 	}
-	
+
 	return result
 }

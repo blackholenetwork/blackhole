@@ -9,22 +9,22 @@ type Config struct {
 	// Service settings
 	Enabled                bool          `mapstructure:"enabled" json:"enabled"`
 	DatabasePath           string        `mapstructure:"database_path" json:"database_path"`
-	
+
 	// Subscription settings
 	DefaultBillingCycle    time.Duration `mapstructure:"default_billing_cycle" json:"default_billing_cycle"`
 	GracePeriod           time.Duration `mapstructure:"grace_period" json:"grace_period"`
 	PaymentRetryAttempts  int           `mapstructure:"payment_retry_attempts" json:"payment_retry_attempts"`
 	PaymentRetryInterval  time.Duration `mapstructure:"payment_retry_interval" json:"payment_retry_interval"`
-	
+
 	// Subscription tiers and pricing
 	TierPricing           TierPricingConfig `mapstructure:"tier_pricing" json:"tier_pricing"`
-	
+
 	// Payment processing
 	PaymentProcessor      PaymentProcessorConfig `mapstructure:"payment_processor" json:"payment_processor"`
-	
+
 	// Notification settings
 	NotificationSettings  NotificationConfig `mapstructure:"notifications" json:"notifications"`
-	
+
 	// Security settings
 	Security              SecurityConfig `mapstructure:"security" json:"security"`
 }
@@ -35,7 +35,7 @@ type TierPricingConfig struct {
 	Normal   SubscriptionTierConfig `mapstructure:"normal" json:"normal"`
 	Advance  SubscriptionTierConfig `mapstructure:"advance" json:"advance"`
 	Ultimate SubscriptionTierConfig `mapstructure:"ultimate" json:"ultimate"`
-	
+
 	// Custom tier settings
 	AllowCustomTiers     bool    `mapstructure:"allow_custom_tiers" json:"allow_custom_tiers"`
 	MinCustomAmount      float64 `mapstructure:"min_custom_amount" json:"min_custom_amount"`
@@ -116,7 +116,7 @@ func DefaultConfig() *Config {
 		GracePeriod:           3 * 24 * time.Hour,   // 3 days grace period
 		PaymentRetryAttempts:  3,
 		PaymentRetryInterval:  24 * time.Hour, // Retry every 24 hours
-		
+
 		TierPricing: TierPricingConfig{
 			Free: SubscriptionTierConfig{
 				MonthlyPrice:   0.0,
@@ -190,14 +190,14 @@ func DefaultConfig() *Config {
 			MinCustomAmount:  1.0,
 			MaxCustomAmount:  1000.0,
 		},
-		
+
 		PaymentProcessor: PaymentProcessorConfig{
 			Provider:      "mock", // Default to mock for development
 			Currency:      "USD",
 			TaxRate:       0.0, // No tax by default
 			Settings:      make(map[string]string),
 		},
-		
+
 		NotificationSettings: NotificationConfig{
 			Enabled:                    true,
 			PaymentSuccessNotification: true,
@@ -210,7 +210,7 @@ func DefaultConfig() *Config {
 				FromName:  "Blackhole Network",
 			},
 		},
-		
+
 		Security: SecurityConfig{
 			RequireEmailVerification:   true,
 			RequirePaymentVerification: true,
@@ -229,42 +229,42 @@ func (c *Config) Validate() error {
 			Message: "billing cycle must be at least 24 hours",
 		}
 	}
-	
+
 	if c.PaymentRetryAttempts < 0 {
 		return &ConfigError{
 			Field:   "payment_retry_attempts",
 			Message: "payment retry attempts must be non-negative",
 		}
 	}
-	
+
 	if c.TierPricing.MinCustomAmount < 0 {
 		return &ConfigError{
 			Field:   "tier_pricing.min_custom_amount",
 			Message: "minimum custom amount must be non-negative",
 		}
 	}
-	
+
 	if c.TierPricing.MaxCustomAmount < c.TierPricing.MinCustomAmount {
 		return &ConfigError{
 			Field:   "tier_pricing.max_custom_amount",
 			Message: "maximum custom amount must be >= minimum custom amount",
 		}
 	}
-	
+
 	if c.PaymentProcessor.Currency == "" {
 		return &ConfigError{
 			Field:   "payment_processor.currency",
 			Message: "currency must be specified",
 		}
 	}
-	
+
 	if c.PaymentProcessor.TaxRate < 0 || c.PaymentProcessor.TaxRate > 1 {
 		return &ConfigError{
 			Field:   "payment_processor.tax_rate",
 			Message: "tax rate must be between 0.0 and 1.0",
 		}
 	}
-	
+
 	return nil
 }
 

@@ -34,14 +34,14 @@ IF high demand AND don't have it → Create it → Serve it
 ```yaml
 chunking:
   size: 262,144 bytes  # 256 KB (IPFS compatible)
-  
+
 encoding:
   block_size: 10 chunks  # 2.56 MB per block
   baseline: "10+3"       # 30% redundancy minimum
-  
+
   adaptive_rules:
     low_demand: "10+3"   # 13 chunks total
-    medium: "10+10"      # 20 chunks total  
+    medium: "10+10"      # 20 chunks total
     high: "10+50"        # 60 chunks total
     viral: "10+100"      # 110 chunks total
     max: "10+100"        # Computational limit
@@ -57,12 +57,12 @@ def find_chunk(chunk_id):
     for i in range(20):
         node_id = hash(f"{chunk_id}:{i}") % network_size
         candidates.append(node_id)
-    
+
     # Try candidates until success
     for node in get_active_nodes(candidates):
         if chunk := node.get_chunk(chunk_id):
             return chunk
-            
+
 # 1000x less metadata, instant lookups!
 ```
 
@@ -89,13 +89,13 @@ def parity_decision_loop():
             demand = get_demand_metrics(file)
             current_parity = get_parity_count(file)
             target_parity = calculate_target(demand)
-            
+
             deficit = target_parity - current_parity
             if deficit > 0:
                 # Generate my share
                 my_contribution = min(5, deficit // 20)
                 generate_parity(file, my_contribution)
-                
+
         sleep(random(30, 90))  # Natural desynchronization
 ```
 
@@ -106,7 +106,7 @@ public_information:
   - parity_count: "current redundancy level"
   - geographic_demand: "requests by region"
   - node_stress: "overloaded nodes count"
-  
+
 triggers:
   - trend: "50% increase in 2 minutes"
   - geography: "New region >100 requests"
@@ -133,7 +133,7 @@ earnings:
   storage: "Base rate × hours online"
   bandwidth: "Bytes served × demand multiplier"
   computation: "Parity chunks generated"
-  
+
 no_penalties:
   - Going offline is natural
   - Others earn more when you leave
@@ -268,15 +268,15 @@ state: "Baseline redundancy"
 efficiency:
   storage_savings: "75% vs replication"
   metadata_reduction: "1000x vs traditional"
-  
+
 availability:
   normal_content: "99.9%"
   viral_content: "99.99%"
-  
+
 scalability:
   max_nodes_per_file: "10,000+"
   max_concurrent_users: "1,000,000+"
-  
+
 simplicity:
   coordination_required: "None"
   barriers_to_entry: "None"

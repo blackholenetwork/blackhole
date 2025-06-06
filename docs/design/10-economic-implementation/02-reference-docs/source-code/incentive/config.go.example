@@ -11,31 +11,31 @@ type Config struct {
 	BillingInterval   time.Duration `mapstructure:"billing_interval" json:"billing_interval"`     // Default: 30 days
 	CalculationDelay  time.Duration `mapstructure:"calculation_delay" json:"calculation_delay"`   // Delay before calculation
 	DistributionDelay time.Duration `mapstructure:"distribution_delay" json:"distribution_delay"` // Delay before distribution
-	
+
 	// Market-based pricing model
 	MarketPricing MarketPricingConfig `mapstructure:"market_pricing" json:"market_pricing"`
-	
+
 	// Base market rates for resource pricing
 	MarketRates   MarketRates `mapstructure:"market_rates" json:"market_rates"`
-	
+
 	// Subscription tier pricing (monthly amounts in USD)
 	TierPricing TierPricingConfig `mapstructure:"tier_pricing" json:"tier_pricing"`
-	
+
 	// Flexible subscription pricing
 	FlexiblePricing FlexiblePricingConfig `mapstructure:"flexible_pricing" json:"flexible_pricing"`
-	
+
 	// Minimum thresholds
 	MinContribution MinContributionConfig `mapstructure:"min_contribution" json:"min_contribution"`
-	
+
 	// Content creator settings
 	ContentCreator ContentCreatorConfig `mapstructure:"content_creator" json:"content_creator"`
-	
-	// Content economy settings  
+
+	// Content economy settings
 	ContentEconomy ContentEconomyConfig `mapstructure:"content_economy" json:"content_economy"`
-	
+
 	// Payment settings
 	Payment PaymentConfig `mapstructure:"payment" json:"payment"`
-	
+
 	// Verification settings
 	Verification VerificationConfig `mapstructure:"verification" json:"verification"`
 }
@@ -109,16 +109,16 @@ type ContentEconomyConfig struct {
 	MinContentPrice      float64       `mapstructure:"min_content_price" json:"min_content_price"`           // Minimum content price
 	MaxContentPrice      float64       `mapstructure:"max_content_price" json:"max_content_price"`           // Maximum content price
 	DefaultContentPrice  float64       `mapstructure:"default_content_price" json:"default_content_price"`   // Default content price
-	
+
 	// Investment settings
 	MaxInvestorsPerCreator int          `mapstructure:"max_investors_per_creator" json:"max_investors_per_creator"` // Max investors per creator
 	MinInvestmentAmount    float64      `mapstructure:"min_investment_amount" json:"min_investment_amount"`         // Minimum investment
-	
+
 	// Secondary market settings
 	CreatorRoyaltyRate     float64      `mapstructure:"creator_royalty_rate" json:"creator_royalty_rate"`           // Creator cut from secondary sales
 	MarketplaceFeeRate     float64      `mapstructure:"marketplace_fee_rate" json:"marketplace_fee_rate"`           // Platform fee on secondary sales
 	ListingDuration        time.Duration `mapstructure:"listing_duration" json:"listing_duration"`                 // How long listings stay active
-	
+
 	// Tip settings
 	MinTipAmount          float64       `mapstructure:"min_tip_amount" json:"min_tip_amount"`                       // Minimum tip amount
 	MaxTipAmount          float64       `mapstructure:"max_tip_amount" json:"max_tip_amount"`                       // Maximum tip amount
@@ -148,17 +148,17 @@ func DefaultConfig() *Config {
 		BillingInterval:   30 * 24 * time.Hour, // 30 days
 		CalculationDelay:  2 * time.Hour,       // 2 hours after cycle end
 		DistributionDelay: 24 * time.Hour,      // 24 hours after calculation
-		
+
 		MarketPricing: DefaultMarketPricingConfig(),
-		
+
 		MarketRates: DefaultMarketRates(),
-		
+
 		TierPricing: TierPricingConfig{
 			Normal:   10.0,  // $10/month
 			Advance:  25.0,  // $25/month
 			Ultimate: 50.0,  // $50/month
 		},
-		
+
 		FlexiblePricing: FlexiblePricingConfig{
 			Enabled:         true,
 			ProratedBilling: true,
@@ -190,7 +190,7 @@ func DefaultConfig() *Config {
 				},
 			},
 		},
-		
+
 		MinContribution: MinContributionConfig{
 			Storage:    100.0,  // 100 GB-hours minimum
 			Bandwidth:  10.0,   // 10 GB minimum
@@ -198,7 +198,7 @@ func DefaultConfig() *Config {
 			NetworkOps: 1.0,    // 1 operation minimum
 			Content:    10.0,   // 10 content points minimum
 		},
-		
+
 		ContentCreator: ContentCreatorConfig{
 			ViewWeight:       1.0,   // 1 point per view
 			EngagementWeight: 5.0,   // 5 points per engagement
@@ -208,7 +208,7 @@ func DefaultConfig() *Config {
 			MinEngagement:    10.0,  // 10 engagement score minimum
 			InvestorSplit:    0.30,  // 30% of creator revenue goes to investors
 		},
-		
+
 		ContentEconomy: ContentEconomyConfig{
 			MinContentPrice:        1.0,                      // $1 minimum
 			MaxContentPrice:        1000.0,                   // $1000 maximum
@@ -222,14 +222,14 @@ func DefaultConfig() *Config {
 			MaxTipAmount:          10000.0,                   // $10,000 maximum tip
 			TipInvestorShare:      0.10,                      // 10% of tips shared with investors
 		},
-		
+
 		Payment: PaymentConfig{
 			MinPayoutAmount: 1.0,                     // $1 minimum payout
 			PaymentDelay:    24 * time.Hour,          // 24 hours
 			RetryAttempts:   3,                       // 3 retry attempts
 			RetryInterval:   4 * time.Hour,           // 4 hours between retries
 		},
-		
+
 		Verification: VerificationConfig{
 			RequireProofs:     true,                  // Require proofs
 			SamplingRate:      0.1,                   // 10% sampling
@@ -242,26 +242,26 @@ func DefaultConfig() *Config {
 // Validate validates the configuration
 func (c *Config) Validate() error {
 	// Validate market pricing percentages sum to 1.0
-	total := c.MarketPricing.ContentCreatorPercentage + 
-		c.MarketPricing.NetworkOpsPercentage + 
+	total := c.MarketPricing.ContentCreatorPercentage +
+		c.MarketPricing.NetworkOpsPercentage +
 		c.MarketPricing.AppDeveloperPercentage +
 		c.MarketPricing.InfrastructurePercentage
-	
+
 	if total < 0.99 || total > 1.01 { // Allow small floating point errors
 		return &ConfigError{
 			Field:   "market_pricing",
 			Message: "market pricing percentages must sum to 1.0",
 		}
 	}
-	
+
 	// Validate market rates are positive
 	if c.MarketRates.StoragePerGBMonth <= 0 || c.MarketRates.BandwidthPerGB <= 0 || c.MarketRates.ComputePerCPUHour <= 0 {
 		return &ConfigError{
-			Field:   "market_rates", 
+			Field:   "market_rates",
 			Message: "all market rates must be positive",
 		}
 	}
-	
+
 	// Validate billing interval
 	if c.BillingInterval < 24*time.Hour {
 		return &ConfigError{
@@ -269,7 +269,7 @@ func (c *Config) Validate() error {
 			Message: "billing interval must be at least 24 hours",
 		}
 	}
-	
+
 	// Validate tier pricing
 	if c.TierPricing.Normal <= 0 || c.TierPricing.Advance <= 0 || c.TierPricing.Ultimate <= 0 {
 		return &ConfigError{
@@ -277,7 +277,7 @@ func (c *Config) Validate() error {
 			Message: "all tier prices must be positive",
 		}
 	}
-	
+
 	// Validate sampling rate
 	if c.Verification.SamplingRate < 0 || c.Verification.SamplingRate > 1 {
 		return &ConfigError{
@@ -285,7 +285,7 @@ func (c *Config) Validate() error {
 			Message: "sampling rate must be between 0.0 and 1.0",
 		}
 	}
-	
+
 	// Validate content economy settings
 	if c.ContentEconomy.MinContentPrice < 0 {
 		return &ConfigError{
@@ -293,28 +293,28 @@ func (c *Config) Validate() error {
 			Message: "minimum content price must be non-negative",
 		}
 	}
-	
+
 	if c.ContentEconomy.MaxContentPrice < c.ContentEconomy.MinContentPrice {
 		return &ConfigError{
 			Field:   "content_economy.max_content_price",
 			Message: "maximum content price must be >= minimum content price",
 		}
 	}
-	
+
 	if c.ContentCreator.InvestorSplit < 0 || c.ContentCreator.InvestorSplit > 1 {
 		return &ConfigError{
 			Field:   "content_creator.investor_split",
 			Message: "investor split must be between 0.0 and 1.0",
 		}
 	}
-	
+
 	if c.ContentEconomy.CreatorRoyaltyRate < 0 || c.ContentEconomy.CreatorRoyaltyRate > 1 {
 		return &ConfigError{
 			Field:   "content_economy.creator_royalty_rate",
 			Message: "creator royalty rate must be between 0.0 and 1.0",
 		}
 	}
-	
+
 	return nil
 }
 

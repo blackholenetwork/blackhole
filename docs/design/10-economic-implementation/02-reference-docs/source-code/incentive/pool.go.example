@@ -14,20 +14,20 @@ type SubscriptionPool struct {
 	mu                 sync.RWMutex
 	logger             zerolog.Logger
 	config             *Config
-	
+
 	// Current billing cycle
 	currentCycle       *BillingCycle
-	
+
 	// Subscription management
 	subscriptions      map[string]*Subscription  // userID -> subscription
-	
+
 	// Contribution tracking
 	contributions      map[string][]*UsageContribution // cycleID -> contributions
 	networkTotals      map[string]*NetworkContribution  // cycleID -> network totals
-	
+
 	// Reward management
 	calculations       map[string]*RewardCalculation    // cycleID -> calculation
-	
+
 	// Internal state
 	started            bool
 	stopChan           chan struct{}
@@ -51,31 +51,31 @@ func NewSubscriptionPool(config *Config, logger zerolog.Logger) *SubscriptionPoo
 func (sp *SubscriptionPool) Start(ctx context.Context) error {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
-	
+
 	if sp.started {
 		return fmt.Errorf("subscription pool already started")
 	}
-	
+
 	sp.logger.Info().Msg("Starting subscription pool")
-	
+
 	// Initialize current billing cycle if none exists
 	if sp.currentCycle == nil {
 		if err := sp.startNewBillingCycle(); err != nil {
 			return fmt.Errorf("failed to start initial billing cycle: %w", err)
 		}
 	}
-	
+
 	sp.started = true
-	
+
 	// Start background workers
 	sp.wg.Add(1)
 	go sp.billingCycleManager(ctx)
-	
+
 	sp.logger.Info().
 		Str("cycle_id", sp.currentCycle.ID).
 		Time("cycle_end", sp.currentCycle.EndDate).
 		Msg("Subscription pool started")
-	
+
 	return nil
 }
 
@@ -83,18 +83,18 @@ func (sp *SubscriptionPool) Start(ctx context.Context) error {
 func (sp *SubscriptionPool) Stop(ctx context.Context) error {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
-	
+
 	if !sp.started {
 		return nil
 	}
-	
+
 	sp.logger.Info().Msg("Stopping subscription pool")
-	
+
 	close(sp.stopChan)
 	sp.wg.Wait()
-	
+
 	sp.started = false
-	
+
 	sp.logger.Info().Msg("Subscription pool stopped")
 	return nil
 }
@@ -103,16 +103,16 @@ func (sp *SubscriptionPool) Stop(ctx context.Context) error {
 func (sp *SubscriptionPool) AddSubscription(subscription *Subscription) error {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
-	
+
 	subscription.UpdatedAt = time.Now()
 	sp.subscriptions[subscription.UserID] = subscription
-	
+
 	sp.logger.Info().
 		Str("user_id", subscription.UserID).
 		Str("tier", string(subscription.Tier)).
 		Float64("amount", subscription.MonthlyAmount).
 		Msg("Subscription added")
-	
+
 	return nil
 }
 
@@ -120,21 +120,21 @@ func (sp *SubscriptionPool) AddSubscription(subscription *Subscription) error {
 func (sp *SubscriptionPool) CancelSubscription(userID string) error {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
-	
+
 	subscription, exists := sp.subscriptions[userID]
 	if !exists {
 		return fmt.Errorf("subscription not found for user: %s", userID)
 	}
-	
+
 	subscription.Status = SubscriptionCancelled
 	subscription.UpdatedAt = time.Now()
 	endDate := time.Now()
 	subscription.EndDate = &endDate
-	
+
 	sp.logger.Info().
 		Str("user_id", userID).
 		Msg("Subscription cancelled")
-	
+
 	return nil
 }
 
@@ -142,12 +142,12 @@ func (sp *SubscriptionPool) CancelSubscription(userID string) error {
 func (sp *SubscriptionPool) GetSubscription(userID string) (*Subscription, error) {
 	sp.mu.RLock()
 	defer sp.mu.RUnlock()
-	
+
 	subscription, exists := sp.subscriptions[userID]
 	if !exists {
 		return nil, fmt.Errorf("subscription not found for user: %s", userID)
 	}
-	
+
 	// Return a copy to prevent external modification
 	sub := *subscription
 	return &sub, nil
@@ -157,11 +157,11 @@ func (sp *SubscriptionPool) GetSubscription(userID string) (*Subscription, error
 func (sp *SubscriptionPool) GetCurrentCycle() *BillingCycle {
 	sp.mu.RLock()
 	defer sp.mu.RUnlock()
-	
+
 	if sp.currentCycle == nil {
 		return nil
 	}
-	
+
 	// Return a copy
 	cycle := *sp.currentCycle
 	return &cycle
@@ -171,14 +171,14 @@ func (sp *SubscriptionPool) GetCurrentCycle() *BillingCycle {
 func (sp *SubscriptionPool) GetPoolAmount() float64 {
 	sp.mu.RLock()
 	defer sp.mu.RUnlock()
-	
+
 	var total float64
 	for _, subscription := range sp.subscriptions {
 		if subscription.Status == SubscriptionActive {
 			total += subscription.MonthlyAmount
 		}
 	}
-	
+
 	return total
 }
 
@@ -186,14 +186,14 @@ func (sp *SubscriptionPool) GetPoolAmount() float64 {
 func (sp *SubscriptionPool) GetActiveSubscriptions() map[SubscriptionTier]int {
 	sp.mu.RLock()
 	defer sp.mu.RUnlock()
-	
+
 	counts := make(map[SubscriptionTier]int)
 	for _, subscription := range sp.subscriptions {
 		if subscription.Status == SubscriptionActive {
 			counts[subscription.Tier]++
 		}
 	}
-	
+
 	return counts
 }
 
@@ -201,7 +201,7 @@ func (sp *SubscriptionPool) GetActiveSubscriptions() map[SubscriptionTier]int {
 func (sp *SubscriptionPool) startNewBillingCycle() error {
 	now := time.Now()
 	cycleID := fmt.Sprintf("cycle_%d", now.Unix())
-	
+
 	sp.currentCycle = &BillingCycle{
 		ID:              cycleID,
 		StartDate:       now,
@@ -210,7 +210,7 @@ func (sp *SubscriptionPool) startNewBillingCycle() error {
 		TotalPoolAmount: 0,
 		CreatedAt:       now,
 	}
-	
+
 	// Initialize network contribution tracking for this cycle
 	sp.networkTotals[cycleID] = &NetworkContribution{
 		BillingCycleID: cycleID,
@@ -218,23 +218,23 @@ func (sp *SubscriptionPool) startNewBillingCycle() error {
 		ProviderCount:  make(map[ResourceType]int),
 		LastUpdated:    now,
 	}
-	
+
 	sp.logger.Info().
 		Str("cycle_id", cycleID).
 		Time("start_date", sp.currentCycle.StartDate).
 		Time("end_date", sp.currentCycle.EndDate).
 		Msg("New billing cycle started")
-	
+
 	return nil
 }
 
 // billingCycleManager manages billing cycle transitions
 func (sp *SubscriptionPool) billingCycleManager(ctx context.Context) {
 	defer sp.wg.Done()
-	
+
 	ticker := time.NewTicker(time.Hour) // Check every hour
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -251,24 +251,24 @@ func (sp *SubscriptionPool) billingCycleManager(ctx context.Context) {
 func (sp *SubscriptionPool) checkCycleTransition() {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
-	
+
 	if sp.currentCycle == nil || sp.currentCycle.Status != CycleStatusActive {
 		return
 	}
-	
+
 	now := time.Now()
 	if now.After(sp.currentCycle.EndDate) {
 		sp.logger.Info().
 			Str("cycle_id", sp.currentCycle.ID).
 			Msg("Billing cycle ended, starting calculation")
-		
+
 		// Calculate final pool amount
 		sp.currentCycle.TotalPoolAmount = sp.GetPoolAmount()
 		sp.currentCycle.Status = CycleStatusCalculating
-		
+
 		// Schedule reward calculation after delay
 		go sp.scheduleRewardCalculation(sp.currentCycle.ID)
-		
+
 		// Start new cycle
 		if err := sp.startNewBillingCycle(); err != nil {
 			sp.logger.Error().
@@ -281,14 +281,14 @@ func (sp *SubscriptionPool) checkCycleTransition() {
 // scheduleRewardCalculation schedules reward calculation for a completed cycle
 func (sp *SubscriptionPool) scheduleRewardCalculation(cycleID string) {
 	time.Sleep(sp.config.CalculationDelay)
-	
+
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
-	
+
 	sp.logger.Info().
 		Str("cycle_id", cycleID).
 		Msg("Starting reward calculation")
-	
+
 	// This will be implemented in the next file (calculation.go)
 	// For now, just log the event
 	sp.logger.Info().
@@ -300,14 +300,14 @@ func (sp *SubscriptionPool) scheduleRewardCalculation(cycleID string) {
 func (sp *SubscriptionPool) GetStats() *IncentiveStats {
 	sp.mu.RLock()
 	defer sp.mu.RUnlock()
-	
+
 	activeCount := 0
 	for _, sub := range sp.subscriptions {
 		if sub.Status == SubscriptionActive {
 			activeCount++
 		}
 	}
-	
+
 	// Count unique providers from current cycle
 	providerCount := 0
 	if sp.currentCycle != nil {
@@ -317,14 +317,14 @@ func (sp *SubscriptionPool) GetStats() *IncentiveStats {
 		}
 		providerCount = len(providers)
 	}
-	
+
 	// Count content creators separately
 	creatorCount := 0
 	if sp.currentCycle != nil {
 		// This would need to be implemented to track creators separately
 		// For now, we'll leave it at 0
 	}
-	
+
 	stats := &IncentiveStats{
 		ActiveSubscriptions:  activeCount,
 		TotalProviders:       providerCount,
@@ -341,6 +341,6 @@ func (sp *SubscriptionPool) GetStats() *IncentiveStats {
 			ResourceNetworkOps: sp.config.MarketPricing.NetworkOpsPercentage, // 1%
 		},
 	}
-	
+
 	return stats
 }

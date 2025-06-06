@@ -8,13 +8,13 @@ import (
 // billingWorker handles recurring billing and subscription management
 func (s *Service) billingWorker(ctx context.Context) {
 	defer s.wg.Done()
-	
+
 	// Check for billing tasks every hour
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
-	
+
 	s.logger.Debug().Msg("Billing worker started")
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -30,13 +30,13 @@ func (s *Service) billingWorker(ctx context.Context) {
 // notificationWorker handles sending notifications for subscription events
 func (s *Service) notificationWorker(ctx context.Context) {
 	defer s.wg.Done()
-	
+
 	// Check for notifications every 6 hours
 	ticker := time.NewTicker(6 * time.Hour)
 	defer ticker.Stop()
-	
+
 	s.logger.Debug().Msg("Notification worker started")
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -52,13 +52,13 @@ func (s *Service) notificationWorker(ctx context.Context) {
 // statsWorker updates service statistics periodically
 func (s *Service) statsWorker(ctx context.Context) {
 	defer s.wg.Done()
-	
+
 	// Update stats every 15 minutes
 	ticker := time.NewTicker(15 * time.Minute)
 	defer ticker.Stop()
-	
+
 	s.logger.Debug().Msg("Stats worker started")
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -74,21 +74,21 @@ func (s *Service) statsWorker(ctx context.Context) {
 // processBillingTasks handles recurring billing, trial expirations, and payment retries
 func (s *Service) processBillingTasks(ctx context.Context) {
 	now := time.Now()
-	
+
 	// Get subscriptions that need billing
 	filters := SubscriptionFilters{
 		Status: SubscriptionActive,
 		Limit:  1000, // Process in batches
 	}
-	
+
 	subscriptions, err := s.storage.ListSubscriptions(ctx, filters)
 	if err != nil {
 		s.logger.Error().Err(err).Msg("Failed to list subscriptions for billing")
 		return
 	}
-	
+
 	processed := 0
-	
+
 	for _, subscription := range subscriptions {
 		// Process trial expirations
 		if subscription.IsTrialPeriod && subscription.TrialEndDate != nil && now.After(*subscription.TrialEndDate) {
@@ -96,13 +96,13 @@ func (s *Service) processBillingTasks(ctx context.Context) {
 			processed++
 			continue
 		}
-		
+
 		// Process subscription renewals
 		if now.After(subscription.NextBillingDate) && subscription.MonthlyAmount > 0 {
 			s.processSubscriptionRenewal(ctx, subscription)
 			processed++
 		}
-		
+
 		// Check for subscription expiration (grace period)
 		graceExpiry := subscription.NextBillingDate.Add(s.config.GracePeriod)
 		if now.After(graceExpiry) && subscription.Status == SubscriptionActive {
@@ -110,26 +110,26 @@ func (s *Service) processBillingTasks(ctx context.Context) {
 			processed++
 		}
 	}
-	
+
 	// Get failed payments that need retry
 	paymentFilters := PaymentFilters{
 		Status: PaymentFailed,
 		Limit:  500,
 	}
-	
+
 	payments, err := s.storage.ListPayments(ctx, paymentFilters)
 	if err != nil {
 		s.logger.Error().Err(err).Msg("Failed to list failed payments for retry")
 		return
 	}
-	
+
 	for _, payment := range payments {
 		if payment.NextRetryAt != nil && now.After(*payment.NextRetryAt) && payment.AttemptCount < s.config.PaymentRetryAttempts {
 			s.retryPayment(ctx, payment)
 			processed++
 		}
 	}
-	
+
 	if processed > 0 {
 		s.logger.Info().
 			Int("processed", processed).
@@ -143,11 +143,11 @@ func (s *Service) processTrialExpiration(ctx context.Context, subscription *Subs
 		Str("subscription_id", subscription.ID).
 		Str("user_id", subscription.UserID).
 		Msg("Processing trial expiration")
-	
+
 	// End trial period
 	subscription.IsTrialPeriod = false
 	subscription.TrialEndDate = nil
-	
+
 	// If subscription has no cost, keep it active
 	if subscription.MonthlyAmount == 0 {
 		subscription.Status = SubscriptionActive
@@ -155,12 +155,12 @@ func (s *Service) processTrialExpiration(ctx context.Context, subscription *Subs
 		s.storage.UpdateSubscription(ctx, subscription)
 		return
 	}
-	
+
 	// Create first paid billing cycle
 	now := time.Now()
 	subscription.NextBillingDate = now.Add(subscription.BillingCycle)
 	subscription.EndDate = subscription.NextBillingDate
-	
+
 	// Create payment for first billing cycle
 	payment := &Payment{
 		ID:                 generatePaymentID(),
@@ -178,24 +178,24 @@ func (s *Service) processTrialExpiration(ctx context.Context, subscription *Subs
 		CreatedAt:          now,
 		UpdatedAt:          now,
 	}
-	
+
 	// Process payment
 	if err := s.processPayment(ctx, payment); err != nil {
 		s.logger.Error().
 			Err(err).
 			Str("subscription_id", subscription.ID).
 			Msg("Failed to process trial-to-paid conversion payment")
-		
+
 		subscription.Status = SubscriptionSuspended
 	} else {
 		subscription.Status = SubscriptionActive
 		subscription.LastPaymentDate = &payment.CreatedAt
 		subscription.LastPaymentAmount = payment.Amount
 	}
-	
+
 	subscription.UpdatedAt = time.Now()
 	s.storage.UpdateSubscription(ctx, subscription)
-	
+
 	// Notify incentive service of subscription change
 	if s.incentiveNotifier != nil {
 		go s.incentiveNotifier.OnSubscriptionUpdated(ctx, subscription)
@@ -209,9 +209,9 @@ func (s *Service) processSubscriptionRenewal(ctx context.Context, subscription *
 		Str("user_id", subscription.UserID).
 		Float64("amount", subscription.MonthlyAmount).
 		Msg("Processing subscription renewal")
-	
+
 	now := time.Now()
-	
+
 	// Create payment for next billing cycle
 	payment := &Payment{
 		ID:                 generatePaymentID(),
@@ -229,7 +229,7 @@ func (s *Service) processSubscriptionRenewal(ctx context.Context, subscription *
 		CreatedAt:          now,
 		UpdatedAt:          now,
 	}
-	
+
 	// Process payment
 	if err := s.processPayment(ctx, payment); err != nil {
 		s.logger.Error().
@@ -239,21 +239,21 @@ func (s *Service) processSubscriptionRenewal(ctx context.Context, subscription *
 		// Don't change subscription status here - let grace period handle it
 		return
 	}
-	
+
 	// Update subscription for next billing cycle
 	subscription.NextBillingDate = payment.BillingPeriodEnd
 	subscription.EndDate = payment.BillingPeriodEnd
 	subscription.LastPaymentDate = &payment.CreatedAt
 	subscription.LastPaymentAmount = payment.Amount
 	subscription.UpdatedAt = now
-	
+
 	s.storage.UpdateSubscription(ctx, subscription)
-	
+
 	// Notify incentive service of payment
 	if s.incentiveNotifier != nil {
 		go s.incentiveNotifier.OnPaymentCompleted(ctx, subscription, payment)
 	}
-	
+
 	// Send payment success notification
 	if s.notifier != nil {
 		go s.notifier.SendPaymentSuccessNotification(ctx, subscription, payment)
@@ -266,17 +266,17 @@ func (s *Service) processSubscriptionExpiration(ctx context.Context, subscriptio
 		Str("subscription_id", subscription.ID).
 		Str("user_id", subscription.UserID).
 		Msg("Processing subscription expiration")
-	
+
 	subscription.Status = SubscriptionExpired
 	subscription.UpdatedAt = time.Now()
-	
+
 	s.storage.UpdateSubscription(ctx, subscription)
-	
+
 	// Notify other services
 	if s.incentiveNotifier != nil {
 		go s.incentiveNotifier.OnSubscriptionCancelled(ctx, subscription)
 	}
-	
+
 	if s.authNotifier != nil {
 		go s.authNotifier.OnSubscriptionStatusChanged(ctx, subscription.UserID, subscription)
 	}
@@ -288,13 +288,13 @@ func (s *Service) retryPayment(ctx context.Context, payment *Payment) {
 		Str("payment_id", payment.ID).
 		Int("attempt", payment.AttemptCount+1).
 		Msg("Retrying failed payment")
-	
+
 	if err := s.processPayment(ctx, payment); err != nil {
 		s.logger.Error().
 			Err(err).
 			Str("payment_id", payment.ID).
 			Msg("Payment retry failed")
-		
+
 		// If this was the last retry attempt, suspend subscription
 		if payment.AttemptCount >= s.config.PaymentRetryAttempts {
 			subscription, err := s.storage.GetSubscription(ctx, payment.SubscriptionID)
@@ -302,7 +302,7 @@ func (s *Service) retryPayment(ctx context.Context, payment *Payment) {
 				subscription.Status = SubscriptionSuspended
 				subscription.UpdatedAt = time.Now()
 				s.storage.UpdateSubscription(ctx, subscription)
-				
+
 				// Notify authorization service
 				if s.authNotifier != nil {
 					go s.authNotifier.OnSubscriptionStatusChanged(ctx, subscription.UserID, subscription)
@@ -317,21 +317,21 @@ func (s *Service) processNotifications(ctx context.Context) {
 	if s.notifier == nil || !s.config.NotificationSettings.Enabled {
 		return
 	}
-	
+
 	now := time.Now()
-	
+
 	// Get active subscriptions
 	filters := SubscriptionFilters{
 		Status: SubscriptionActive,
 		Limit:  1000,
 	}
-	
+
 	subscriptions, err := s.storage.ListSubscriptions(ctx, filters)
 	if err != nil {
 		s.logger.Error().Err(err).Msg("Failed to list subscriptions for notifications")
 		return
 	}
-	
+
 	for _, subscription := range subscriptions {
 		// Send expiration warnings
 		for _, days := range s.config.NotificationSettings.ExpirationWarningDays {
@@ -340,7 +340,7 @@ func (s *Service) processNotifications(ctx context.Context) {
 				go s.notifier.SendExpirationWarning(ctx, subscription, days)
 			}
 		}
-		
+
 		// Send renewal reminders
 		for _, days := range s.config.NotificationSettings.RenewalReminderDays {
 			reminderDate := subscription.NextBillingDate.AddDate(0, 0, -days)
@@ -358,12 +358,12 @@ func (s *Service) updateStats(ctx context.Context) {
 		s.logger.Error().Err(err).Msg("Failed to update contract stats")
 		return
 	}
-	
+
 	s.mu.Lock()
 	s.stats = stats
 	s.lastStatsUpdate = time.Now()
 	s.mu.Unlock()
-	
+
 	s.logger.Debug().
 		Int("total_subscriptions", stats.TotalSubscriptions).
 		Int("active_subscriptions", stats.ActiveSubscriptions).
@@ -375,7 +375,7 @@ func (s *Service) updateStats(ctx context.Context) {
 func (s *Service) GetServiceHealth() map[string]interface{} {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	health := map[string]interface{}{
 		"service":             "contract",
 		"started":             s.started,
@@ -385,13 +385,13 @@ func (s *Service) GetServiceHealth() map[string]interface{} {
 		"payment_provider":    s.paymentProcessor.GetProviderName(),
 		"last_stats_update":   s.lastStatsUpdate,
 	}
-	
+
 	if s.started && s.config.Enabled {
 		health["active_subscriptions"] = s.stats.ActiveSubscriptions
 		health["total_subscriptions"] = s.stats.TotalSubscriptions
 		health["monthly_revenue"] = s.stats.MonthlyRecurringRevenue
 		health["payment_success_rate"] = s.stats.PaymentSuccessRate
 	}
-	
+
 	return health
 }

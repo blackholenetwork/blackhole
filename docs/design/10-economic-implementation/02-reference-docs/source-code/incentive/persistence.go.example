@@ -21,7 +21,7 @@ type EconomicPersistenceLayer struct {
 	logger    zerolog.Logger
 	nodeID    string
 	mu        sync.RWMutex
-	
+
 	// Storage paths for different data types
 	billingEventsPath    string  // vfs://economic/billing_events/
 	auditTrailsPath     string  // vfs://economic/audit_trails/
@@ -29,14 +29,14 @@ type EconomicPersistenceLayer struct {
 	providersPath       string  // vfs://economic/providers/
 	subscriptionsPath   string  // vfs://economic/subscriptions/
 	reportsPath         string  // vfs://economic/reports/
-	
+
 	// Caching for performance
 	eventCache          map[string]*BillingEvent
 	auditCache          map[string]*AuditTrailEntry
 	cacheMu             sync.RWMutex
 	cacheEnabled        bool
 	maxCacheSize        int
-	
+
 	// Regulatory compliance settings
 	retentionPeriod     time.Duration
 	auditLevel          AuditLevel
@@ -50,44 +50,44 @@ type BillingEvent struct {
 	EventID          string    `json:"event_id"`
 	TransactionID    string    `json:"transaction_id"`
 	BillingCycleID   string    `json:"billing_cycle_id"`
-	
+
 	// Resource information
 	ResourceType     string    `json:"resource_type"`     // storage, compute, bandwidth
 	Operation        string    `json:"operation"`         // put, get, execute, stream
 	Amount           float64   `json:"amount"`            // quantity consumed
 	Unit             string    `json:"unit"`              // GB, hours, bytes
 	Duration         int64     `json:"duration_ms"`       // operation duration in ms
-	
+
 	// Economic attribution
 	UserID           string    `json:"user_id"`           // who gets billed
 	ProviderID       string    `json:"provider_id"`       // who provided resource
 	NodeID           string    `json:"node_id"`           // which node processed
 	ServiceName      string    `json:"service_name"`      // which service
-	
+
 	// Billing calculation
 	IsChargeable     bool      `json:"is_chargeable"`     // payment logic result
 	OperationType    string    `json:"operation_type"`    // user_request, system_task, protocol
 	UnitCost         float64   `json:"unit_cost"`         // cost per unit
 	TotalCost        float64   `json:"total_cost"`        // amount * unit_cost
 	Currency         string    `json:"currency"`          // USD, EUR, etc.
-	
+
 	// Verification and proof
 	VerificationProof string   `json:"verification_proof"` // cryptographic proof
 	ResourceHash      string   `json:"resource_hash"`      // hash of consumed resource
 	OperationHash     string   `json:"operation_hash"`     // hash of operation details
-	
+
 	// Timestamps (critical for audit)
 	RequestedAt      time.Time `json:"requested_at"`      // when user requested
 	StartedAt        time.Time `json:"started_at"`        // when operation started
 	CompletedAt      time.Time `json:"completed_at"`      // when operation completed
 	BilledAt         time.Time `json:"billed_at"`         // when billing was processed
 	RecordedAt       time.Time `json:"recorded_at"`       // when record was created
-	
+
 	// Audit and compliance
 	AuditTrailID     string            `json:"audit_trail_id"`     // link to audit trail
 	RegulatoryFlags  []string          `json:"regulatory_flags"`   // compliance markers
 	Metadata         map[string]string `json:"metadata"`           // additional context
-	
+
 	// Data integrity
 	EventHash        string    `json:"event_hash"`        // hash of entire event
 	PreviousEventHash string   `json:"previous_event_hash"` // blockchain-style linking
@@ -101,38 +101,38 @@ type AuditTrailEntry struct {
 	EventType        string    `json:"event_type"`        // billing_event, system_change, user_action
 	Entity           string    `json:"entity"`            // what was affected
 	EntityID         string    `json:"entity_id"`         // identifier of affected entity
-	
+
 	// Change tracking
 	Action           string    `json:"action"`            // CREATE, UPDATE, DELETE, ACCESS
 	ChangeDetails    string    `json:"change_details"`    // description of change
 	OldValue         string    `json:"old_value"`         // previous value (if applicable)
 	NewValue         string    `json:"new_value"`         // new value (if applicable)
-	
+
 	// Actor information
 	ActorType        string    `json:"actor_type"`        // user, system, service, admin
 	ActorID          string    `json:"actor_id"`          // who/what made the change
 	ActorIP          string    `json:"actor_ip"`          // IP address (if applicable)
 	ActorLocation    string    `json:"actor_location"`    // geographic location
-	
+
 	// System context
 	SystemVersion    string    `json:"system_version"`    // software version
 	NodeID           string    `json:"node_id"`           // which node recorded this
 	ServiceName      string    `json:"service_name"`      // which service
 	RequestID        string    `json:"request_id"`        // original request ID
-	
+
 	// Regulatory compliance
 	ComplianceLevel  string    `json:"compliance_level"`  // HIGH, MEDIUM, LOW
 	DataClassification string  `json:"data_classification"` // PUBLIC, INTERNAL, CONFIDENTIAL
 	RetentionPeriod  int64     `json:"retention_period"`  // days to retain
-	
+
 	// Verification
 	DataHash         string    `json:"data_hash"`         // hash of audit data
 	SignatureProof   string    `json:"signature_proof"`   // cryptographic signature
-	
+
 	// Timestamps
 	EventTimestamp   time.Time `json:"event_timestamp"`   // when the audited event occurred
 	RecordedAt       time.Time `json:"recorded_at"`       // when audit entry was created
-	
+
 	// Additional context
 	Metadata         map[string]interface{} `json:"metadata"` // flexible additional data
 }
@@ -143,19 +143,19 @@ type CycleAggregateRecord struct {
 	StartDate        time.Time                 `json:"start_date"`
 	EndDate          time.Time                 `json:"end_date"`
 	Status           string                    `json:"status"`
-	
+
 	// Aggregate totals by provider and resource type
 	ProviderTotals   map[string]*ProviderCycleTotals `json:"provider_totals"`
-	
+
 	// Pool distribution
 	TotalPoolAmount  float64                   `json:"total_pool_amount"`
 	DistributedAmount float64                  `json:"distributed_amount"`
 	FreeTierSubsidy  float64                   `json:"free_tier_subsidy"`
-	
+
 	// Verification
 	AggregateHash    string                    `json:"aggregate_hash"`
 	EventCount       int64                     `json:"event_count"`
-	
+
 	// Timestamps
 	CreatedAt        time.Time                 `json:"created_at"`
 	CompletedAt      *time.Time                `json:"completed_at,omitempty"`
@@ -172,11 +172,11 @@ type ProviderCycleTotals struct {
 	MemoryGBHours    float64                   `json:"memory_gb_hours"`
 	ContentPoints    float64                   `json:"content_points"`
 	NetworkOpsUnits  float64                   `json:"network_ops_units"`
-	
+
 	// Calculated rewards
 	TotalReward      float64                   `json:"total_reward"`
 	RewardBreakdown  map[string]float64        `json:"reward_breakdown"`
-	
+
 	// Event counts for verification
 	EventCounts      map[string]int64          `json:"event_counts"`
 	VerificationHash string                    `json:"verification_hash"`
@@ -213,10 +213,10 @@ func NewEconomicPersistenceLayer(vfs interfaces.VFS, nodeID string, logger zerol
 		encryptionEnabled:   true,
 		compressionEnabled:  true,
 	}
-	
+
 	// Initialize VFS directories
 	persistence.initializeDirectories()
-	
+
 	return persistence
 }
 
@@ -247,7 +247,7 @@ func (p *EconomicPersistenceLayer) initializeDirectories() {
 		p.reportsPath + "provider_statements/",
 		p.reportsPath + "user_bills/",
 	}
-	
+
 	for _, dir := range directories {
 		metadata := map[string]string{
 			"created_by":     "economic_persistence",
@@ -257,12 +257,12 @@ func (p *EconomicPersistenceLayer) initializeDirectories() {
 			"compliance":     "regulatory",
 			"retention_days": strconv.FormatInt(int64(p.retentionPeriod.Hours()/24), 10),
 		}
-		
+
 		// Create directory by writing a placeholder file
 		placeholderPath := filepath.Join(dir, ".economic_directory")
-		placeholderContent := fmt.Sprintf("# Economic data directory - Node: %s - Created: %s", 
+		placeholderContent := fmt.Sprintf("# Economic data directory - Node: %s - Created: %s",
 			p.nodeID, time.Now().Format(time.RFC3339))
-		
+
 		if err := p.vfs.WriteFile(context.Background(), placeholderPath, []byte(placeholderContent), metadata); err != nil {
 			p.logger.Warn().
 				Err(err).
@@ -270,7 +270,7 @@ func (p *EconomicPersistenceLayer) initializeDirectories() {
 				Msg("Failed to create economic storage directory")
 		}
 	}
-	
+
 	p.logger.Info().
 		Int("directories", len(directories)).
 		Str("retention_period", p.retentionPeriod.String()).
@@ -281,17 +281,17 @@ func (p *EconomicPersistenceLayer) initializeDirectories() {
 func (p *EconomicPersistenceLayer) StoreBillingEvent(ctx context.Context, event *BillingEvent) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	
+
 	// Generate event hash for integrity
 	if event.EventHash == "" {
 		event.EventHash = p.generateEventHash(event)
 	}
-	
+
 	// Add to sequence chain
 	if event.SequenceNumber == 0 {
 		event.SequenceNumber = p.getNextSequenceNumber()
 	}
-	
+
 	// Set timestamps
 	if event.RecordedAt.IsZero() {
 		event.RecordedAt = time.Now()
@@ -299,12 +299,12 @@ func (p *EconomicPersistenceLayer) StoreBillingEvent(ctx context.Context, event 
 	if event.BilledAt.IsZero() {
 		event.BilledAt = time.Now()
 	}
-	
+
 	// Generate unique event ID if not provided
 	if event.EventID == "" {
 		event.EventID = p.generateEventID(event)
 	}
-	
+
 	// Create audit trail entry
 	auditEntry := &AuditTrailEntry{
 		AuditID:          p.generateAuditID("billing_event", event.EventID),
@@ -312,7 +312,7 @@ func (p *EconomicPersistenceLayer) StoreBillingEvent(ctx context.Context, event 
 		Entity:           "billing_event",
 		EntityID:         event.EventID,
 		Action:           "CREATE",
-		ChangeDetails:    fmt.Sprintf("Billing event created: %s %s %.4f %s for user %s", 
+		ChangeDetails:    fmt.Sprintf("Billing event created: %s %s %.4f %s for user %s",
 			event.ResourceType, event.Operation, event.Amount, event.Unit, event.UserID),
 		ActorType:        "system",
 		ActorID:          p.nodeID,
@@ -334,19 +334,19 @@ func (p *EconomicPersistenceLayer) StoreBillingEvent(ctx context.Context, event 
 	}
 	auditEntry.DataHash = p.generateAuditHash(auditEntry)
 	event.AuditTrailID = auditEntry.AuditID
-	
+
 	// Serialize billing event
 	eventData, err := json.MarshalIndent(event, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal billing event: %w", err)
 	}
-	
+
 	// Apply encryption if enabled
 	if p.encryptionEnabled {
 		// TODO: Implement encryption
 		// eventData = encrypt(eventData)
 	}
-	
+
 	// Prepare metadata
 	metadata := map[string]string{
 		"event_id":       event.EventID,
@@ -366,14 +366,14 @@ func (p *EconomicPersistenceLayer) StoreBillingEvent(ctx context.Context, event 
 		"audit_trail_id": auditEntry.AuditID,
 		"node_id":        p.nodeID,
 	}
-	
+
 	// Storage paths for indexing
 	datePath := event.CompletedAt.Format("2006/01/02")
 	hourPath := event.CompletedAt.Format("2006/01/02/15")
-	
+
 	// Primary storage path
 	primaryPath := filepath.Join(p.billingEventsPath, "by_date", datePath, fmt.Sprintf("%s.json", event.EventID))
-	
+
 	// Index paths for efficient querying
 	indexPaths := []string{
 		// By user for billing statements
@@ -387,12 +387,12 @@ func (p *EconomicPersistenceLayer) StoreBillingEvent(ctx context.Context, event 
 		// By hour for time-series analysis
 		filepath.Join(p.billingEventsPath, "by_hour", hourPath, fmt.Sprintf("%s.json", event.EventID)),
 	}
-	
+
 	// Store in primary location
 	if err := p.vfs.WriteFile(ctx, primaryPath, eventData, metadata); err != nil {
 		return fmt.Errorf("failed to store billing event: %w", err)
 	}
-	
+
 	// Store in index locations
 	for _, indexPath := range indexPaths {
 		if err := p.vfs.WriteFile(ctx, indexPath, eventData, metadata); err != nil {
@@ -403,7 +403,7 @@ func (p *EconomicPersistenceLayer) StoreBillingEvent(ctx context.Context, event 
 				Msg("Failed to store billing event in index path")
 		}
 	}
-	
+
 	// Store audit trail
 	if err := p.StoreAuditTrailEntry(ctx, auditEntry); err != nil {
 		p.logger.Error().
@@ -411,7 +411,7 @@ func (p *EconomicPersistenceLayer) StoreBillingEvent(ctx context.Context, event 
 			Str("event_id", event.EventID).
 			Msg("Failed to store audit trail for billing event")
 	}
-	
+
 	// Cache the event if caching is enabled
 	if p.cacheEnabled {
 		p.cacheMu.Lock()
@@ -420,7 +420,7 @@ func (p *EconomicPersistenceLayer) StoreBillingEvent(ctx context.Context, event 
 		}
 		p.cacheMu.Unlock()
 	}
-	
+
 	p.logger.Info().
 		Str("event_id", event.EventID).
 		Str("user_id", event.UserID).
@@ -429,7 +429,7 @@ func (p *EconomicPersistenceLayer) StoreBillingEvent(ctx context.Context, event 
 		Float64("total_cost", event.TotalCost).
 		Int64("sequence_number", event.SequenceNumber).
 		Msg("Billing event stored with audit trail")
-	
+
 	return nil
 }
 
@@ -439,23 +439,23 @@ func (p *EconomicPersistenceLayer) StoreAuditTrailEntry(ctx context.Context, ent
 	if entry.AuditID == "" {
 		entry.AuditID = p.generateAuditID(entry.EventType, entry.EntityID)
 	}
-	
+
 	// Set timestamp
 	if entry.RecordedAt.IsZero() {
 		entry.RecordedAt = time.Now()
 	}
-	
+
 	// Generate data hash for integrity
 	if entry.DataHash == "" {
 		entry.DataHash = p.generateAuditHash(entry)
 	}
-	
+
 	// Serialize audit entry
 	auditData, err := json.MarshalIndent(entry, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal audit trail entry: %w", err)
 	}
-	
+
 	// Prepare metadata
 	metadata := map[string]string{
 		"audit_id":           entry.AuditID,
@@ -473,13 +473,13 @@ func (p *EconomicPersistenceLayer) StoreAuditTrailEntry(ctx context.Context, ent
 		"recorded_at":        entry.RecordedAt.Format(time.RFC3339),
 		"node_id":            p.nodeID,
 	}
-	
+
 	// Storage paths
 	datePath := entry.RecordedAt.Format("2006/01/02")
-	
+
 	// Primary storage path
 	primaryPath := filepath.Join(p.auditTrailsPath, "by_date", datePath, fmt.Sprintf("%s.json", entry.AuditID))
-	
+
 	// Index paths
 	indexPaths := []string{
 		// By entity for entity-specific audits
@@ -489,12 +489,12 @@ func (p *EconomicPersistenceLayer) StoreAuditTrailEntry(ctx context.Context, ent
 		// By compliance level for regulatory reporting
 		filepath.Join(p.auditTrailsPath, "by_compliance_level", entry.ComplianceLevel, datePath, fmt.Sprintf("%s.json", entry.AuditID)),
 	}
-	
+
 	// Store in primary location
 	if err := p.vfs.WriteFile(ctx, primaryPath, auditData, metadata); err != nil {
 		return fmt.Errorf("failed to store audit trail entry: %w", err)
 	}
-	
+
 	// Store in index locations
 	for _, indexPath := range indexPaths {
 		if err := p.vfs.WriteFile(ctx, indexPath, auditData, metadata); err != nil {
@@ -505,7 +505,7 @@ func (p *EconomicPersistenceLayer) StoreAuditTrailEntry(ctx context.Context, ent
 				Msg("Failed to store audit trail in index path")
 		}
 	}
-	
+
 	// Cache the entry if caching is enabled
 	if p.cacheEnabled {
 		p.cacheMu.Lock()
@@ -514,7 +514,7 @@ func (p *EconomicPersistenceLayer) StoreAuditTrailEntry(ctx context.Context, ent
 		}
 		p.cacheMu.Unlock()
 	}
-	
+
 	return nil
 }
 
@@ -522,16 +522,16 @@ func (p *EconomicPersistenceLayer) StoreAuditTrailEntry(ctx context.Context, ent
 
 // generateEventID creates a unique event ID
 func (p *EconomicPersistenceLayer) generateEventID(event *BillingEvent) string {
-	return fmt.Sprintf("bill_%s_%s_%d", 
-		event.ResourceType, 
+	return fmt.Sprintf("bill_%s_%s_%d",
+		event.ResourceType,
 		event.UserID[:8], // First 8 chars of user ID
 		event.CompletedAt.UnixNano())
 }
 
 // generateAuditID creates a unique audit ID
 func (p *EconomicPersistenceLayer) generateAuditID(eventType, entityID string) string {
-	return fmt.Sprintf("audit_%s_%s_%d", 
-		eventType, 
+	return fmt.Sprintf("audit_%s_%s_%d",
+		eventType,
 		entityID[:8], // First 8 chars of entity ID
 		time.Now().UnixNano())
 }
@@ -552,7 +552,7 @@ func (p *EconomicPersistenceLayer) generateEventHash(event *BillingEvent) string
 		event.TotalCost,
 		event.SequenceNumber,
 	)
-	
+
 	hash := sha256.Sum256([]byte(hashData))
 	return hex.EncodeToString(hash[:])
 }
@@ -569,7 +569,7 @@ func (p *EconomicPersistenceLayer) generateAuditHash(entry *AuditTrailEntry) str
 		entry.EventTimestamp.Format(time.RFC3339Nano),
 		entry.RecordedAt.Format(time.RFC3339Nano),
 	)
-	
+
 	hash := sha256.Sum256([]byte(hashData))
 	return hex.EncodeToString(hash[:])
 }

@@ -11,7 +11,7 @@ func (s *Service) GetSubscription(ctx context.Context, id string) (*Subscription
 	if !s.started || !s.config.Enabled {
 		return nil, fmt.Errorf("contract service not running")
 	}
-	
+
 	return s.storage.GetSubscription(ctx, id)
 }
 
@@ -20,7 +20,7 @@ func (s *Service) GetSubscriptionByUserID(ctx context.Context, userID string) (*
 	if !s.started || !s.config.Enabled {
 		return nil, fmt.Errorf("contract service not running")
 	}
-	
+
 	return s.storage.GetSubscriptionByUserID(ctx, userID)
 }
 
@@ -29,13 +29,13 @@ func (s *Service) UpdateSubscription(ctx context.Context, subscriptionID string,
 	if !s.started || !s.config.Enabled {
 		return nil, fmt.Errorf("contract service not running")
 	}
-	
+
 	// Get existing subscription
 	subscription, err := s.storage.GetSubscription(ctx, subscriptionID)
 	if err != nil {
 		return nil, fmt.Errorf("subscription not found: %w", err)
 	}
-	
+
 	// Track changes
 	change := &SubscriptionChange{
 		ID:             generateChangeID(),
@@ -50,67 +50,67 @@ func (s *Service) UpdateSubscription(ctx context.Context, subscriptionID string,
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
 	}
-	
+
 	// Apply effective date if specified
 	if req.EffectiveAt != nil {
 		change.EffectiveAt = *req.EffectiveAt
 	}
-	
+
 	// Update tier if specified
 	if req.Tier != nil {
 		tierConfig, err := s.getTierConfig(*req.Tier, req.CustomAmount)
 		if err != nil {
 			return nil, fmt.Errorf("invalid tier configuration: %w", err)
 		}
-		
+
 		change.ChangeType = s.determineChangeType(subscription.Tier, *req.Tier, subscription.MonthlyAmount, tierConfig.MonthlyPrice)
 		change.ToTier = *req.Tier
 		change.ToAmount = tierConfig.MonthlyPrice
-		
+
 		subscription.Tier = *req.Tier
 		subscription.MonthlyAmount = tierConfig.MonthlyPrice
 		subscription.ResourceLimits = tierConfig.ResourceLimits
 		subscription.APIRateLimits = tierConfig.APIRateLimits
 		subscription.Features = tierConfig.Features
-		
+
 		// Calculate proration if upgrade/downgrade
 		if change.ChangeType == "upgrade" || change.ChangeType == "downgrade" {
 			change.ProrationAmount = s.calculateProration(subscription, change.FromAmount, change.ToAmount)
 		}
 	}
-	
+
 	// Update payment method if specified
 	if req.PaymentMethodID != nil {
 		subscription.PaymentMethodID = *req.PaymentMethodID
 	}
-	
+
 	// Update metadata
 	if req.Metadata != nil {
 		for k, v := range req.Metadata {
 			subscription.Metadata[k] = v
 		}
 	}
-	
+
 	subscription.UpdatedAt = time.Now()
-	
+
 	// Store changes
 	if err := s.storage.CreateSubscriptionChange(ctx, change); err != nil {
 		return nil, fmt.Errorf("failed to create subscription change: %w", err)
 	}
-	
+
 	if err := s.storage.UpdateSubscription(ctx, subscription); err != nil {
 		return nil, fmt.Errorf("failed to update subscription: %w", err)
 	}
-	
+
 	// Notify other services
 	if s.incentiveNotifier != nil {
 		go s.incentiveNotifier.OnSubscriptionUpdated(ctx, subscription)
 	}
-	
+
 	if s.authNotifier != nil && req.Tier != nil {
 		go s.authNotifier.OnSubscriptionTierChanged(ctx, subscription.UserID, change.FromTier, change.ToTier)
 	}
-	
+
 	s.logger.Info().
 		Str("subscription_id", subscription.ID).
 		Str("change_type", change.ChangeType).
@@ -118,7 +118,7 @@ func (s *Service) UpdateSubscription(ctx context.Context, subscriptionID string,
 		Str("to_tier", string(change.ToTier)).
 		Float64("proration", change.ProrationAmount).
 		Msg("Updated subscription")
-	
+
 	return subscription, nil
 }
 
@@ -127,25 +127,25 @@ func (s *Service) CancelSubscription(ctx context.Context, subscriptionID, reason
 	if !s.started || !s.config.Enabled {
 		return fmt.Errorf("contract service not running")
 	}
-	
+
 	// Get subscription
 	subscription, err := s.storage.GetSubscription(ctx, subscriptionID)
 	if err != nil {
 		return fmt.Errorf("subscription not found: %w", err)
 	}
-	
+
 	// Check if already cancelled
 	if subscription.Status == SubscriptionCancelled {
 		return fmt.Errorf("subscription already cancelled")
 	}
-	
+
 	// Update subscription status
 	now := time.Now()
 	subscription.Status = SubscriptionCancelled
 	subscription.CancellationReason = reason
 	subscription.CancelledAt = &now
 	subscription.UpdatedAt = now
-	
+
 	// Record change
 	change := &SubscriptionChange{
 		ID:             generateChangeID(),
@@ -163,16 +163,16 @@ func (s *Service) CancelSubscription(ctx context.Context, subscriptionID, reason
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
-	
+
 	// Store changes
 	if err := s.storage.CreateSubscriptionChange(ctx, change); err != nil {
 		s.logger.Error().Err(err).Msg("Failed to create subscription change for cancellation")
 	}
-	
+
 	if err := s.storage.UpdateSubscription(ctx, subscription); err != nil {
 		return fmt.Errorf("failed to update subscription: %w", err)
 	}
-	
+
 	// Cancel with payment provider
 	if err := s.paymentProcessor.CancelSubscription(ctx, subscription.ID); err != nil {
 		s.logger.Error().
@@ -180,26 +180,26 @@ func (s *Service) CancelSubscription(ctx context.Context, subscriptionID, reason
 			Str("subscription_id", subscription.ID).
 			Msg("Failed to cancel subscription with payment provider")
 	}
-	
+
 	// Notify other services
 	if s.incentiveNotifier != nil {
 		go s.incentiveNotifier.OnSubscriptionCancelled(ctx, subscription)
 	}
-	
+
 	if s.authNotifier != nil {
 		go s.authNotifier.OnSubscriptionStatusChanged(ctx, subscription.UserID, subscription)
 	}
-	
+
 	if s.notifier != nil {
 		go s.notifier.SendSubscriptionCancelledNotification(ctx, subscription)
 	}
-	
+
 	s.logger.Info().
 		Str("subscription_id", subscription.ID).
 		Str("user_id", subscription.UserID).
 		Str("reason", reason).
 		Msg("Cancelled subscription")
-	
+
 	return nil
 }
 
@@ -208,24 +208,24 @@ func (s *Service) CreatePaymentMethod(ctx context.Context, req PaymentMethodRequ
 	if !s.started || !s.config.Enabled {
 		return nil, fmt.Errorf("contract service not running")
 	}
-	
+
 	// Create payment method with provider
 	paymentMethod, err := s.paymentProcessor.CreatePaymentMethod(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create payment method with provider: %w", err)
 	}
-	
+
 	// Store payment method
 	if err := s.storage.CreatePaymentMethod(ctx, paymentMethod); err != nil {
 		return nil, fmt.Errorf("failed to store payment method: %w", err)
 	}
-	
+
 	s.logger.Info().
 		Str("payment_method_id", paymentMethod.ID).
 		Str("user_id", paymentMethod.UserID).
 		Str("type", paymentMethod.Type).
 		Msg("Created payment method")
-	
+
 	return paymentMethod, nil
 }
 
@@ -234,7 +234,7 @@ func (s *Service) GetPaymentMethods(ctx context.Context, userID string) ([]*Paym
 	if !s.started || !s.config.Enabled {
 		return nil, fmt.Errorf("contract service not running")
 	}
-	
+
 	return s.storage.ListPaymentMethods(ctx, userID)
 }
 
@@ -243,7 +243,7 @@ func (s *Service) DeletePaymentMethod(ctx context.Context, paymentMethodID strin
 	if !s.started || !s.config.Enabled {
 		return fmt.Errorf("contract service not running")
 	}
-	
+
 	// Delete from provider
 	if err := s.paymentProcessor.DeletePaymentMethod(ctx, paymentMethodID); err != nil {
 		s.logger.Error().
@@ -251,16 +251,16 @@ func (s *Service) DeletePaymentMethod(ctx context.Context, paymentMethodID strin
 			Str("payment_method_id", paymentMethodID).
 			Msg("Failed to delete payment method from provider")
 	}
-	
+
 	// Delete from storage
 	if err := s.storage.DeletePaymentMethod(ctx, paymentMethodID); err != nil {
 		return fmt.Errorf("failed to delete payment method: %w", err)
 	}
-	
+
 	s.logger.Info().
 		Str("payment_method_id", paymentMethodID).
 		Msg("Deleted payment method")
-	
+
 	return nil
 }
 
@@ -269,7 +269,7 @@ func (s *Service) ListSubscriptions(ctx context.Context, filters SubscriptionFil
 	if !s.started || !s.config.Enabled {
 		return nil, fmt.Errorf("contract service not running")
 	}
-	
+
 	return s.storage.ListSubscriptions(ctx, filters)
 }
 
@@ -278,7 +278,7 @@ func (s *Service) GetPayment(ctx context.Context, paymentID string) (*Payment, e
 	if !s.started || !s.config.Enabled {
 		return nil, fmt.Errorf("contract service not running")
 	}
-	
+
 	return s.storage.GetPayment(ctx, paymentID)
 }
 
@@ -287,7 +287,7 @@ func (s *Service) ListPayments(ctx context.Context, filters PaymentFilters) ([]*
 	if !s.started || !s.config.Enabled {
 		return nil, fmt.Errorf("contract service not running")
 	}
-	
+
 	return s.storage.ListPayments(ctx, filters)
 }
 
@@ -296,7 +296,7 @@ func (s *Service) GetStats(ctx context.Context) (*ContractStats, error) {
 	if !s.started || !s.config.Enabled {
 		return &ContractStats{}, nil
 	}
-	
+
 	return s.storage.GetStats(ctx)
 }
 
@@ -305,18 +305,18 @@ func (s *Service) HandleWebhook(ctx context.Context, payload []byte, signature s
 	if !s.started || !s.config.Enabled {
 		return fmt.Errorf("contract service not running")
 	}
-	
+
 	event, err := s.paymentProcessor.HandleWebhook(ctx, payload, signature)
 	if err != nil {
 		return fmt.Errorf("failed to process webhook: %w", err)
 	}
-	
+
 	s.logger.Info().
 		Str("event_id", event.ID).
 		Str("event_type", event.Type).
 		Str("payment_id", event.PaymentID).
 		Msg("Processed webhook event")
-	
+
 	// Handle specific event types
 	switch event.Type {
 	case "payment.completed":
@@ -330,7 +330,7 @@ func (s *Service) HandleWebhook(ctx context.Context, payload []byte, signature s
 			Str("event_type", event.Type).
 			Msg("Unhandled webhook event type")
 	}
-	
+
 	return nil
 }
 
@@ -338,7 +338,7 @@ func (s *Service) HandleWebhook(ctx context.Context, payload []byte, signature s
 func (s *Service) processPayment(ctx context.Context, payment *Payment) error {
 	payment.AttemptCount++
 	payment.LastAttemptAt = &payment.UpdatedAt
-	
+
 	// Store payment attempt
 	if payment.AttemptCount == 1 {
 		if err := s.storage.CreatePayment(ctx, payment); err != nil {
@@ -349,7 +349,7 @@ func (s *Service) processPayment(ctx context.Context, payment *Payment) error {
 			return fmt.Errorf("failed to update payment: %w", err)
 		}
 	}
-	
+
 	// Process payment
 	result, err := s.paymentProcessor.ProcessPayment(ctx, payment)
 	if err != nil {
@@ -358,12 +358,12 @@ func (s *Service) processPayment(ctx context.Context, payment *Payment) error {
 		s.storage.UpdatePayment(ctx, payment)
 		return fmt.Errorf("payment processing failed: %w", err)
 	}
-	
+
 	// Update payment with result
 	payment.Status = result.Status
 	payment.ExternalPaymentID = result.ExternalPaymentID
 	payment.TransactionID = result.TransactionID
-	
+
 	if result.Success {
 		now := time.Now()
 		payment.ProcessedAt = &now
@@ -371,28 +371,28 @@ func (s *Service) processPayment(ctx context.Context, payment *Payment) error {
 	} else {
 		payment.FailureReason = result.FailureReason
 		payment.Status = PaymentFailed
-		
+
 		// Schedule retry if within retry limits
 		if payment.AttemptCount < s.config.PaymentRetryAttempts {
 			nextRetry := time.Now().Add(s.config.PaymentRetryInterval)
 			payment.NextRetryAt = &nextRetry
 		}
 	}
-	
+
 	payment.UpdatedAt = time.Now()
-	
+
 	// Store updated payment
 	if err := s.storage.UpdatePayment(ctx, payment); err != nil {
 		return fmt.Errorf("failed to update payment: %w", err)
 	}
-	
+
 	s.logger.Info().
 		Str("payment_id", payment.ID).
 		Bool("success", result.Success).
 		Int("attempt", payment.AttemptCount).
 		Str("status", string(payment.Status)).
 		Msg("Processed payment")
-	
+
 	return nil
 }
 
@@ -416,11 +416,11 @@ func (s *Service) calculateProration(subscription *Subscription, fromAmount, toA
 	now := time.Now()
 	totalDays := subscription.EndDate.Sub(subscription.StartDate).Hours() / 24
 	remainingDays := subscription.EndDate.Sub(now).Hours() / 24
-	
+
 	if remainingDays <= 0 {
 		return 0
 	}
-	
+
 	// Calculate proration
 	dailyDifference := (toAmount - fromAmount) / totalDays
 	return dailyDifference * remainingDays
@@ -431,40 +431,40 @@ func (s *Service) handlePaymentCompletedWebhook(ctx context.Context, event *Webh
 	if err != nil {
 		return fmt.Errorf("payment not found: %w", err)
 	}
-	
+
 	payment.Status = PaymentCompleted
 	now := time.Now()
 	payment.ProcessedAt = &now
 	payment.UpdatedAt = now
-	
+
 	if err := s.storage.UpdatePayment(ctx, payment); err != nil {
 		return fmt.Errorf("failed to update payment: %w", err)
 	}
-	
+
 	// Update subscription
 	subscription, err := s.storage.GetSubscription(ctx, payment.SubscriptionID)
 	if err != nil {
 		return fmt.Errorf("subscription not found: %w", err)
 	}
-	
+
 	subscription.LastPaymentDate = &now
 	subscription.LastPaymentAmount = payment.Amount
 	subscription.Status = SubscriptionActive
 	subscription.UpdatedAt = now
-	
+
 	if err := s.storage.UpdateSubscription(ctx, subscription); err != nil {
 		return fmt.Errorf("failed to update subscription: %w", err)
 	}
-	
+
 	// Notify other services
 	if s.incentiveNotifier != nil {
 		go s.incentiveNotifier.OnPaymentCompleted(ctx, subscription, payment)
 	}
-	
+
 	if s.notifier != nil {
 		go s.notifier.SendPaymentSuccessNotification(ctx, subscription, payment)
 	}
-	
+
 	return nil
 }
 
@@ -473,24 +473,24 @@ func (s *Service) handlePaymentFailedWebhook(ctx context.Context, event *Webhook
 	if err != nil {
 		return fmt.Errorf("payment not found: %w", err)
 	}
-	
+
 	payment.Status = PaymentFailed
 	payment.UpdatedAt = time.Now()
-	
+
 	if err := s.storage.UpdatePayment(ctx, payment); err != nil {
 		return fmt.Errorf("failed to update payment: %w", err)
 	}
-	
+
 	// Get subscription for notification
 	subscription, err := s.storage.GetSubscription(ctx, payment.SubscriptionID)
 	if err != nil {
 		return fmt.Errorf("subscription not found: %w", err)
 	}
-	
+
 	if s.notifier != nil {
 		go s.notifier.SendPaymentFailureNotification(ctx, subscription, payment)
 	}
-	
+
 	return nil
 }
 
@@ -499,24 +499,24 @@ func (s *Service) handleSubscriptionCancelledWebhook(ctx context.Context, event 
 	if err != nil {
 		return fmt.Errorf("subscription not found: %w", err)
 	}
-	
+
 	subscription.Status = SubscriptionCancelled
 	now := time.Now()
 	subscription.CancelledAt = &now
 	subscription.UpdatedAt = now
-	
+
 	if err := s.storage.UpdateSubscription(ctx, subscription); err != nil {
 		return fmt.Errorf("failed to update subscription: %w", err)
 	}
-	
+
 	// Notify other services
 	if s.incentiveNotifier != nil {
 		go s.incentiveNotifier.OnSubscriptionCancelled(ctx, subscription)
 	}
-	
+
 	if s.authNotifier != nil {
 		go s.authNotifier.OnSubscriptionStatusChanged(ctx, subscription.UserID, subscription)
 	}
-	
+
 	return nil
 }

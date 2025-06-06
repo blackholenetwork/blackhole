@@ -8,7 +8,7 @@ import (
 type SubscriberDashboard struct {
 	UserID               string                 `json:"user_id"`
 	UserType             string                 `json:"user_type"` // "subscriber"
-	
+
 	// Subscription Information
 	SubscriptionTier     string                 `json:"subscription_tier"`
 	MonthlyAmount        float64                `json:"monthly_amount"`
@@ -17,16 +17,16 @@ type SubscriberDashboard struct {
 	RevenuePerSecond     float64                `json:"revenue_per_second"`
 	TotalSecondsActive   int64                  `json:"total_seconds_active"`
 	TotalAmountGenerated float64                `json:"total_amount_generated"`
-	
+
 	// Current Usage
 	CurrentUsage         *SubscriberUsageStats  `json:"current_usage"`
-	
+
 	// Revenue Distribution Breakdown
 	DistributionBreakdown *RevenueDistribution  `json:"distribution_breakdown"`
-	
+
 	// System Stats
 	NetworkStats         *NetworkOverview       `json:"network_stats"`
-	
+
 	LastUpdated          time.Time              `json:"last_updated"`
 }
 
@@ -37,7 +37,7 @@ type SubscriberUsageStats struct {
 	ComputeHours         float64 `json:"compute_hours"`
 	ContentConsumed      int64   `json:"content_consumed_bytes"`
 	AppsUsed             int     `json:"apps_used_count"`
-	
+
 	// This month's activity
 	MonthlyStorageOps    int     `json:"monthly_storage_operations"`
 	MonthlyContentViews  int     `json:"monthly_content_views"`
@@ -50,7 +50,7 @@ type RevenueDistribution struct {
 	NetworkOperations    float64 `json:"network_operations_percentage"` // 2.5%
 	AppDevelopers        float64 `json:"app_developers_percentage"` // 2.5%
 	InfrastructureProviders float64 `json:"infrastructure_providers_percentage"` // 25%
-	
+
 	MonthlyAmounts       *RevenueAmounts `json:"monthly_amounts"`
 }
 
@@ -67,19 +67,19 @@ type RevenueAmounts struct {
 type ContentCreatorDashboard struct {
 	CreatorID            string                    `json:"creator_id"`
 	UserType             string                    `json:"user_type"` // "content_creator"
-	
+
 	// Real-Time Engagement
 	CurrentEngagement    *ContentEngagementStats   `json:"current_engagement"`
-	
+
 	// Rewards Information
 	RewardStats          *ContentRewardStats       `json:"reward_stats"`
-	
+
 	// Content Performance
 	ContentPerformance   *ContentPerformanceStats  `json:"content_performance"`
-	
+
 	// Distribution History
 	RecentDistributions  []*ContentDistributionSummary `json:"recent_distributions"`
-	
+
 	LastUpdated          time.Time                 `json:"last_updated"`
 }
 
@@ -127,19 +127,19 @@ type ContentDistributionSummary struct {
 type AppDeveloperDashboard struct {
 	DeveloperID          string                      `json:"developer_id"`
 	UserType             string                      `json:"user_type"` // "app_developer"
-	
+
 	// Real-Time App Usage
 	CurrentUsage         *AppUsageStats              `json:"current_usage"`
-	
+
 	// Rewards Information
 	RewardStats          *AppDeveloperRewardStats    `json:"reward_stats"`
-	
+
 	// App Performance
 	AppPerformance       *AppPerformanceStats        `json:"app_performance"`
-	
+
 	// Distribution History
 	RecentDistributions  []*AppDeveloperDistributionSummary `json:"recent_distributions"`
-	
+
 	LastUpdated          time.Time                   `json:"last_updated"`
 }
 
@@ -187,19 +187,19 @@ type AppDeveloperDistributionSummary struct {
 type ProviderDashboard struct {
 	ProviderID           string                    `json:"provider_id"`
 	UserType             string                    `json:"user_type"` // "provider"
-	
+
 	// Real-Time Resource Usage
 	CurrentUsage         *ProviderUsageStats       `json:"current_usage"`
-	
+
 	// Rewards Information
 	RewardStats          *ProviderRewardStats      `json:"reward_stats"`
-	
+
 	// Resource Performance
 	ResourcePerformance  *ResourcePerformanceStats `json:"resource_performance"`
-	
+
 	// Distribution History
 	RecentDistributions  []*ProviderDistributionSummary `json:"recent_distributions"`
-	
+
 	LastUpdated          time.Time                 `json:"last_updated"`
 }
 
@@ -247,16 +247,16 @@ type ProviderDistributionSummary struct {
 type FreeUserDashboard struct {
 	UserID               string                 `json:"user_id"`
 	UserType             string                 `json:"user_type"` // "free_user"
-	
+
 	// Usage Statistics
 	CurrentUsage         *FreeUserUsageStats    `json:"current_usage"`
-	
+
 	// Quotas and Limits
 	QuotaInformation     *QuotaInfo             `json:"quota_information"`
-	
+
 	// Upgrade Information
 	UpgradeOptions       *UpgradeOptions        `json:"upgrade_options"`
-	
+
 	LastUpdated          time.Time              `json:"last_updated"`
 }
 
@@ -267,7 +267,7 @@ type FreeUserUsageStats struct {
 	ComputeHours         float64 `json:"compute_hours"`
 	ContentConsumed      int64   `json:"content_consumed_bytes"`
 	AppsUsed             int     `json:"apps_used_count"`
-	
+
 	// Monthly activity
 	MonthlyOperations    int     `json:"monthly_operations"`
 	MonthlyContentViews  int     `json:"monthly_content_views"`
@@ -279,11 +279,11 @@ type QuotaInfo struct {
 	StorageQuota         int64   `json:"storage_quota_bytes"`
 	BandwidthQuota       int64   `json:"bandwidth_quota_bytes"`
 	ComputeQuota         float64 `json:"compute_quota_hours"`
-	
+
 	StorageUsedPercent   float64 `json:"storage_used_percent"`
 	BandwidthUsedPercent float64 `json:"bandwidth_used_percent"`
 	ComputeUsedPercent   float64 `json:"compute_used_percent"`
-	
+
 	ResetDate            time.Time `json:"quota_reset_date"`
 }
 
@@ -311,10 +311,10 @@ type NetworkOverview struct {
 	TotalProviders       int     `json:"total_providers"`
 	TotalContentCreators int     `json:"total_content_creators"`
 	TotalAppDevelopers   int     `json:"total_app_developers"`
-	
+
 	CurrentRevenueRate   float64 `json:"current_revenue_per_second"`
 	TotalDistributedToday float64 `json:"total_distributed_today"`
-	
+
 	ActiveDistribution   *ActiveDistributionBreakdown `json:"active_distribution"`
 }
 
@@ -331,36 +331,36 @@ type ActiveDistributionBreakdown struct {
 func (s *server) setupEconomicsDashboardRoutes() {
 	// Create authenticated API group for dashboard endpoints
 	api := s.app.Group("/api/dashboard")
-	
+
 	// Apply authentication middleware to all dashboard routes
 	if s.authService != nil {
 		api.Use(s.authMiddleware())
 	}
-	
+
 	// Subscriber dashboard endpoints (DID-based)
 	api.Get("/subscriber/:did", s.handleSubscriberDashboard)
 	s.addRoute("GET", "/api/dashboard/subscriber/:did")
-	
+
 	// Content creator dashboard endpoints (DID-based)
 	api.Get("/creator/:did", s.handleContentCreatorDashboard)
 	s.addRoute("GET", "/api/dashboard/creator/:did")
-	
+
 	// App developer dashboard endpoints (DID-based)
 	api.Get("/developer/:did", s.handleAppDeveloperDashboard)
 	s.addRoute("GET", "/api/dashboard/developer/:did")
-	
+
 	// Infrastructure provider dashboard endpoints (DID-based)
 	api.Get("/provider/:did", s.handleProviderDashboard)
 	s.addRoute("GET", "/api/dashboard/provider/:did")
-	
+
 	// Free user dashboard endpoints (DID-based)
 	api.Get("/free-user/:did", s.handleFreeUserDashboard)
 	s.addRoute("GET", "/api/dashboard/free-user/:did")
-	
+
 	// Network overview endpoint (for all authenticated users)
 	api.Get("/network-overview", s.handleNetworkOverview)
 	s.addRoute("GET", "/api/dashboard/network-overview")
-	
+
 	// Personal dashboard endpoint (uses authenticated user's DID)
 	api.Get("/me", s.handlePersonalDashboard)
 	s.addRoute("GET", "/api/dashboard/me")

@@ -25,17 +25,17 @@ PROJECT_ID=$(gh api graphql -f query='
 REPORT_FILE=$(mktemp)
 
 # Headers for CSV output
-echo "Commit Hash,Date,Author,Message,Issue Numbers,Issues in Project" > "$REPORT_FILE"
+echo "Commit Hash,Date,Author,Message,Issue Numbers,Issues in Project" >"$REPORT_FILE"
 
 # Analyze commits
 echo "Scanning commit history..."
 git log --pretty=format:"%H|%ad|%an|%s" --date=short | while IFS='|' read -r hash date author message; do
   # Find issue references
   issue_refs=$(echo "$message" | grep -oE '#[0-9]+' | grep -oE '[0-9]+' | sort -u | tr '\n' ' ')
-  
+
   if [ ! -z "$issue_refs" ]; then
     issues_in_project=""
-    
+
     for issue_num in $issue_refs; do
       # Check if issue exists and is in project
       issue_data=$(gh api graphql -f query='
@@ -54,18 +54,18 @@ git log --pretty=format:"%H|%ad|%an|%s" --date=short | while IFS='|' read -r has
             }
           }
         }' -f owner="$ORG" -f repo="$REPO" -f number="$issue_num" 2>/dev/null)
-      
+
       if [ $? -eq 0 ]; then
         is_in_project=$(echo "$issue_data" | jq -r ".data.repository.issue.projectItems.nodes[] | select(.project.id == \"$PROJECT_ID\") | .project.id" 2>/dev/null)
-        
+
         if [ ! -z "$is_in_project" ]; then
           issues_in_project="${issues_in_project}#${issue_num} "
         fi
       fi
     done
-    
+
     # Add to report
-    echo "${hash:0:7},$date,$author,\"$message\",\"$issue_refs\",\"$issues_in_project\"" >> "$REPORT_FILE"
+    echo "${hash:0:7},$date,$author,\"$message\",\"$issue_refs\",\"$issues_in_project\"" >>"$REPORT_FILE"
   fi
 done
 

@@ -188,7 +188,7 @@ storage:
     data_chunks: 10
     parity_chunks: 4
     chunk_size: 1048576  # 1MB chunks
-  
+
   replication:
     enabled: true
     target_replicas: 3

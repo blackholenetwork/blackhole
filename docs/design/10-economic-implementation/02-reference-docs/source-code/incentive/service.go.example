@@ -18,13 +18,13 @@ type Service struct {
 	mu            sync.RWMutex
 	logger        zerolog.Logger
 	config        *Config
-	
+
 	// Core components
 	pool          *SubscriptionPool // Legacy monthly billing
 	tracker       *UsageTracker
 	calculator    *RewardCalculator
 	contentEconomy *ContentEconomyManager
-	
+
 	// New prorated billing system
 	proratedBilling       *ProratedBillingEngine
 	infraDistributor      *RealTimeInfrastructureDistributor
@@ -32,11 +32,11 @@ type Service struct {
 	appDevDistributor     *RealTimeAppDeveloperDistributor
 	unusedFundsDistributor *UnusedFundsDistributor
 	useRealTimeBilling    bool // Flag to switch between legacy and real-time
-	
+
 	// Persistence layer for billing and audit trails
 	persistence   *EconomicPersistenceLayer
 	nodeID        string
-	
+
 	// Service state
 	started       bool
 	stopChan      chan struct{}
@@ -51,13 +51,13 @@ func NewService(config *Config, logger zerolog.Logger) *Service {
 		config:     config,
 		stopChan:   make(chan struct{}),
 	}
-	
+
 	// Initialize components
 	service.pool = NewSubscriptionPool(config, logger)
 	service.tracker = NewUsageTracker(config, service.pool, logger)
 	service.calculator = NewRewardCalculator(config, service.pool, service.tracker, logger)
 	service.contentEconomy = NewContentEconomyManager(config, service.pool, logger)
-	
+
 	return service
 }
 
@@ -71,26 +71,26 @@ func NewServiceWithPersistence(config *Config, vfs interfaces.VFS, nodeID string
 		stopChan:   make(chan struct{}),
 		useRealTimeBilling: true, // Enable real-time prorated billing by default
 	}
-	
+
 	// Initialize legacy components (for compatibility)
 	service.pool = NewSubscriptionPool(config, logger)
 	service.tracker = NewUsageTracker(config, service.pool, logger)
 	service.calculator = NewRewardCalculator(config, service.pool, service.tracker, logger)
 	service.contentEconomy = NewContentEconomyManager(config, service.pool, logger)
-	
+
 	// Initialize new prorated billing system
 	service.proratedBilling = NewProratedBillingEngine(config, logger)
 	service.infraDistributor = NewRealTimeInfrastructureDistributor(config, logger)
 	service.contentDistributor = NewRealTimeContentDistributor(config, logger)
 	service.appDevDistributor = NewRealTimeAppDeveloperDistributor(config, logger)
 	service.unusedFundsDistributor = NewUnusedFundsDistributor(config, logger)
-	
+
 	// Initialize persistence layer if VFS is provided
 	if vfs != nil {
 		service.persistence = NewEconomicPersistenceLayer(vfs, nodeID, logger)
 		logger.Info().Str("node_id", nodeID).Msg("Economic persistence layer initialized")
 	}
-	
+
 	return service
 }
 
@@ -98,37 +98,37 @@ func NewServiceWithPersistence(config *Config, vfs interfaces.VFS, nodeID string
 func (s *Service) Start(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	if s.started {
 		return fmt.Errorf("incentive service already started")
 	}
-	
+
 	if !s.config.Enabled {
 		s.logger.Info().Msg("Incentive service disabled in configuration")
 		return nil
 	}
-	
+
 	s.logger.Info().Msg("Starting incentive service")
-	
+
 	// Validate configuration
 	if err := s.config.Validate(); err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
-	
+
 	// Start legacy components (for compatibility)
 	if !s.useRealTimeBilling {
 		if err := s.pool.Start(ctx); err != nil {
 			return fmt.Errorf("failed to start subscription pool: %w", err)
 		}
 	}
-	
+
 	if err := s.tracker.Start(ctx); err != nil {
 		if !s.useRealTimeBilling {
 			s.pool.Stop(ctx) // Cleanup on failure
 		}
 		return fmt.Errorf("failed to start usage tracker: %w", err)
 	}
-	
+
 	if err := s.contentEconomy.Start(ctx); err != nil {
 		s.tracker.Stop(ctx) // Cleanup on failure
 		if !s.useRealTimeBilling {
@@ -136,7 +136,7 @@ func (s *Service) Start(ctx context.Context) error {
 		}
 		return fmt.Errorf("failed to start content economy: %w", err)
 	}
-	
+
 	// Start new prorated billing system
 	if s.useRealTimeBilling {
 		if err := s.proratedBilling.Start(ctx); err != nil {
@@ -144,14 +144,14 @@ func (s *Service) Start(ctx context.Context) error {
 			s.tracker.Stop(ctx)
 			return fmt.Errorf("failed to start prorated billing: %w", err)
 		}
-		
+
 		if err := s.infraDistributor.Start(ctx); err != nil {
 			s.proratedBilling.Stop(ctx)
 			s.contentEconomy.Stop(ctx)
 			s.tracker.Stop(ctx)
 			return fmt.Errorf("failed to start infrastructure distributor: %w", err)
 		}
-		
+
 		if err := s.contentDistributor.Start(ctx); err != nil {
 			s.infraDistributor.Stop(ctx)
 			s.proratedBilling.Stop(ctx)
@@ -159,7 +159,7 @@ func (s *Service) Start(ctx context.Context) error {
 			s.tracker.Stop(ctx)
 			return fmt.Errorf("failed to start content distributor: %w", err)
 		}
-		
+
 		if err := s.appDevDistributor.Start(ctx); err != nil {
 			s.contentDistributor.Stop(ctx)
 			s.infraDistributor.Stop(ctx)
@@ -168,7 +168,7 @@ func (s *Service) Start(ctx context.Context) error {
 			s.tracker.Stop(ctx)
 			return fmt.Errorf("failed to start app developer distributor: %w", err)
 		}
-		
+
 		if err := s.unusedFundsDistributor.Start(ctx); err != nil {
 			s.appDevDistributor.Stop(ctx)
 			s.contentDistributor.Stop(ctx)
@@ -179,9 +179,9 @@ func (s *Service) Start(ctx context.Context) error {
 			return fmt.Errorf("failed to start unused funds distributor: %w", err)
 		}
 	}
-	
+
 	s.started = true
-	
+
 	// Start background workers
 	if !s.useRealTimeBilling {
 		s.wg.Add(1)
@@ -191,7 +191,7 @@ func (s *Service) Start(ctx context.Context) error {
 		s.wg.Add(1)
 		go s.connectProratedToDistributors(ctx)
 	}
-	
+
 	s.logger.Info().
 		Float64("content_pct", s.config.MarketPricing.ContentCreatorPercentage*100).
 		Float64("network_ops_pct", s.config.MarketPricing.NetworkOpsPercentage*100).
@@ -200,10 +200,10 @@ func (s *Service) Start(ctx context.Context) error {
 		Bool("real_time_billing", s.useRealTimeBilling).
 		Str("pricing_model", "market_based").
 		Msg("Incentive service started with updated allocation")
-	
+
 	// Mark service as healthy
 	s.SetHealthy()
-	
+
 	return nil
 }
 
@@ -211,43 +211,43 @@ func (s *Service) Start(ctx context.Context) error {
 func (s *Service) Stop(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	if !s.started {
 		return nil
 	}
-	
+
 	s.logger.Info().Msg("Stopping incentive service")
-	
+
 	close(s.stopChan)
 	s.wg.Wait()
-	
+
 	// Stop components
 	if err := s.contentEconomy.Stop(ctx); err != nil {
 		s.logger.Warn().Err(err).Msg("Error stopping content economy")
 	}
-	
+
 	if err := s.tracker.Stop(ctx); err != nil {
 		s.logger.Warn().Err(err).Msg("Error stopping usage tracker")
 	}
-	
+
 	// Stop real-time billing components
 	if s.useRealTimeBilling {
 		if err := s.unusedFundsDistributor.Stop(ctx); err != nil {
 			s.logger.Warn().Err(err).Msg("Error stopping unused funds distributor")
 		}
-		
+
 		if err := s.appDevDistributor.Stop(ctx); err != nil {
 			s.logger.Warn().Err(err).Msg("Error stopping app developer distributor")
 		}
-		
+
 		if err := s.contentDistributor.Stop(ctx); err != nil {
 			s.logger.Warn().Err(err).Msg("Error stopping content distributor")
 		}
-		
+
 		if err := s.infraDistributor.Stop(ctx); err != nil {
 			s.logger.Warn().Err(err).Msg("Error stopping infrastructure distributor")
 		}
-		
+
 		if err := s.proratedBilling.Stop(ctx); err != nil {
 			s.logger.Warn().Err(err).Msg("Error stopping prorated billing")
 		}
@@ -257,9 +257,9 @@ func (s *Service) Stop(ctx context.Context) error {
 			s.logger.Warn().Err(err).Msg("Error stopping subscription pool")
 		}
 	}
-	
+
 	s.started = false
-	
+
 	s.logger.Info().Msg("Incentive service stopped")
 	return nil
 }
@@ -271,7 +271,7 @@ func (s *Service) AddSubscription(userID string, tier SubscriptionTier) error {
 	if !s.started || !s.config.Enabled {
 		return fmt.Errorf("incentive service not running")
 	}
-	
+
 	var amount float64
 	switch tier {
 	case TierNormal:
@@ -285,7 +285,7 @@ func (s *Service) AddSubscription(userID string, tier SubscriptionTier) error {
 	default:
 		return fmt.Errorf("invalid subscription tier: %s", tier)
 	}
-	
+
 	subscription := &Subscription{
 		UserID:       userID,
 		Tier:         tier,
@@ -295,7 +295,7 @@ func (s *Service) AddSubscription(userID string, tier SubscriptionTier) error {
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}
-	
+
 	return s.pool.AddSubscription(subscription)
 }
 
@@ -304,7 +304,7 @@ func (s *Service) CancelSubscription(userID string) error {
 	if !s.started || !s.config.Enabled {
 		return fmt.Errorf("incentive service not running")
 	}
-	
+
 	return s.pool.CancelSubscription(userID)
 }
 
@@ -313,7 +313,7 @@ func (s *Service) GetSubscription(userID string) (*Subscription, error) {
 	if !s.started || !s.config.Enabled {
 		return nil, fmt.Errorf("incentive service not running")
 	}
-	
+
 	return s.pool.GetSubscription(userID)
 }
 
@@ -324,7 +324,7 @@ func (s *Service) TrackStorageUsage(providerID, operation string, dataSize int64
 	if !s.started || !s.config.Enabled {
 		return nil // Silently ignore if service not running
 	}
-	
+
 	return s.tracker.TrackStorageOperation(providerID, operation, dataSize, duration, userID, isChargeable)
 }
 
@@ -333,7 +333,7 @@ func (s *Service) TrackBandwidthUsage(providerID, operation string, bytesTransfe
 	if !s.started || !s.config.Enabled {
 		return nil
 	}
-	
+
 	return s.tracker.TrackBandwidthOperation(providerID, operation, bytesTransferred, direction, userID, isChargeable)
 }
 
@@ -342,7 +342,7 @@ func (s *Service) TrackComputeUsage(providerID, operation, jobID, userID string,
 	if !s.started || !s.config.Enabled {
 		return nil
 	}
-	
+
 	return s.tracker.TrackComputeOperation(providerID, operation, jobID, userID, cpuHours, gpuHours, memoryGBHours, isChargeable)
 }
 
@@ -351,7 +351,7 @@ func (s *Service) TrackContentContribution(creatorID, contentID, contentType str
 	if !s.started || !s.config.Enabled {
 		return nil
 	}
-	
+
 	return s.tracker.TrackContentContribution(creatorID, contentID, contentType, viewCount, dataTransferred, engagementScore, qualityScore)
 }
 
@@ -360,7 +360,7 @@ func (s *Service) TrackNetworkOperation(providerID, operation, operationType, us
 	if !s.started || !s.config.Enabled {
 		return nil
 	}
-	
+
 	return s.tracker.TrackNetworkOperation(providerID, operation, operationType, userID, computeUnits, isChargeable)
 }
 
@@ -371,7 +371,7 @@ func (s *Service) GetProviderReward(cycleID, providerID string) (*ProviderReward
 	if !s.started || !s.config.Enabled {
 		return nil, fmt.Errorf("incentive service not running")
 	}
-	
+
 	return s.calculator.GetProviderReward(cycleID, providerID)
 }
 
@@ -380,7 +380,7 @@ func (s *Service) GetCycleCalculation(cycleID string) (*RewardCalculation, error
 	if !s.started || !s.config.Enabled {
 		return nil, fmt.Errorf("incentive service not running")
 	}
-	
+
 	return s.calculator.GetCalculation(cycleID)
 }
 
@@ -389,7 +389,7 @@ func (s *Service) GetCurrentCycle() *BillingCycle {
 	if !s.started || !s.config.Enabled {
 		return nil
 	}
-	
+
 	return s.pool.GetCurrentCycle()
 }
 
@@ -398,7 +398,7 @@ func (s *Service) GetStats() *IncentiveStats {
 	if !s.started || !s.config.Enabled {
 		return &IncentiveStats{}
 	}
-	
+
 	stats := s.pool.GetStats()
 	stats.ContentEconomy = s.contentEconomy.GetContentEconomyStats()
 	return stats
@@ -411,7 +411,7 @@ func (s *Service) PurchaseContent(userID, creatorID, contentID string, price flo
 	if !s.started || !s.config.Enabled {
 		return nil, fmt.Errorf("incentive service not running")
 	}
-	
+
 	return s.contentEconomy.PurchaseContent(userID, creatorID, contentID, price)
 }
 
@@ -420,7 +420,7 @@ func (s *Service) SendTip(userID, creatorID string, amount float64, contentID, m
 	if !s.started || !s.config.Enabled {
 		return nil, fmt.Errorf("incentive service not running")
 	}
-	
+
 	return s.contentEconomy.SendTip(userID, creatorID, amount, contentID, message)
 }
 
@@ -429,7 +429,7 @@ func (s *Service) ListContentForSale(purchaseID string, sellerID string, price f
 	if !s.started || !s.config.Enabled {
 		return nil, fmt.Errorf("incentive service not running")
 	}
-	
+
 	return s.contentEconomy.ListContentForSale(purchaseID, sellerID, price)
 }
 
@@ -438,7 +438,7 @@ func (s *Service) BuyFromSecondaryMarket(listingID, buyerID string) (*SecondaryM
 	if !s.started || !s.config.Enabled {
 		return nil, fmt.Errorf("incentive service not running")
 	}
-	
+
 	return s.contentEconomy.BuyFromSecondaryMarket(listingID, buyerID)
 }
 
@@ -447,7 +447,7 @@ func (s *Service) GetUserInvestments(userID string) []*ContentInvestment {
 	if !s.started || !s.config.Enabled {
 		return nil
 	}
-	
+
 	return s.contentEconomy.GetUserInvestments(userID)
 }
 
@@ -456,7 +456,7 @@ func (s *Service) GetCreatorInvestors(creatorID string) []*ContentInvestment {
 	if !s.started || !s.config.Enabled {
 		return nil
 	}
-	
+
 	return s.contentEconomy.GetCreatorInvestors(creatorID)
 }
 
@@ -465,7 +465,7 @@ func (s *Service) GetActiveListings() []*SecondaryMarketListing {
 	if !s.started || !s.config.Enabled {
 		return nil
 	}
-	
+
 	return s.contentEconomy.GetActiveListings()
 }
 
@@ -474,12 +474,12 @@ func (s *Service) GetActiveListings() []*SecondaryMarketListing {
 // rewardCalculationWorker handles automatic reward calculations for completed cycles
 func (s *Service) rewardCalculationWorker(ctx context.Context) {
 	defer s.wg.Done()
-	
+
 	ticker := time.NewTicker(time.Hour) // Check every hour
 	defer ticker.Stop()
-	
+
 	s.logger.Debug().Msg("Reward calculation worker started")
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -497,7 +497,7 @@ func (s *Service) processCompletedCycles() {
 	// This would check for cycles in "calculating" status and run calculations
 	// For now, we'll just log that it's checking
 	s.logger.Debug().Msg("Checking for completed billing cycles requiring reward calculation")
-	
+
 	// Implementation would:
 	// 1. Query for cycles with status = CycleStatusCalculating
 	// 2. For each cycle, call s.calculator.CalculateRewards(ctx, cycleID)
@@ -509,7 +509,7 @@ func (s *Service) processCompletedCycles() {
 func (s *Service) GetServiceHealth() map[string]interface{} {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	health := map[string]interface{}{
 		"service":     "incentive",
 		"started":     s.started,
@@ -517,7 +517,7 @@ func (s *Service) GetServiceHealth() map[string]interface{} {
 		"version":     "1.0.0",
 		"timestamp":   time.Now(),
 	}
-	
+
 	if s.started && s.config.Enabled {
 		currentCycle := s.pool.GetCurrentCycle()
 		if currentCycle != nil {
@@ -525,11 +525,11 @@ func (s *Service) GetServiceHealth() map[string]interface{} {
 			health["cycle_status"] = currentCycle.Status
 			health["cycle_end"] = currentCycle.EndDate
 		}
-		
+
 		health["pool_amount"] = s.pool.GetPoolAmount()
 		health["active_subscriptions"] = s.pool.GetActiveSubscriptions()
 	}
-	
+
 	return health
 }
 
@@ -541,7 +541,7 @@ func (s *Service) TrackResourceUsage(ctx context.Context, event ResourceUsageEve
 	if !s.started || !s.config.Enabled {
 		return fmt.Errorf("incentive service not running")
 	}
-	
+
 	// Store billing event with full audit trail if persistence is enabled
 	if s.persistence != nil && event.IsChargeable {
 		billingEvent := s.convertToBillingEvent(event)
@@ -555,7 +555,7 @@ func (s *Service) TrackResourceUsage(ctx context.Context, event ResourceUsageEve
 			// Don't fail the operation, but log the error
 		}
 	}
-	
+
 	// Convert core.ResourceUsageEvent to our internal tracking
 	switch event.ResourceType {
 	case "storage":
@@ -622,7 +622,7 @@ func (s *Service) TrackResourceUsage(ctx context.Context, event ResourceUsageEve
 			appName := ""
 			userRetentionRate := 0.8 // Default retention rate
 			appRating := 4.0 // Default rating
-			
+
 			// Extract values from metadata if available
 			if event.Metadata != nil {
 				if name, ok := event.Metadata["app_name"]; ok {
@@ -639,7 +639,7 @@ func (s *Service) TrackResourceUsage(ctx context.Context, event ResourceUsageEve
 					}
 				}
 			}
-			
+
 			// Record real-time app usage
 			s.RecordAppUsage(
 				developerID,
@@ -649,10 +649,10 @@ func (s *Service) TrackResourceUsage(ctx context.Context, event ResourceUsageEve
 				userRetentionRate,
 				appRating,
 			)
-			
+
 			return nil
 		}
-		
+
 		// Fall back to legacy tracking
 		s.logger.Debug().
 			Str("developer_id", event.ProviderID).
@@ -669,18 +669,18 @@ func (s *Service) TrackResourceUsage(ctx context.Context, event ResourceUsageEve
 	}
 }
 
-// TrackContentActivity records content-related activity for economic calculations  
+// TrackContentActivity records content-related activity for economic calculations
 func (s *Service) TrackContentActivity(ctx context.Context, event ContentActivityEvent) error {
 	if !s.started || !s.config.Enabled {
 		return fmt.Errorf("incentive service not running")
 	}
-	
+
 	// Use real-time content distribution if available
 	if s.useRealTimeBilling && s.contentDistributor != nil {
 		// Convert view duration to engagement time per content type
 		engagementSeconds := event.ViewDuration.Seconds()
 		var videoTime, audioTime, documentTime, photoTime float64
-		
+
 		// Distribute engagement time based on content type
 		switch event.ContentType {
 		case "video":
@@ -695,20 +695,20 @@ func (s *Service) TrackContentActivity(ctx context.Context, event ContentActivit
 			// Default to video engagement for unknown types
 			videoTime = engagementSeconds
 		}
-		
+
 		// Record real-time content engagement
 		s.RecordContentEngagement(
 			event.CreatorID,
 			videoTime,
-			audioTime, 
+			audioTime,
 			documentTime,
 			photoTime,
 			event.QualityScore,
 		)
-		
+
 		return nil
 	}
-	
+
 	// Fall back to legacy tracking for compatibility
 	viewCount := int64(1) // Assume each activity event represents 1 view
 	engagementScore := 1.0 // Default engagement score
@@ -761,21 +761,21 @@ type ContentActivityEvent struct {
 // convertToBillingEvent converts a ResourceUsageEvent to a BillingEvent for persistence
 func (s *Service) convertToBillingEvent(event ResourceUsageEvent) *BillingEvent {
 	now := time.Now()
-	
+
 	// Calculate cost based on current pricing
 	unitCost := s.calculateUnitCost(event.ResourceType, event.Operation)
 	totalCost := event.Amount * unitCost
-	
+
 	// Generate transaction ID
 	transactionID := fmt.Sprintf("tx_%s_%s_%d", event.UserID[:8], event.ProviderID[:8], now.UnixNano())
-	
+
 	// Get current billing cycle
 	currentCycle := s.pool.GetCurrentCycle()
 	billingCycleID := ""
 	if currentCycle != nil {
 		billingCycleID = currentCycle.ID
 	}
-	
+
 	// Create billing event
 	billingEvent := &BillingEvent{
 		TransactionID:    transactionID,
@@ -803,7 +803,7 @@ func (s *Service) convertToBillingEvent(event ResourceUsageEvent) *BillingEvent 
 		RegulatoryFlags:  []string{"SOX_COMPLIANT", "GDPR_COMPLIANT"},
 		Metadata:         event.Metadata,
 	}
-	
+
 	return billingEvent
 }
 
@@ -851,7 +851,7 @@ func (s *Service) QueryUserBillingEvents(ctx context.Context, userID string, sta
 	if s.persistence == nil {
 		return nil, fmt.Errorf("persistence layer not available")
 	}
-	
+
 	filter := BillingEventFilter{
 		UserID:       userID,
 		StartDate:    startDate,
@@ -861,7 +861,7 @@ func (s *Service) QueryUserBillingEvents(ctx context.Context, userID string, sta
 		SortOrder:    "desc",
 		Limit:        1000,
 	}
-	
+
 	return s.persistence.QueryBillingEvents(ctx, filter)
 }
 
@@ -870,7 +870,7 @@ func (s *Service) QueryProviderBillingEvents(ctx context.Context, providerID str
 	if s.persistence == nil {
 		return nil, fmt.Errorf("persistence layer not available")
 	}
-	
+
 	filter := BillingEventFilter{
 		ProviderID:   providerID,
 		StartDate:    startDate,
@@ -880,7 +880,7 @@ func (s *Service) QueryProviderBillingEvents(ctx context.Context, providerID str
 		SortOrder:    "desc",
 		Limit:        1000,
 	}
-	
+
 	return s.persistence.QueryBillingEvents(ctx, filter)
 }
 
@@ -889,7 +889,7 @@ func (s *Service) GenerateUserBill(ctx context.Context, userID, billingCycleID s
 	if s.persistence == nil {
 		return nil, fmt.Errorf("persistence layer not available")
 	}
-	
+
 	return s.persistence.GenerateUserBillingReport(ctx, userID, billingCycleID)
 }
 
@@ -898,7 +898,7 @@ func (s *Service) GenerateProviderStatement(ctx context.Context, providerID, bil
 	if s.persistence == nil {
 		return nil, fmt.Errorf("persistence layer not available")
 	}
-	
+
 	return s.persistence.GenerateProviderStatementReport(ctx, providerID, billingCycleID)
 }
 
@@ -907,7 +907,7 @@ func (s *Service) QueryAuditTrail(ctx context.Context, entityType, entityID stri
 	if s.persistence == nil {
 		return nil, fmt.Errorf("persistence layer not available")
 	}
-	
+
 	filter := AuditTrailFilter{
 		Entity:          entityType,
 		EntityID:        entityID,
@@ -918,7 +918,7 @@ func (s *Service) QueryAuditTrail(ctx context.Context, entityType, entityID stri
 		SortOrder:       "desc",
 		Limit:           1000,
 	}
-	
+
 	return s.persistence.QueryAuditTrail(ctx, filter)
 }
 
@@ -940,11 +940,11 @@ func (s *Service) AddProratedSubscription(userID string, tier SubscriptionTier, 
 	if !s.started || !s.config.Enabled {
 		return fmt.Errorf("incentive service not running")
 	}
-	
+
 	if !s.useRealTimeBilling {
 		return fmt.Errorf("real-time billing not enabled")
 	}
-	
+
 	return s.proratedBilling.AddProratedSubscription(userID, tier, startTime)
 }
 
@@ -953,11 +953,11 @@ func (s *Service) CancelProratedSubscription(userID string) error {
 	if !s.started || !s.config.Enabled {
 		return fmt.Errorf("incentive service not running")
 	}
-	
+
 	if !s.useRealTimeBilling {
 		return fmt.Errorf("real-time billing not enabled")
 	}
-	
+
 	return s.proratedBilling.CancelProratedSubscription(userID)
 }
 
@@ -966,7 +966,7 @@ func (s *Service) GetProratedSubscriptions() map[string]*ProratedSubscription {
 	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
 		return make(map[string]*ProratedSubscription)
 	}
-	
+
 	return s.proratedBilling.GetActiveSubscriptions()
 }
 
@@ -975,7 +975,7 @@ func (s *Service) GetCurrentRevenueRate() float64 {
 	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
 		return 0
 	}
-	
+
 	return s.proratedBilling.GetCurrentRevenueRate()
 }
 
@@ -984,7 +984,7 @@ func (s *Service) GetPoolAmounts() map[string]float64 {
 	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
 		return make(map[string]float64)
 	}
-	
+
 	return s.proratedBilling.GetPoolAmounts()
 }
 
@@ -993,7 +993,7 @@ func (s *Service) GetProratedBillingStats() *ProratedBillingStats {
 	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
 		return &ProratedBillingStats{}
 	}
-	
+
 	return s.proratedBilling.GetStats()
 }
 
@@ -1002,19 +1002,19 @@ func (s *Service) GetProratedBillingStats() *ProratedBillingStats {
 // RecordProviderUsageRealTime records real-time usage from a provider for immediate distribution
 func (s *Service) RecordProviderUsageRealTime(
 	providerID string,
-	storageGBHoursPerSecond, bandwidthGBPerSecond, cpuHoursPerSecond, 
+	storageGBHoursPerSecond, bandwidthGBPerSecond, cpuHoursPerSecond,
 	gpuHoursPerSecond, memoryGBHoursPerSecond float64,
 ) {
 	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
 		return
 	}
-	
+
 	s.infraDistributor.RecordProviderUsage(
-		providerID, 
-		storageGBHoursPerSecond, 
-		bandwidthGBPerSecond, 
+		providerID,
+		storageGBHoursPerSecond,
+		bandwidthGBPerSecond,
 		cpuHoursPerSecond,
-		gpuHoursPerSecond, 
+		gpuHoursPerSecond,
 		memoryGBHoursPerSecond,
 	)
 }
@@ -1024,7 +1024,7 @@ func (s *Service) GetActiveProviders() map[string]*RealTimeProviderUsage {
 	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
 		return make(map[string]*RealTimeProviderUsage)
 	}
-	
+
 	return s.infraDistributor.GetActiveProviders()
 }
 
@@ -1033,7 +1033,7 @@ func (s *Service) GetProviderRewardsRealTime() map[string]float64 {
 	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
 		return make(map[string]float64)
 	}
-	
+
 	return s.infraDistributor.GetProviderRewards()
 }
 
@@ -1042,7 +1042,7 @@ func (s *Service) GetRealTimeInfrastructureStats() *RealTimeInfrastructureStats 
 	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
 		return &RealTimeInfrastructureStats{}
 	}
-	
+
 	return s.infraDistributor.GetStats()
 }
 
@@ -1051,7 +1051,7 @@ func (s *Service) GetDistributionHistory(limit int) []*RealTimeDistribution {
 	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
 		return []*RealTimeDistribution{}
 	}
-	
+
 	return s.infraDistributor.GetDistributionHistory(limit)
 }
 
@@ -1062,10 +1062,10 @@ func (s *Service) connectProratedToDistributors(ctx context.Context) {
 	if !s.useRealTimeBilling {
 		return
 	}
-	
+
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -1074,22 +1074,22 @@ func (s *Service) connectProratedToDistributors(ctx context.Context) {
 			return
 		case <-ticker.C:
 			pools := s.proratedBilling.GetPoolAmounts()
-			
+
 			// Feed infrastructure pool to infrastructure distributor
 			if infraAmount := pools["infrastructure"]; infraAmount > 0 {
 				s.infraDistributor.AddInfrastructureFunds(infraAmount)
 			}
-			
+
 			// Feed content pool to content distributor
 			if contentAmount := pools["content"]; contentAmount > 0 {
 				s.contentDistributor.AddContentFunds(contentAmount)
 			}
-			
+
 			// Feed app developer pool to app developer distributor
 			if appDevAmount := pools["app_developer"]; appDevAmount > 0 {
 				s.appDevDistributor.AddAppDeveloperFunds(appDevAmount)
 			}
-			
+
 			// Feed unused funds to unused funds distributor
 			if unusedAmount := pools["unused"]; unusedAmount > 0 {
 				s.unusedFundsDistributor.AddUnusedFunds(unusedAmount)
@@ -1109,12 +1109,12 @@ func (s *Service) RecordContentEngagement(
 	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
 		return
 	}
-	
+
 	s.contentDistributor.RecordContentEngagement(
-		creatorID, 
-		videoWatchTime, 
-		audioListenTime, 
-		documentReadTime, 
+		creatorID,
+		videoWatchTime,
+		audioListenTime,
+		documentReadTime,
 		photoViewTime,
 		qualityMultiplier,
 	)
@@ -1125,7 +1125,7 @@ func (s *Service) GetActiveCreators() map[string]*ContentEngagementRealTime {
 	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
 		return make(map[string]*ContentEngagementRealTime)
 	}
-	
+
 	return s.contentDistributor.GetActiveCreators()
 }
 
@@ -1134,7 +1134,7 @@ func (s *Service) GetCreatorRewardsRealTime() map[string]float64 {
 	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
 		return make(map[string]float64)
 	}
-	
+
 	return s.contentDistributor.GetCreatorRewards()
 }
 
@@ -1143,7 +1143,7 @@ func (s *Service) GetRealTimeContentStats() *RealTimeContentStats {
 	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
 		return &RealTimeContentStats{}
 	}
-	
+
 	return s.contentDistributor.GetStats()
 }
 
@@ -1152,7 +1152,7 @@ func (s *Service) GetContentDistributionHistory(limit int) []*ContentDistributio
 	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
 		return []*ContentDistribution{}
 	}
-	
+
 	return s.contentDistributor.GetDistributionHistory(limit)
 }
 
@@ -1167,13 +1167,13 @@ func (s *Service) RecordAppUsage(
 	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
 		return
 	}
-	
+
 	s.appDevDistributor.RecordAppUsage(
-		developerID, 
-		appID, 
+		developerID,
+		appID,
 		appName,
 		activeUserTime,
-		userRetentionRate, 
+		userRetentionRate,
 		appRating,
 	)
 }
@@ -1183,7 +1183,7 @@ func (s *Service) GetActiveApps() map[string]*AppUsageRealTime {
 	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
 		return make(map[string]*AppUsageRealTime)
 	}
-	
+
 	return s.appDevDistributor.GetActiveApps()
 }
 
@@ -1192,7 +1192,7 @@ func (s *Service) GetAppDeveloperRewardsRealTime() map[string]float64 {
 	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
 		return make(map[string]float64)
 	}
-	
+
 	return s.appDevDistributor.GetDeveloperRewards()
 }
 
@@ -1201,7 +1201,7 @@ func (s *Service) GetRealTimeAppDeveloperStats() *RealTimeAppDeveloperStats {
 	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
 		return &RealTimeAppDeveloperStats{}
 	}
-	
+
 	return s.appDevDistributor.GetStats()
 }
 
@@ -1210,7 +1210,7 @@ func (s *Service) GetAppDeveloperDistributionHistory(limit int) []*AppDeveloperD
 	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
 		return []*AppDeveloperDistribution{}
 	}
-	
+
 	return s.appDevDistributor.GetDistributionHistory(limit)
 }
 
@@ -1224,7 +1224,7 @@ func (s *Service) RecordProviderUsageForUnusedFunds(
 	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
 		return
 	}
-	
+
 	s.unusedFundsDistributor.RecordProviderUsageAllUsers(providerID, subscriberUsage, freeUserUsage)
 }
 
@@ -1233,7 +1233,7 @@ func (s *Service) GetUnusedFundsStats() *UnusedFundsStats {
 	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
 		return &UnusedFundsStats{}
 	}
-	
+
 	return s.unusedFundsDistributor.GetStats()
 }
 
@@ -1242,7 +1242,7 @@ func (s *Service) GetUnusedFundsDistributionHistory(limit int) []*UnusedFundsDis
 	if !s.started || !s.config.Enabled || !s.useRealTimeBilling {
 		return []*UnusedFundsDistribution{}
 	}
-	
+
 	return s.unusedFundsDistributor.GetDistributionHistory(limit)
 }
 
@@ -1250,9 +1250,9 @@ func (s *Service) GetUnusedFundsDistributionHistory(limit int) []*UnusedFundsDis
 func (s *Service) SetRealTimeBilling(enabled bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	s.useRealTimeBilling = enabled
-	
+
 	s.logger.Info().
 		Bool("real_time_billing", enabled).
 		Msg("Real-time billing mode updated")

@@ -21,7 +21,7 @@ Before diving into erasure coding parameters, let's consider the unique aspects 
 - ❌ Higher storage cost
 
 **Option B: Balanced (10+4)**
-- 10 data chunks, 4 parity chunks  
+- 10 data chunks, 4 parity chunks
 - 40% storage overhead
 - Can lose any 4 chunks
 - ✅ Good balance of efficiency and resilience
@@ -50,7 +50,7 @@ Cons: Inefficient for small files
 **Option B: Dynamic Sizing**
 ```
 Small files (<10MB): No erasure coding, 3x replication
-Medium files (10MB-100MB): 256KB chunks, 6+3 encoding  
+Medium files (10MB-100MB): 256KB chunks, 6+3 encoding
 Large files (>100MB): 1MB chunks, 10+4 encoding
 ```
 
@@ -153,7 +153,7 @@ Smart caching of frequent lookups
 **Should we use different strategies for different file sizes?**
 
 ```
-Tiny (<1MB): 
+Tiny (<1MB):
   - No erasure coding
   - Simple 3x replication
   - Bundled together for efficiency
@@ -162,14 +162,14 @@ Small (1-10MB):
   - Light erasure coding (4+2)
   - 512KB chunks
 
-Medium (10-100MB):  
+Medium (10-100MB):
   - Standard erasure coding (8+4)
   - 1MB chunks
 
 Large (100MB-1GB):
   - Efficient erasure coding (14+4)
   - 2MB chunks
-  
+
 Huge (>1GB):
   - Streaming erasure coding
   - Process in segments
@@ -226,7 +226,7 @@ Based on the analysis above, here's my recommendation for initial implementation
 - Prefer nodes that have been online >24 hours
 - Simple round-robin among eligible nodes
 
-### 3. Repair Policy  
+### 3. Repair Policy
 - Repair when down to 10 chunks (2 losses)
 - Repair immediately, don't wait
 - Track repair history to identify unreliable nodes

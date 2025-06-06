@@ -65,7 +65,7 @@ func NewSimpleBucketSystem() *SimpleBucketSystem {
 func (sbs *SimpleBucketSystem) GetStorageLocations(chunkID ChunkCID) StorageLocation {
 	// Convert chunkID to string for hashing
 	chunkStr := string(chunkID)
-	
+
 	return StorageLocation{
 		Primary:   sbs.hashToPosition(chunkStr + "primary"),
 		Secondary: sbs.hashToPosition(chunkStr + "secondary"),
@@ -76,14 +76,14 @@ func (sbs *SimpleBucketSystem) GetStorageLocations(chunkID ChunkCID) StorageLoca
 // hashToPosition converts a string to a deterministic position
 func (sbs *SimpleBucketSystem) hashToPosition(input string) Position {
 	hash := sha256.Sum256([]byte(input))
-	
+
 	// Use first 8 bytes for global position
 	globalPos := binary.BigEndian.Uint64(hash[:8]) % TotalPositions
-	
+
 	// Calculate bucket and position within bucket
 	bucket := BucketID(globalPos / PositionsPerBucket)
 	position := PositionID(globalPos % PositionsPerBucket)
-	
+
 	return Position{
 		Bucket:   bucket,
 		Position: position,

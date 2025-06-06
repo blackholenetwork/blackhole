@@ -10,7 +10,7 @@ import (
 type EconomicTracker interface {
 	// TrackResourceUsage records resource usage for economic calculations
 	TrackResourceUsage(ctx context.Context, event ResourceUsageEvent) error
-	
+
 	// TrackContentActivity records content-related activity
 	TrackContentActivity(ctx context.Context, event ContentActivityEvent) error
 }
@@ -23,19 +23,19 @@ type ResourceUsageEvent struct {
 	Amount        float64       `json:"amount"`          // bytes, cpu-hours, etc.
 	Unit          string        `json:"unit"`            // GB, hours, etc.
 	Duration      time.Duration `json:"duration"`        // how long resource was used
-	
+
 	// Provider information
 	ProviderID    string        `json:"provider_id"`     // who provided the resource
 	NodeID        string        `json:"node_id"`         // which node
-	
-	// User information  
+
+	// User information
 	UserID        string        `json:"user_id"`         // who requested the resource
-	
+
 	// Economic context
 	IsChargeable  bool          `json:"is_chargeable"`   // follows payment logic rules
 	OperationType string        `json:"operation_type"`  // user_request, system_task, protocol
 	ServiceName   string        `json:"service_name"`    // which service initiated
-	
+
 	// Metadata
 	JobID         string            `json:"job_id,omitempty"`
 	ContentID     string            `json:"content_id,omitempty"`
@@ -49,17 +49,17 @@ type ContentActivityEvent struct {
 	ContentID     string  `json:"content_id"`
 	ContentType   string  `json:"content_type"`    // video, audio, image, document
 	CreatorID     string  `json:"creator_id"`      // content creator
-	
+
 	// Activity details
 	ActivityType  string  `json:"activity_type"`   // view, like, share, comment
 	ViewerID      string  `json:"viewer_id"`       // who interacted
 	DataConsumed  int64   `json:"data_consumed"`   // bytes consumed for viewing
-	
+
 	// Quality metrics
 	ViewDuration  time.Duration `json:"view_duration"`
 	EngagementType string       `json:"engagement_type"` // like, share, comment
 	QualityScore   float64      `json:"quality_score"`   // resolution, bitrate, etc.
-	
+
 	// Metadata
 	Timestamp     time.Time         `json:"timestamp"`
 	Metadata      map[string]string `json:"metadata,omitempty"`
@@ -69,7 +69,7 @@ type ContentActivityEvent struct {
 type PaymentLogicChecker interface {
 	// IsChargeableOperation determines if an operation should be charged for
 	IsChargeableOperation(resourceType ResourceType, operation string) bool
-	
+
 	// GetOperationType categorizes the operation type for pricing
 	GetOperationType(operation string, metadata map[string]string) string
 }
@@ -95,7 +95,7 @@ func (p *DefaultPaymentLogicChecker) IsChargeableOperation(resourceType Resource
 		default:
 			return false // Conservative default
 		}
-		
+
 	case ResourceTypeBandwidth:
 		// Bandwidth operations for user-requested data
 		switch operation {
@@ -106,7 +106,7 @@ func (p *DefaultPaymentLogicChecker) IsChargeableOperation(resourceType Resource
 		default:
 			return false
 		}
-		
+
 	case ResourceTypeCompute:
 		// Compute operations for user-requested processing
 		switch operation {
@@ -117,11 +117,11 @@ func (p *DefaultPaymentLogicChecker) IsChargeableOperation(resourceType Resource
 		default:
 			return false
 		}
-		
+
 	case ResourceTypeMemory:
 		// Memory follows same rules as compute
 		return p.IsChargeableOperation(ResourceTypeCompute, operation)
-		
+
 	default:
 		return false // Unknown resource types default to free
 	}
@@ -133,18 +133,18 @@ func (p *DefaultPaymentLogicChecker) GetOperationType(operation string, metadata
 	if metadata["system_task"] == "true" {
 		return "system_task"
 	}
-	
+
 	// Check if it's protocol overhead
 	protocolOps := map[string]bool{
-		"ping": true, "discovery": true, "dht_lookup": true, 
+		"ping": true, "discovery": true, "dht_lookup": true,
 		"consensus": true, "validation": true, "hash_verification": true,
 		"signature_check": true, "exists": true, "metadata": true,
 	}
-	
+
 	if protocolOps[operation] {
 		return "protocol"
 	}
-	
+
 	// Default to user request
 	return "user_request"
 }

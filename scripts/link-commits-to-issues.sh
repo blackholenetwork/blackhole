@@ -36,32 +36,32 @@ echo ""
 git log --oneline --all | grep -E '(#[0-9]+|Refs)' | while IFS= read -r line; do
   commit_hash=$(echo "$line" | awk '{print $1}')
   commit_msg=$(echo "$line" | cut -d' ' -f2-)
-  
+
   # Extract all issue numbers from commit message (supports both #123 and Refs #123 format)
   issue_numbers=$(echo "$commit_msg" | grep -oE '(#[0-9]+|Refs #[0-9]+)' | grep -oE '[0-9]+' | sort -u)
-  
+
   if [ -z "$issue_numbers" ]; then
     continue
   fi
-  
+
   for issue_num in $issue_numbers; do
     echo "📝 Commit: $commit_hash references issue #$issue_num"
     echo "   Message: $commit_msg"
-    
+
     # Check if issue exists
     issue_state=$(gh issue view "$issue_num" --json state --jq '.state' 2>/dev/null)
-    
+
     if [ -z "$issue_state" ]; then
       echo "   ⚠️  Issue #$issue_num not found in repository"
       echo ""
       continue
     fi
-    
+
     echo "   ✓ Issue #$issue_num exists (state: $issue_state)"
-    
+
     # Get issue node ID
     issue_node_id=$(gh issue view "$issue_num" --json id --jq '.id')
-    
+
     # Check if issue is already in project
     is_in_project=$(gh api graphql -f query='
       query($id: ID!) {
@@ -77,12 +77,12 @@ git log --oneline --all | grep -E '(#[0-9]+|Refs)' | while IFS= read -r line; do
           }
         }
       }' -f id="$issue_node_id" --jq ".data.node.projectItems.nodes[] | select(.project.id == \"$PROJECT_ID\") | .project.id" 2>/dev/null)
-    
+
     if [ ! -z "$is_in_project" ]; then
       echo "   ✓ Issue #$issue_num is already in the project"
     else
       echo "   → Adding issue #$issue_num to project..."
-      
+
       # Add issue to project
       result=$(gh api graphql -f query='
         mutation($project: ID!, $content: ID!) {
@@ -92,14 +92,14 @@ git log --oneline --all | grep -E '(#[0-9]+|Refs)' | while IFS= read -r line; do
             }
           }
         }' -f project="$PROJECT_ID" -f content="$issue_node_id" 2>&1)
-      
+
       if [ $? -eq 0 ]; then
         echo "   ✅ Successfully added issue #$issue_num to project"
       else
         echo "   ❌ Failed to add issue #$issue_num: $result"
       fi
     fi
-    
+
     echo ""
   done
 done

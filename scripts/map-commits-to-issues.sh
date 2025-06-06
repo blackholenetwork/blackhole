@@ -12,7 +12,7 @@ echo ""
 
 # Get all issues with their titles
 echo "Fetching all issues..."
-gh issue list --limit 100 --json number,title,state | jq -r '.[] | "\(.number)|\(.title)"' > /tmp/issues.txt
+gh issue list --limit 100 --json number,title,state | jq -r '.[] | "\(.number)|\(.title)"' >/tmp/issues.txt
 
 # Analyze commits and suggest issue links
 echo ""
@@ -24,58 +24,58 @@ git log --pretty=format:"%H|%ad|%s" --date=short | while IFS='|' read -r hash da
   if echo "$message" | grep -qE '#[0-9]+'; then
     continue
   fi
-  
+
   # Look for potential matches
   matches=""
-  
+
   # Check each issue
   while IFS='|' read -r issue_num issue_title; do
     # Extract keywords from issue title
     keywords=$(echo "$issue_title" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9 ]//g' | sed 's/  */ /g')
-    
+
     # Check if commit message contains issue keywords
     message_lower=$(echo "$message" | tr '[:upper:]' '[:lower:]')
-    
+
     # Special pattern matching
     case "$issue_title" in
-      *"Orchestrator"*)
-        if echo "$message_lower" | grep -qE 'orchestrat|lifecycle'; then
-          matches="$matches $issue_num"
-        fi
-        ;;
-      *"P2P Networking"*)
-        if echo "$message_lower" | grep -qE 'p2p|network|libp2p|peer'; then
-          matches="$matches $issue_num"
-        fi
-        ;;
-      *"Security"*)
-        if echo "$message_lower" | grep -qE 'security|auth|did|identity'; then
-          matches="$matches $issue_num"
-        fi
-        ;;
-      *"Resource Manager"*)
-        if echo "$message_lower" | grep -qE 'resource|manager|allocation'; then
-          matches="$matches $issue_num"
-        fi
-        ;;
-      *"Monitoring"*)
-        if echo "$message_lower" | grep -qE 'monitor|metric|analytic|health'; then
-          matches="$matches $issue_num"
-        fi
-        ;;
-      *"WebServer"*)
-        if echo "$message_lower" | grep -qE 'web|server|http|api|dashboard'; then
-          matches="$matches $issue_num"
-        fi
-        ;;
-      *"Plugin"*)
-        if echo "$message_lower" | grep -qE 'plugin|architecture|system'; then
-          matches="$matches $issue_num"
-        fi
-        ;;
+    *"Orchestrator"*)
+      if echo "$message_lower" | grep -qE 'orchestrat|lifecycle'; then
+        matches="$matches $issue_num"
+      fi
+      ;;
+    *"P2P Networking"*)
+      if echo "$message_lower" | grep -qE 'p2p|network|libp2p|peer'; then
+        matches="$matches $issue_num"
+      fi
+      ;;
+    *"Security"*)
+      if echo "$message_lower" | grep -qE 'security|auth|did|identity'; then
+        matches="$matches $issue_num"
+      fi
+      ;;
+    *"Resource Manager"*)
+      if echo "$message_lower" | grep -qE 'resource|manager|allocation'; then
+        matches="$matches $issue_num"
+      fi
+      ;;
+    *"Monitoring"*)
+      if echo "$message_lower" | grep -qE 'monitor|metric|analytic|health'; then
+        matches="$matches $issue_num"
+      fi
+      ;;
+    *"WebServer"*)
+      if echo "$message_lower" | grep -qE 'web|server|http|api|dashboard'; then
+        matches="$matches $issue_num"
+      fi
+      ;;
+    *"Plugin"*)
+      if echo "$message_lower" | grep -qE 'plugin|architecture|system'; then
+        matches="$matches $issue_num"
+      fi
+      ;;
     esac
-  done < /tmp/issues.txt
-  
+  done </tmp/issues.txt
+
   if [ ! -z "$matches" ]; then
     echo "📝 Commit: ${hash:0:7} - $message"
     echo "   Date: $date"

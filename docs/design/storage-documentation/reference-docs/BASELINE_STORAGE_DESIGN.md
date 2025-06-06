@@ -33,13 +33,13 @@ encoding_rules:
   small_files:
     size: "< 2.56 MB"
     strategy: "10+3 encoding or simple 3x replication"
-    
+
   # Standard encoding blocks
   standard_files:
     size: ">= 2.56 MB"
     block_size: 10 chunks  # 2.56 MB per block
     baseline_encoding: "10+3 per block"  # 30% redundancy
-    
+
 redundancy_lifecycle:
   fresh: "10+3 to 10+5"     # 0-7 days
   active: "10+5 to 10+8"    # Popular files
@@ -53,16 +53,16 @@ redundancy_lifecycle:
 ```yaml
 metadata_strategy:
   approach: "flexible_deterministic"
-  
+
   chunk_placement:
     candidates_per_chunk: 20  # Generate 20 possible nodes
     selection: "Client picks best based on current conditions"
     no_perfect_sync_needed: true
-    
+
   node_identity:
     stable_id: "hash(public_key)"  # Never changes
     current_info: "Stored in minimal DHT"
-    
+
   benefits:
     - "1000x less metadata than storing all locations"
     - "Resilient to node churn"
@@ -75,17 +75,17 @@ metadata_strategy:
 ```yaml
 node_diversity:
   principle: "Every node has value"
-  
+
   unstable_nodes:
     example: "80% uptime home computer"
     status: "Valued contributor"
     benefit: "Provides resources when available"
-    
+
   no_penalties:
     - "No minimum uptime requirements"
     - "No staking requirements"
     - "Earn proportional to service provided"
-    
+
   network_effect:
     - "Node goes offline → Others earn more"
     - "Natural load rebalancing"
@@ -97,19 +97,19 @@ node_diversity:
 ```yaml
 viral_scaling:
   strategy: "reactive_parity_generation"
-  
+
   triggers:
     - trend_detection: "50% increase in 2 minutes"
     - geographic_demand: "New region with >100 requests"
     - node_stress: "More users than available nodes"
     - failure_cascade: "Available chunks < 15"
-    
+
   generation_rules:
     immediate: "5x replication for instant availability"
     short_term: "Generate 10+20 parity based on demand"
     geographic: "Generate parity where demand appears"
     maximum: "10+100 (computational limit)"
-    
+
   example_100mb_file:
     T+0min: "40 blocks × 13 chunks = 520 total chunks"
     T+2min: "Detect trend → Generate +10 parity per hot block"
@@ -148,7 +148,7 @@ type Block struct {
 type AdaptiveStrategy struct {
     BaselineParity int     // 3 (30% redundancy)
     MaxParity      int     // 10,000 per block
-    
+
     PopularityThresholds map[string]int{
         "cold":    1,      // <10 accesses/day
         "normal":  3,      // 10-100 accesses/day
@@ -168,12 +168,12 @@ distribution:
     strategy: "flexible_deterministic"
     candidates_per_chunk: 20
     selection: "best_available"
-    
+
   viral:
     strategy: "progressive_distribution"
     immediate: "5x replication"
     progressive: "Generate parity based on demand"
-    
+
   node_selection:
     - "No strict requirements"
     - "Use whatever nodes available"
@@ -206,22 +206,22 @@ distribution:
 ```yaml
 storage_pricing:
   base_rate: 10 tokens/chunk/month
-  
+
   modifiers:
     parity_chunk: 1.0x    # Same as data chunks (all chunks equal)
     viral_serving: 5.0x   # Bonus for high-bandwidth serving
     geographic_edge: 1.2x # Bonus for remote regions
-    
+
   example_earnings:
     normal_node:
       chunks_stored: 50
       monthly_earnings: 500 tokens
-      
+
     viral_content_node:
       chunks_stored: 10
       serving_rate: "1000 requests/day"
       monthly_earnings: 1,500 tokens
-      
+
   natural_incentives:
     - "No penalties for downtime"
     - "Earn only when serving"
@@ -233,7 +233,7 @@ storage_pricing:
 
 ### 1. Computational Overhead → Reactive Generation
 - Don't generate 10,000 parity chunks upfront
-- Start with 5x replication for immediate availability  
+- Start with 5x replication for immediate availability
 - Generate parity progressively based on actual demand
 - Maximum practical limit: 10+100 encoding
 
@@ -249,7 +249,7 @@ storage_pricing:
 - Reputation system blacklists bad actors
 - No complex proofs needed
 
-### 4. Coordination → Self-Organization  
+### 4. Coordination → Self-Organization
 - Public metrics + Individual decisions = Global coordination
 - Natural time desynchronization prevents thundering herd
 - Beneficial overshoot for viral content
@@ -289,15 +289,15 @@ performance_targets:
     baseline: "30% overhead"
     cold_files: "10% overhead"
     viral_files: "Variable based on demand"
-    
+
   availability:
     normal_content: "99.9%"
     viral_content: "99.99%"
-    
+
   scalability:
     max_nodes_per_file: "100,000+"
     max_concurrent_users: "1,000,000+"
-    
+
   economics:
     storage_cost_reduction: "50% vs traditional"
     node_earnings_increase: "10x for viral content"

@@ -86,21 +86,21 @@ repos:
         language: system
         types: [go]
         pass_filenames: false
-      
+
       - id: go-mod-verify
         name: Go Mod Verify
         entry: go mod verify
         language: system
         types: [go]
         pass_filenames: false
-      
+
       - id: go-security
         name: Go Security Check
         entry: gosec -conf .gosec.toml -quiet ./...
         language: system
         types: [go]
         pass_filenames: false
-      
+
       - id: go-licenses
         name: Check Go Licenses
         entry: bash -c 'command -v go-licenses >/dev/null && go-licenses check ./... || echo "Skipping: go-licenses not installed"'

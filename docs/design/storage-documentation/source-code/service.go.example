@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 	"time"
-	
+
 	"github.com/blackholenetwork/blackhole/pkg/core"
 )
 
@@ -21,47 +21,47 @@ type ChunkID = ChunkCID  // Alias for transition
 // Service defines the interface for the storage service (CID-based)
 type Service interface {
 	core.Service
-	
+
 	// Pure content operations (no metadata required)
 	Store(ctx context.Context, reader io.Reader) (ContentCID, error)
 	Retrieve(ctx context.Context, cid ContentCID) (io.ReadCloser, error)
 	Delete(ctx context.Context, cid ContentCID) error
 	HasContent(ctx context.Context, cid ContentCID) bool
 	GetContentInfo(ctx context.Context, cid ContentCID) (ContentInfo, error)
-	
+
 	// Chunk operations (content-based)
 	StoreChunk(ctx context.Context, chunk *ContentBasedChunk) error
 	RetrieveChunk(ctx context.Context, chunkCID ChunkCID) (*ContentBasedChunk, error)
 	HasChunk(ctx context.Context, chunkCID ChunkCID) bool
 	ListChunks(ctx context.Context) ([]ChunkCID, error)
-	
+
 	// Erasure coding operations
 	EncodeBlock(ctx context.Context, chunks [][]byte) (*EncodedBlock, error)
 	DecodeBlock(ctx context.Context, block *EncodedBlock) ([][]byte, error)
-	
+
 	// Parity operations (CID-based)
 	GenerateParity(ctx context.Context, cid ContentCID, count int) ([]ChunkCID, error)
 	GetParityLevel(ctx context.Context, cid ContentCID) (ParityInfo, error)
-	
+
 	// Storage management
 	GetStorageStats() StorageStats
 	GetAvailableSpace() uint64
 	SetStorageLimit(limit uint64) error
-	
+
 	// Demand monitoring (CID-based)
 	RecordAccess(ctx context.Context, cid ContentCID, chunkCID ChunkCID)
 	GetDemandMetrics(ctx context.Context, cid ContentCID) DemandMetrics
-	
+
 	// Virtual bucket system operations (CID-based)
 	GetChunkStorageLocation(chunkCID ChunkCID) (StorageLocation, bool)
 	FindChunkNodes(chunkCID ChunkCID) ([]*NodeInfo, error)
 	ClaimMorePositions(ctx context.Context, count int, strategy string) ([]Position, error)
 	GetBucketSystemStats() BucketSystemStats
-	
+
 	// Virtual Filesystem operations
 	GetVFS() VirtualFilesystemInterface
 	GetPrivateVFS() PrivateVFSInterface
-	
+
 	// Low-level chunk operations for VFS
 	StoreChunkInBucket(bucketID int, chunkID string, data []byte) error
 	RetrieveChunkFromBucket(bucketID int, chunkID string) ([]byte, error)
@@ -74,11 +74,11 @@ type VirtualFilesystemInterface interface {
 	ReadFile(ctx context.Context, path string) ([]byte, error)
 	ListDir(ctx context.Context, path string) ([]VFSFileInfo, error)
 	Delete(ctx context.Context, path string) error
-	
+
 	// File information
 	Exists(ctx context.Context, path string) bool
 	Stat(ctx context.Context, path string) (*VFSFileInfo, error)
-	
+
 	// Lifecycle
 	Start(ctx context.Context) error
 	Stop(ctx context.Context) error
@@ -87,35 +87,35 @@ type VirtualFilesystemInterface interface {
 // PrivateVFSInterface defines the interface for privacy-focused filesystem operations
 type PrivateVFSInterface interface {
 	VirtualFilesystemInterface
-	
+
 	// Namespace management
 	GenerateUserSecret() (string, error)
 	LoadUserSecret(secret string) error
 	GetUserBase() string
 	InitializeUserSpace(ctx context.Context) error
-	
+
 	// Privacy-aware operations
 	WriteFileToNamespace(ctx context.Context, path string, data []byte, metadata map[string]string) error
 	ReadFileFromNamespace(ctx context.Context, path string) ([]byte, error)
 	ListDirectoryInNamespace(ctx context.Context, path string) ([]VFSFileInfo, error)
-	
+
 	// Sharing and permissions
 	SharePath(ctx context.Context, path string, targetDID string, permission string) error
 	AddSharedNamespace(ownerDID string, basePath string) error
-	
+
 	// Namespace utilities
 	GetUserPrivatePath(relativePath string) string
 	CreateNamespace(ctx context.Context, entityDID string, entitySecret string, namespaceType string) (string, error)
 	DiscoverPublicContent(ctx context.Context, contentType string) ([]VFSFileInfo, error)
-	
+
 	// Security
 	ValidateNamespaceAccess(ctx context.Context, path string, operation string) error
 	ComputeNamespaceFromSecret(did string, secret string) string
-	
+
 	// Directory management
 	CreateDirectoryExplicit(ctx context.Context, dirPath string, recursive bool) error
 	GetDirectoryCreationStats(ctx context.Context, basePath string) (DirectoryStats, error)
-	
+
 	// Recursive deletion
 	GetDeletionPlan(ctx context.Context, path string, options DeletionOptions) (*DeletionPlan, error)
 	ExecuteDeletionPlan(ctx context.Context, plan *DeletionPlan, confirmationCode string, options DeletionOptions) (*DeletionResult, error)
@@ -169,14 +169,14 @@ type ErasureConfig struct {
 	// Baseline configuration
 	BaselineDataShards   int // k = 10
 	BaselineParityShards int // m = 3
-	
+
 	// Adaptive thresholds
 	LowDemandParity    int // 3 parity shards
 	MediumDemandParity int // 10 parity shards
 	HighDemandParity   int // 50 parity shards
 	ViralDemandParity  int // 100 parity shards
 	MaxParityShards    int // 100 (computational limit)
-	
+
 	// Demand thresholds
 	MediumDemandThreshold float64 // Access rate for medium
 	HighDemandThreshold   float64 // Access rate for high
@@ -188,11 +188,11 @@ type ReactiveConfig struct {
 	// Decision loop intervals
 	MinCheckInterval int // 30 seconds
 	MaxCheckInterval int // 90 seconds
-	
+
 	// Contribution limits
 	MaxContributionPerNode int // 5 parity chunks per decision
 	MinDeficitToGenerate   int // Don't generate if deficit < 2
-	
+
 	// Demand triggers
 	TrendThreshold       float64 // 50% increase triggers generation
 	GeographicThreshold  int     // 100 requests from new region

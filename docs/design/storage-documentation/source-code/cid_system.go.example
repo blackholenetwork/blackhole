@@ -15,7 +15,7 @@ import (
 // ContentCID represents a content-based identifier (IPFS-style)
 type ContentCID string
 
-// ChunkCID represents a content-based chunk identifier  
+// ChunkCID represents a content-based chunk identifier
 type ChunkCID string
 
 // ContentInfo contains minimal derivable information about content
@@ -55,17 +55,17 @@ func NewCIDSystem() *CIDSystem {
 func (cs *CIDSystem) GenerateFileCID(content []byte) ContentCID {
 	// Create SHA256 hash
 	hash := sha256.Sum256(content)
-	
+
 	// Create multihash with full 32-byte hash
 	mhash, err := multihash.Encode(hash[:], multihash.SHA2_256)
 	if err != nil {
 		// Fallback to simplified format if multihash fails
 		return ContentCID("bafybei" + hex.EncodeToString(hash[:16]))
 	}
-	
+
 	// Create CID v1 with Raw codec (0x55) for file content
 	c := cid.NewCidV1(cid.Raw, mhash)
-	
+
 	return ContentCID(c.String())
 }
 
@@ -76,7 +76,7 @@ func (cs *CIDSystem) GenerateFileCIDFromReader(reader io.Reader) (ContentCID, []
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to read content: %w", err)
 	}
-	
+
 	cid := cs.GenerateFileCID(content)
 	return cid, content, nil
 }
@@ -85,17 +85,17 @@ func (cs *CIDSystem) GenerateFileCIDFromReader(reader io.Reader) (ContentCID, []
 func (cs *CIDSystem) GenerateChunkCID(chunkContent []byte) ChunkCID {
 	// Create SHA256 hash
 	hash := sha256.Sum256(chunkContent)
-	
+
 	// Create multihash with full 32-byte hash
 	mhash, err := multihash.Encode(hash[:], multihash.SHA2_256)
 	if err != nil {
 		// Fallback to simplified format if multihash fails
 		return ChunkCID(hex.EncodeToString(hash[:16]))
 	}
-	
+
 	// Create CID v1 with Raw codec for chunk content
 	c := cid.NewCidV1(cid.Raw, mhash)
-	
+
 	return ChunkCID(c.String())
 }
 
@@ -104,7 +104,7 @@ func (cs *CIDSystem) CalculateFileProperties(content []byte) FileProperties {
 	size := uint64(len(content))
 	chunkCount := int(math.Ceil(float64(size) / float64(cs.chunkSize)))
 	blockCount := int(math.Ceil(float64(chunkCount) / float64(cs.blockSize)))
-	
+
 	return FileProperties{
 		Size:       size,
 		ChunkCount: chunkCount,
@@ -115,32 +115,32 @@ func (cs *CIDSystem) CalculateFileProperties(content []byte) FileProperties {
 // CalculateChunkCIDs deterministically generates all chunk CIDs for a file
 func (cs *CIDSystem) CalculateChunkCIDs(content []byte) []ChunkCID {
 	var chunkCIDs []ChunkCID
-	
+
 	for i := 0; i < len(content); i += cs.chunkSize {
 		end := i + cs.chunkSize
 		if end > len(content) {
 			end = len(content)
 		}
-		
+
 		chunkData := content[i:end]
 		chunkCID := cs.GenerateChunkCID(chunkData)
 		chunkCIDs = append(chunkCIDs, chunkCID)
 	}
-	
+
 	return chunkCIDs
 }
 
 // CalculateParityChunkCIDs generates parity chunk CIDs for a block
 func (cs *CIDSystem) CalculateParityChunkCIDs(dataChunks [][]byte, parityData [][]byte) []ChunkCID {
 	var parityCIDs []ChunkCID
-	
+
 	for _, parity := range parityData {
 		if parity != nil { // Skip nil parity chunks
 			parityCID := cs.GenerateChunkCID(parity)
 			parityCIDs = append(parityCIDs, parityCID)
 		}
 	}
-	
+
 	return parityCIDs
 }
 
@@ -162,7 +162,7 @@ type ChunkInfo struct {
 // CalculateChunkInfo derives chunk information from its index and file properties
 func (cs *CIDSystem) CalculateChunkInfo(chunkIndex int, fileProps FileProperties) ChunkInfo {
 	blockIndex := chunkIndex / cs.blockSize
-	
+
 	return ChunkInfo{
 		Index:      chunkIndex,
 		BlockIndex: blockIndex,
@@ -174,27 +174,27 @@ func (cs *CIDSystem) CalculateChunkInfo(chunkIndex int, fileProps FileProperties
 func (cs *CIDSystem) ReconstructFileFromChunks(chunks map[ChunkCID][]byte, expectedCID ContentCID) ([]byte, error) {
 	// Sort chunks by their content to determine order
 	// This is where the deterministic reconstruction happens
-	
+
 	var orderedChunks [][]byte
 	var totalSize int
-	
+
 	// Calculate expected order based on content
 	for _, chunkData := range chunks {
 		orderedChunks = append(orderedChunks, chunkData)
 		totalSize += len(chunkData)
 	}
-	
+
 	// Reconstruct file
 	reconstructed := make([]byte, 0, totalSize)
 	for _, chunk := range orderedChunks {
 		reconstructed = append(reconstructed, chunk...)
 	}
-	
+
 	// Verify CID matches
 	if cs.GenerateFileCID(reconstructed) != expectedCID {
 		return nil, fmt.Errorf("reconstructed file CID mismatch: content corrupted")
 	}
-	
+
 	return reconstructed, nil
 }
 
@@ -207,10 +207,10 @@ func (cs *CIDSystem) IsValidCID(cidStr ContentCID) bool {
 // DeriveStorageLocations calculates deterministic storage positions for chunk CIDs
 func (cs *CIDSystem) DeriveStorageLocations(chunkCID ChunkCID) StorageLocation {
 	chunkStr := string(chunkCID)
-	
+
 	return StorageLocation{
 		Primary:   cs.hashToPosition(chunkStr + "primary"),
-		Secondary: cs.hashToPosition(chunkStr + "secondary"), 
+		Secondary: cs.hashToPosition(chunkStr + "secondary"),
 		Tertiary:  cs.hashToPosition(chunkStr + "tertiary"),
 	}
 }
@@ -218,18 +218,18 @@ func (cs *CIDSystem) DeriveStorageLocations(chunkCID ChunkCID) StorageLocation {
 // hashToPosition converts a string to a deterministic position (same as bucket system)
 func (cs *CIDSystem) hashToPosition(input string) Position {
 	hash := sha256.Sum256([]byte(input))
-	
+
 	// Use first 8 bytes for global position
 	globalPos := uint64(0)
 	for i := 0; i < 8; i++ {
 		globalPos = (globalPos << 8) | uint64(hash[i])
 	}
 	globalPos = globalPos % TotalPositions
-	
+
 	// Calculate bucket and position within bucket
 	bucket := BucketID(globalPos / PositionsPerBucket)
 	position := PositionID(globalPos % PositionsPerBucket)
-	
+
 	return Position{
 		Bucket:   bucket,
 		Position: position,
@@ -253,7 +253,7 @@ func StringToCID(key string) (ContentCID, error) {
 	if err != nil {
 		return "", fmt.Errorf("invalid CID format: %s - %w", key, err)
 	}
-	
+
 	return ContentCID(key), nil
 }
 
@@ -295,10 +295,10 @@ func CIDFromHash(hash []byte, codec uint64) (ContentCID, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to create multihash: %w", err)
 	}
-	
+
 	// Create CID v1
 	c := cid.NewCidV1(codec, mhash)
-	
+
 	return ContentCID(c.String()), nil
 }
 
@@ -308,12 +308,12 @@ func ExtractHashFromCID(cidVal ContentCID) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid CID: %w", err)
 	}
-	
+
 	// Decode the multihash to get the raw hash
 	dmh, err := multihash.Decode(c.Hash())
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode multihash: %w", err)
 	}
-	
+
 	return dmh.Digest, nil
 }

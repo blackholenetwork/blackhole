@@ -82,7 +82,7 @@ Layer 5: Economic
 - **Timeline**: Weeks 3-10
 - **Components**: P2P → Storage VFS → Bandwidth
 
-### Track B: Data Processing Pipeline  
+### Track B: Data Processing Pipeline
 - **Developers**: 1 engineer
 - **Timeline**: Weeks 11-15
 - **Components**: Schema → Indexer → Query → ML
@@ -163,7 +163,7 @@ Layer 5: Economic
 - Risk: Delayed project setup
 - Mitigation: Pre-work on tooling
 
-### July  
+### July
 - Risk: P2P complexity underestimated
 - Mitigation: Early spike, libp2p experts
 

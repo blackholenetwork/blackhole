@@ -65,7 +65,7 @@ func (s *server) handleSubscriberDashboard(c *fiber.Ctx) error {
 	dashboard := &SubscriberDashboard{
 		UserID:   userDID,
 		UserType: "subscriber",
-		
+
 		// Subscription Information
 		SubscriptionTier:     string(subscription.Tier),
 		MonthlyAmount:        subscription.MonthlyAmount,
@@ -74,7 +74,7 @@ func (s *server) handleSubscriberDashboard(c *fiber.Ctx) error {
 		RevenuePerSecond:     currentRevenueRate,
 		TotalSecondsActive:   0,
 		TotalAmountGenerated: 0,
-		
+
 		// Current Usage (placeholder - would integrate with actual usage tracking)
 		CurrentUsage: &SubscriberUsageStats{
 			StorageUsed:         0, // TODO: Integrate with storage service
@@ -86,7 +86,7 @@ func (s *server) handleSubscriberDashboard(c *fiber.Ctx) error {
 			MonthlyContentViews: 0,
 			MonthlyAppSessions:  0,
 		},
-		
+
 		// Revenue Distribution Breakdown
 		DistributionBreakdown: &RevenueDistribution{
 			ContentCreators:         70.0,
@@ -101,10 +101,10 @@ func (s *server) handleSubscriberDashboard(c *fiber.Ctx) error {
 				InfrastructureProviders: subscription.MonthlyAmount * 0.25,
 			},
 		},
-		
+
 		// Network Stats
 		NetworkStats: s.buildNetworkOverview(incentiveService),
-		
+
 		LastUpdated: time.Now(),
 	}
 
@@ -157,7 +157,7 @@ func (s *server) handleContentCreatorDashboard(c *fiber.Ctx) error {
 
 	// Get recent distribution history
 	distributionHistory := incentiveService.GetContentDistributionHistory(10)
-	
+
 	// Build recent distributions summary
 	var recentDistributions []*ContentDistributionSummary
 	for _, dist := range distributionHistory {
@@ -177,7 +177,7 @@ func (s *server) handleContentCreatorDashboard(c *fiber.Ctx) error {
 	dashboard := &ContentCreatorDashboard{
 		CreatorID: creatorDID,
 		UserType:  "content_creator",
-		
+
 		// Current Engagement
 		CurrentEngagement: &ContentEngagementStats{
 			VideoWatchTime:       0,
@@ -188,7 +188,7 @@ func (s *server) handleContentCreatorDashboard(c *fiber.Ctx) error {
 			QualityMultiplier:    1.0,
 			IsActive:            false,
 		},
-		
+
 		// Reward Stats
 		RewardStats: &ContentRewardStats{
 			AccumulatedRewards:     totalRewards,
@@ -198,7 +198,7 @@ func (s *server) handleContentCreatorDashboard(c *fiber.Ctx) error {
 			CurrentPoolShare:       s.calculatePoolShare(creatorDID, contentStats.TotalEngagementValue),
 			AverageRewardPerSecond: s.calculateAverageRewardPerSecond(recentDistributions),
 		},
-		
+
 		// Content Performance (placeholder)
 		ContentPerformance: &ContentPerformanceStats{
 			TotalContentPieces:    0, // TODO: Integrate with content service
@@ -208,7 +208,7 @@ func (s *server) handleContentCreatorDashboard(c *fiber.Ctx) error {
 			TotalViews:            0,
 			QualityScore:          1.0,
 		},
-		
+
 		RecentDistributions: recentDistributions,
 		LastUpdated:         time.Now(),
 	}
@@ -272,7 +272,7 @@ func (s *server) handleAppDeveloperDashboard(c *fiber.Ctx) error {
 
 	// Get recent distribution history
 	distributionHistory := incentiveService.GetAppDeveloperDistributionHistory(10)
-	
+
 	// Build recent distributions summary
 	var recentDistributions []*AppDeveloperDistributionSummary
 	for _, dist := range distributionHistory {
@@ -292,7 +292,7 @@ func (s *server) handleAppDeveloperDashboard(c *fiber.Ctx) error {
 	dashboard := &AppDeveloperDashboard{
 		DeveloperID: developerDID,
 		UserType:    "app_developer",
-		
+
 		// Current Usage
 		CurrentUsage: &AppUsageStats{
 			ActiveUserTime:    0,
@@ -302,7 +302,7 @@ func (s *server) handleAppDeveloperDashboard(c *fiber.Ctx) error {
 			TotalUsageValue:   0,
 			IsActive:          false,
 		},
-		
+
 		// Reward Stats
 		RewardStats: &AppDeveloperRewardStats{
 			AccumulatedRewards:     totalRewards,
@@ -312,7 +312,7 @@ func (s *server) handleAppDeveloperDashboard(c *fiber.Ctx) error {
 			CurrentPoolShare:       s.calculateAppPoolShare(developerDID, appDevStats.TotalUsageValue),
 			AverageRewardPerSecond: s.calculateAverageAppRewardPerSecond(recentDistributions),
 		},
-		
+
 		// App Performance
 		AppPerformance: &AppPerformanceStats{
 			TotalApps:          s.countDeveloperApps(developerDID, activeApps),
@@ -323,7 +323,7 @@ func (s *server) handleAppDeveloperDashboard(c *fiber.Ctx) error {
 			AverageRating:      4.0,
 			AverageRetention:   0.8,
 		},
-		
+
 		RecentDistributions: recentDistributions,
 		LastUpdated:         time.Now(),
 	}
@@ -382,7 +382,7 @@ func (s *server) handleProviderDashboard(c *fiber.Ctx) error {
 
 	// Get recent distribution history
 	distributionHistory := incentiveService.GetDistributionHistory(10)
-	
+
 	// Build recent distributions summary
 	var recentDistributions []*ProviderDistributionSummary
 	for _, dist := range distributionHistory {
@@ -402,7 +402,7 @@ func (s *server) handleProviderDashboard(c *fiber.Ctx) error {
 	dashboard := &ProviderDashboard{
 		ProviderID: providerDID,
 		UserType:   "provider",
-		
+
 		// Current Usage
 		CurrentUsage: &ProviderUsageStats{
 			StorageGBHours:       0,
@@ -413,7 +413,7 @@ func (s *server) handleProviderDashboard(c *fiber.Ctx) error {
 			MarketValuePerSecond: 0,
 			IsActive:             false,
 		},
-		
+
 		// Reward Stats
 		RewardStats: &ProviderRewardStats{
 			AccumulatedRewards:     totalRewards,
@@ -423,7 +423,7 @@ func (s *server) handleProviderDashboard(c *fiber.Ctx) error {
 			CurrentPoolShare:       s.calculateProviderPoolShare(providerDID, infraStats.TotalMarketValuePerSecond),
 			AverageRewardPerSecond: s.calculateAverageProviderRewardPerSecond(recentDistributions),
 		},
-		
+
 		// Resource Performance (placeholder)
 		ResourcePerformance: &ResourcePerformanceStats{
 			TotalStorageProvided:   0, // TODO: Integrate with storage service
@@ -433,7 +433,7 @@ func (s *server) handleProviderDashboard(c *fiber.Ctx) error {
 			TotalOperations:        0,
 			SuccessRate:            99.8,
 		},
-		
+
 		RecentDistributions: recentDistributions,
 		LastUpdated:         time.Now(),
 	}
@@ -474,7 +474,7 @@ func (s *server) handleFreeUserDashboard(c *fiber.Ctx) error {
 	dashboard := &FreeUserDashboard{
 		UserID:   userDID,
 		UserType: "free_user",
-		
+
 		// Current Usage (placeholder - would integrate with actual usage tracking)
 		CurrentUsage: &FreeUserUsageStats{
 			StorageUsed:         0, // TODO: Integrate with storage service
@@ -486,7 +486,7 @@ func (s *server) handleFreeUserDashboard(c *fiber.Ctx) error {
 			MonthlyContentViews: 0,
 			MonthlyAppSessions:  0,
 		},
-		
+
 		// Quota Information
 		QuotaInformation: &QuotaInfo{
 			StorageQuota:         1024 * 1024 * 1024,     // 1GB
@@ -497,7 +497,7 @@ func (s *server) handleFreeUserDashboard(c *fiber.Ctx) error {
 			ComputeUsedPercent:   0,
 			ResetDate:            time.Now().AddDate(0, 1, 0), // Next month
 		},
-		
+
 		// Upgrade Options
 		UpgradeOptions: &UpgradeOptions{
 			AvailableTiers: []SubscriptionTierInfo{
@@ -529,7 +529,7 @@ func (s *server) handleFreeUserDashboard(c *fiber.Ctx) error {
 			RecommendedTier:  "Normal",
 			EstimatedSavings: 0,
 		},
-		
+
 		LastUpdated: time.Now(),
 	}
 
@@ -559,7 +559,7 @@ func (s *server) getIncentiveService() *incentive.Service {
 		//     return orchestrator.GetService("incentive").(*incentive.Service)
 		// }
 	}
-	
+
 	// TODO: For now, return nil to indicate service not available
 	// This should be properly injected during server initialization
 	s.logger.Debug().Msg("Incentive service not available - orchestrator integration needed")
@@ -590,7 +590,7 @@ func (s *server) buildNetworkOverview(incentiveService *incentive.Service) *Netw
 	// Get pool amounts
 	poolAmounts := incentiveService.GetPoolAmounts()
 	currentRevenueRate := incentiveService.GetCurrentRevenueRate()
-	
+
 	// Get statistics
 	contentStats := incentiveService.GetRealTimeContentStats()
 	appDevStats := incentiveService.GetRealTimeAppDeveloperStats()
@@ -866,7 +866,7 @@ func (s *server) handlePersonalDashboard(c *fiber.Ctx) error {
 
 	// Determine user type and redirect to appropriate dashboard
 	userType := s.determineUserType(userDID)
-	
+
 	switch userType {
 	case "subscriber":
 		// Set the DID parameter and call subscriber dashboard

@@ -121,7 +121,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      
+
       - name: Link Commits to Project
         uses: actions/github-script@v7
         with:
@@ -129,14 +129,14 @@ jobs:
           script: |
             const commits = context.payload.commits;
             const projectId = 'PVT_kwDOBqH4Zc4AK5Xj';
-            
+
             for (const commit of commits) {
               // Extract issue numbers from commit message
               const issueMatches = commit.message.matchAll(/#(\d+)/g);
-              
+
               for (const match of issueMatches) {
                 const issueNumber = match[1];
-                
+
                 try {
                   // Get issue node ID
                   const issue = await github.rest.issues.get({
@@ -144,7 +144,7 @@ jobs:
                     repo: context.repo.repo,
                     issue_number: issueNumber
                   });
-                  
+
                   // Add to project if not already there
                   await github.graphql(`
                     mutation($project: ID!, $item: ID!) {
@@ -159,7 +159,7 @@ jobs:
                     project: projectId,
                     item: issue.data.node_id
                   });
-                  
+
                   console.log(`Linked issue #${issueNumber} to project`);
                 } catch (error) {
                   console.log(`Could not link issue #${issueNumber}: ${error.message}`);
@@ -195,10 +195,10 @@ git cz
   run: |
     # Get commit message
     MSG=$(git log -1 --pretty=%B)
-    
+
     # Extract issue number from footer
     ISSUE=$(echo "$MSG" | grep -E "(Closes|Fixes|Resolves) #[0-9]+" | grep -oE "#[0-9]+" | tr -d '#')
-    
+
     if [ ! -z "$ISSUE" ]; then
       gh api graphql -f query='
         mutation($project: ID!, $issue: Int!) {
@@ -268,12 +268,12 @@ jobs:
         with:
           script: |
             const project_id = 'PVT_kwDOBqH4Zc4AK5Xj';
-            
+
             // Move to "In Progress" when assigned
             if (context.payload.action === 'assigned') {
               // Update project item status
             }
-            
+
             // Move to "Review" when PR review requested
             if (context.payload.action === 'review_requested') {
               // Update project item status
@@ -412,13 +412,13 @@ PROJECT_ID="PVT_kwDOBqH4Zc4AK5Xj"
 git log --pretty=format:"%H %s" | grep -E "#[0-9]+" | while read commit; do
   hash=$(echo $commit | awk '{print $1}')
   message=$(echo $commit | cut -d' ' -f2-)
-  
+
   # Extract issue numbers
   issues=$(echo $message | grep -oE "#[0-9]+" | tr -d '#')
-  
+
   for issue in $issues; do
     echo "Linking commit $hash to issue #$issue"
-    
+
     gh api graphql -f query='
       mutation($project: ID!, $issue: Int!, $org: String!, $repo: String!) {
         addProjectV2ItemById(input: {

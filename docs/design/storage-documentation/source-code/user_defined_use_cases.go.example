@@ -16,7 +16,7 @@ type CreateUserDefinedUseCaseRequest struct {
 	Description              string   `json:"description"`                // Description of the use case
 	AppIdentifier           string   `json:"app_identifier"`             // App/service identifier
 	CreatorDID              string   `json:"creator_did"`                // Developer/creator DID
-	
+
 	// Policy configuration
 	RequireSchemaForAllFiles bool     `json:"require_schema_for_all_files"`
 	RequiredContentTypes     []string `json:"required_content_types"`
@@ -25,11 +25,11 @@ type CreateUserDefinedUseCaseRequest struct {
 	MinCompletenessScore     float64  `json:"min_completeness_score"`
 	AutoClassification       bool     `json:"auto_classification"`
 	RecommendedSchemas      []string `json:"recommended_schemas"`
-	
+
 	// Inheritance (optional)
 	BasedOnStandardUseCase  string   `json:"based_on_standard_use_case,omitempty"`  // Inherit from standard use case
 	AllowedOverrides        []string `json:"allowed_overrides,omitempty"`           // Which fields can be customized
-	
+
 	// App-specific configuration
 	CustomFields            map[string]interface{} `json:"custom_fields,omitempty"`     // App-specific metadata
 }
@@ -40,11 +40,11 @@ type CreateUserDefinedUseCaseResponse struct {
 	Status          string    `json:"status"`             // "active", "pending_approval", "rejected"
 	NetworkApproved bool      `json:"network_approved"`   // Whether approved by network
 	CreatedAt       time.Time `json:"created_at"`         // Creation timestamp
-	
+
 	// Validation results
 	ValidationWarnings []string `json:"validation_warnings,omitempty"` // Non-blocking warnings
 	ValidationErrors   []string `json:"validation_errors,omitempty"`   // Blocking errors
-	
+
 	// Auto-approval information
 	AutoApproved          bool   `json:"auto_approved"`           // Whether it was auto-approved
 	AutoApprovalReason    string `json:"auto_approval_reason,omitempty"` // Why it was auto-approved
@@ -55,7 +55,7 @@ type CreateUserDefinedUseCaseResponse struct {
 type UpdateUserDefinedUseCaseRequest struct {
 	UseCaseID               string                 `json:"use_case_id"`                // Use case to update
 	UpdaterDID              string                 `json:"updater_did"`                // Who is making the update
-	
+
 	// Fields that can be updated
 	Name                    *string                `json:"name,omitempty"`
 	Description             *string                `json:"description,omitempty"`
@@ -67,7 +67,7 @@ type UpdateUserDefinedUseCaseRequest struct {
 	AutoClassification      *bool                 `json:"auto_classification,omitempty"`
 	RecommendedSchemas     []string              `json:"recommended_schemas,omitempty"`
 	CustomFields           map[string]interface{} `json:"custom_fields,omitempty"`
-	
+
 	// Status changes
 	IsActive                *bool                 `json:"is_active,omitempty"`        // Activate/deactivate
 }
@@ -79,33 +79,33 @@ func (nsis *NetworkSchemaIntegratedService) CreateUserDefinedUseCase(ctx context
 		Str("app_id", req.AppIdentifier).
 		Str("name", req.Name).
 		Msg("Creating user-defined use case")
-	
+
 	// Step 1: Validate the request
 	if err := nsis.validateCreateUseCaseRequest(req); err != nil {
 		return nil, fmt.Errorf("validation failed: %w", err)
 	}
-	
+
 	// Ensure policy is loaded before proceeding
 	nsis.ensurePolicyLoaded()
-	
+
 	// Step 2: Check network policy allows user-defined use cases
 	nsis.policyMutex.RLock()
 	if !nsis.networkPolicy.NetworkDefaults.AllowUserDefinedUseCases {
 		nsis.policyMutex.RUnlock()
 		return nil, fmt.Errorf("user-defined use cases are disabled by network policy")
 	}
-	
+
 	config := nsis.networkPolicy.UserUseCaseConfig
 	nsis.policyMutex.RUnlock()
-	
+
 	// Step 3: Check app limits
 	if err := nsis.checkAppUseCaseLimits(req.AppIdentifier, config); err != nil {
 		return nil, fmt.Errorf("app limits exceeded: %w", err)
 	}
-	
+
 	// Step 4: Generate unique use case ID
 	useCaseID := nsis.generateUseCaseID(req.AppIdentifier, req.Name)
-	
+
 	// Step 5: Create the use case object
 	userUseCase := &UserDefinedUseCase{
 		SchemaPolicy: SchemaPolicy{
@@ -121,7 +121,7 @@ func (nsis *NetworkSchemaIntegratedService) CreateUserDefinedUseCase(ctx context
 			IsStandardUseCase:       false,
 			EnforcementLevel:        nsis.determineEnforcementLevel(req),
 		},
-		
+
 		CreatorDID:             req.CreatorDID,
 		CreatedAt:              time.Now(),
 		LastModified:           time.Now(),
@@ -133,14 +133,14 @@ func (nsis *NetworkSchemaIntegratedService) CreateUserDefinedUseCase(ctx context
 		UsageCount:             0,
 		NetworkApproved:        false, // Will be determined by auto-approval
 	}
-	
+
 	// Step 6: Apply inheritance from standard use case if specified
 	if req.BasedOnStandardUseCase != "" {
 		if err := nsis.applyInheritance(userUseCase, req.BasedOnStandardUseCase, req.AllowedOverrides); err != nil {
 			return nil, fmt.Errorf("inheritance failed: %w", err)
 		}
 	}
-	
+
 	// Step 7: Validate against network constraints
 	warnings, errors := nsis.validateAgainstNetworkConstraints(userUseCase, config)
 	if len(errors) > 0 {
@@ -153,32 +153,32 @@ func (nsis *NetworkSchemaIntegratedService) CreateUserDefinedUseCase(ctx context
 			ValidationWarnings: warnings,
 		}, nil
 	}
-	
+
 	// Step 8: Check for auto-approval
 	autoApproved, approvalReason := nsis.checkAutoApproval(userUseCase, config)
 	userUseCase.NetworkApproved = autoApproved
-	
+
 	status := "pending_approval"
 	if autoApproved {
 		status = "active"
 	}
-	
+
 	// Step 9: Save the use case
 	if err := nsis.saveUserDefinedUseCase(useCaseID, userUseCase); err != nil {
 		return nil, fmt.Errorf("failed to save use case: %w", err)
 	}
-	
+
 	// Step 10: Update cache
 	nsis.cacheMutex.Lock()
 	nsis.userUseCaseCache[useCaseID] = userUseCase
 	nsis.cacheMutex.Unlock()
-	
+
 	nsis.logger.Info().
 		Str("use_case_id", useCaseID).
 		Str("status", status).
 		Bool("auto_approved", autoApproved).
 		Msg("User-defined use case created")
-	
+
 	return &CreateUserDefinedUseCaseResponse{
 		UseCaseID:            useCaseID,
 		Status:               status,
@@ -197,28 +197,28 @@ func (nsis *NetworkSchemaIntegratedService) UpdateUserDefinedUseCase(ctx context
 		Str("use_case_id", req.UseCaseID).
 		Str("updater_did", req.UpdaterDID).
 		Msg("Updating user-defined use case")
-	
+
 	// Ensure policy is loaded before proceeding
 	nsis.ensurePolicyLoaded()
-	
+
 	// Step 1: Get existing use case
 	nsis.cacheMutex.RLock()
 	existingUseCase, exists := nsis.userUseCaseCache[req.UseCaseID]
 	nsis.cacheMutex.RUnlock()
-	
+
 	if !exists {
 		return fmt.Errorf("use case %s not found", req.UseCaseID)
 	}
-	
+
 	// Step 2: Check permissions
 	if existingUseCase.CreatorDID != req.UpdaterDID {
 		return fmt.Errorf("only the creator can update this use case")
 	}
-	
+
 	// Step 3: Create updated use case
 	updatedUseCase := *existingUseCase
 	updatedUseCase.LastModified = time.Now()
-	
+
 	// Apply updates
 	if req.Name != nil {
 		updatedUseCase.Name = *req.Name
@@ -253,17 +253,17 @@ func (nsis *NetworkSchemaIntegratedService) UpdateUserDefinedUseCase(ctx context
 	if req.IsActive != nil {
 		updatedUseCase.IsActive = *req.IsActive
 	}
-	
+
 	// Step 4: Validate the updated use case
 	nsis.policyMutex.RLock()
 	config := nsis.networkPolicy.UserUseCaseConfig
 	nsis.policyMutex.RUnlock()
-	
+
 	warnings, errors := nsis.validateAgainstNetworkConstraints(&updatedUseCase, config)
 	if len(errors) > 0 {
 		return fmt.Errorf("validation failed: %v", errors)
 	}
-	
+
 	// Step 5: Check if re-approval is needed
 	needsReapproval := nsis.changesRequireReapproval(existingUseCase, &updatedUseCase, config)
 	if needsReapproval {
@@ -272,23 +272,23 @@ func (nsis *NetworkSchemaIntegratedService) UpdateUserDefinedUseCase(ctx context
 			Str("use_case_id", req.UseCaseID).
 			Msg("Changes require network re-approval")
 	}
-	
+
 	// Step 6: Save updated use case
 	if err := nsis.saveUserDefinedUseCase(req.UseCaseID, &updatedUseCase); err != nil {
 		return fmt.Errorf("failed to save updated use case: %w", err)
 	}
-	
+
 	// Step 7: Update cache
 	nsis.cacheMutex.Lock()
 	nsis.userUseCaseCache[req.UseCaseID] = &updatedUseCase
 	nsis.cacheMutex.Unlock()
-	
+
 	nsis.logger.Info().
 		Str("use_case_id", req.UseCaseID).
 		Bool("needs_reapproval", needsReapproval).
 		Int("warnings", len(warnings)).
 		Msg("User-defined use case updated")
-	
+
 	return nil
 }
 
@@ -298,36 +298,36 @@ func (nsis *NetworkSchemaIntegratedService) DeleteUserDefinedUseCase(ctx context
 		Str("use_case_id", useCaseID).
 		Str("requester_did", requesterDID).
 		Msg("Deleting user-defined use case")
-	
+
 	// Step 1: Get existing use case
 	nsis.cacheMutex.RLock()
 	existingUseCase, exists := nsis.userUseCaseCache[useCaseID]
 	nsis.cacheMutex.RUnlock()
-	
+
 	if !exists {
 		return fmt.Errorf("use case %s not found", useCaseID)
 	}
-	
+
 	// Step 2: Check permissions
 	if existingUseCase.CreatorDID != requesterDID {
 		return fmt.Errorf("only the creator can delete this use case")
 	}
-	
+
 	// Step 3: Remove from VFS
 	useCasePath := fmt.Sprintf("/system/schema/user_use_cases/%s.json", useCaseID)
 	if err := nsis.vfs.Delete(ctx, useCasePath); err != nil {
 		return fmt.Errorf("failed to delete use case from VFS: %w", err)
 	}
-	
+
 	// Step 4: Remove from cache
 	nsis.cacheMutex.Lock()
 	delete(nsis.userUseCaseCache, useCaseID)
 	nsis.cacheMutex.Unlock()
-	
+
 	nsis.logger.Info().
 		Str("use_case_id", useCaseID).
 		Msg("User-defined use case deleted")
-	
+
 	return nil
 }
 
@@ -335,9 +335,9 @@ func (nsis *NetworkSchemaIntegratedService) DeleteUserDefinedUseCase(ctx context
 func (nsis *NetworkSchemaIntegratedService) ListUserDefinedUseCases(ctx context.Context, appID, creatorDID string, activeOnly bool) (map[string]*UserDefinedUseCase, error) {
 	nsis.cacheMutex.RLock()
 	defer nsis.cacheMutex.RUnlock()
-	
+
 	result := make(map[string]*UserDefinedUseCase)
-	
+
 	for useCaseID, useCase := range nsis.userUseCaseCache {
 		// Apply filters
 		if appID != "" && useCase.AppIdentifier != appID {
@@ -349,12 +349,12 @@ func (nsis *NetworkSchemaIntegratedService) ListUserDefinedUseCases(ctx context.
 		if activeOnly && !useCase.IsActive {
 			continue
 		}
-		
+
 		// Create a copy to prevent external modifications
 		useCaseCopy := *useCase
 		result[useCaseID] = &useCaseCopy
 	}
-	
+
 	return result, nil
 }
 
@@ -371,12 +371,12 @@ func (nsis *NetworkSchemaIntegratedService) validateCreateUseCaseRequest(req *Cr
 	if req.CreatorDID == "" {
 		return fmt.Errorf("creator_did is required")
 	}
-	
+
 	// Validate name format
 	if !nsis.isValidUseCaseName(req.Name) {
 		return fmt.Errorf("invalid use case name format")
 	}
-	
+
 	// Validate quality scores
 	if req.MinQualityScore < 0 || req.MinQualityScore > 1 {
 		return fmt.Errorf("min_quality_score must be between 0 and 1")
@@ -384,7 +384,7 @@ func (nsis *NetworkSchemaIntegratedService) validateCreateUseCaseRequest(req *Cr
 	if req.MinCompletenessScore < 0 || req.MinCompletenessScore > 1 {
 		return fmt.Errorf("min_completeness_score must be between 0 and 1")
 	}
-	
+
 	return nil
 }
 
@@ -399,22 +399,22 @@ func (nsis *NetworkSchemaIntegratedService) checkAppUseCaseLimits(appID string, 
 	if config.MaxUserUseCasesPerApp <= 0 {
 		return nil // No limit
 	}
-	
+
 	// Count existing use cases for this app
 	nsis.cacheMutex.RLock()
 	defer nsis.cacheMutex.RUnlock()
-	
+
 	count := 0
 	for _, useCase := range nsis.userUseCaseCache {
 		if useCase.AppIdentifier == appID && useCase.IsActive {
 			count++
 		}
 	}
-	
+
 	if count >= config.MaxUserUseCasesPerApp {
 		return fmt.Errorf("app has reached maximum of %d user-defined use cases", config.MaxUserUseCasesPerApp)
 	}
-	
+
 	return nil
 }
 
@@ -438,21 +438,21 @@ func (nsis *NetworkSchemaIntegratedService) determineEnforcementLevel(req *Creat
 func (nsis *NetworkSchemaIntegratedService) applyInheritance(userUseCase *UserDefinedUseCase, baseUseCaseID string, allowedOverrides []string) error {
 	nsis.policyMutex.RLock()
 	defer nsis.policyMutex.RUnlock()
-	
+
 	baseUseCase, exists := nsis.networkPolicy.StandardUseCases[baseUseCaseID]
 	if !exists {
 		return fmt.Errorf("base use case %s not found", baseUseCaseID)
 	}
-	
+
 	// Start with base use case settings
 	basePolicy := baseUseCase
-	
+
 	// Override only allowed fields
 	allowedOverrideMap := make(map[string]bool)
 	for _, field := range allowedOverrides {
 		allowedOverrideMap[field] = true
 	}
-	
+
 	// Apply base settings, keeping user overrides for allowed fields
 	if !allowedOverrideMap["require_schema_for_all_files"] {
 		userUseCase.RequireSchemaForAllFiles = basePolicy.RequireSchemaForAllFiles
@@ -475,54 +475,54 @@ func (nsis *NetworkSchemaIntegratedService) applyInheritance(userUseCase *UserDe
 	if !allowedOverrideMap["recommended_schemas"] {
 		userUseCase.RecommendedSchemas = basePolicy.RecommendedSchemas
 	}
-	
+
 	return nil
 }
 
 func (nsis *NetworkSchemaIntegratedService) validateAgainstNetworkConstraints(userUseCase *UserDefinedUseCase, config UserUseCaseConfiguration) ([]string, []string) {
 	var warnings []string
 	var errors []string
-	
+
 	// Check minimum quality score limit
 	if userUseCase.MinQualityScore < config.MinQualityScoreLimit {
-		errors = append(errors, fmt.Sprintf("min_quality_score %.2f is below network limit %.2f", 
+		errors = append(errors, fmt.Sprintf("min_quality_score %.2f is below network limit %.2f",
 			userUseCase.MinQualityScore, config.MinQualityScoreLimit))
 	}
-	
+
 	// Check minimum completeness limit
 	if userUseCase.MinCompletenessScore < config.MinCompletenessLimit {
-		errors = append(errors, fmt.Sprintf("min_completeness_score %.2f is below network limit %.2f", 
+		errors = append(errors, fmt.Sprintf("min_completeness_score %.2f is below network limit %.2f",
 			userUseCase.MinCompletenessScore, config.MinCompletenessLimit))
 	}
-	
+
 	// Generate warnings for potentially problematic settings
 	if userUseCase.MinQualityScore < 0.3 {
 		warnings = append(warnings, "Quality score below 0.3 may result in poor content discovery")
 	}
-	
+
 	if !userUseCase.AllowUserMetadataOverride && userUseCase.BasedOnStandardUseCase != "" {
 		warnings = append(warnings, "Disabling user metadata override may conflict with inherited base use case")
 	}
-	
+
 	return warnings, errors
 }
 
 func (nsis *NetworkSchemaIntegratedService) checkAutoApproval(userUseCase *UserDefinedUseCase, config UserUseCaseConfiguration) (bool, string) {
 	criteria := config.AutoApprovalCriteria
-	
+
 	// Check auto-approval criteria
 	if criteria.BasedOnStandardUseCase && userUseCase.BasedOnStandardUseCase != "" {
 		return true, "inherits_from_standard_use_case"
 	}
-	
+
 	if criteria.MinQualityAboveLimit && userUseCase.MinQualityScore > config.MinQualityScoreLimit*2 {
 		return true, "quality_requirements_well_above_minimum"
 	}
-	
+
 	if criteria.OnlyStrictenRequirements && nsis.onlyStrictensRequirements(userUseCase) {
 		return true, "only_strengthens_requirements"
 	}
-	
+
 	return false, ""
 }
 
@@ -535,7 +535,7 @@ func (nsis *NetworkSchemaIntegratedService) onlyStrictensRequirements(userUseCas
 func (nsis *NetworkSchemaIntegratedService) changesRequireReapproval(existing, updated *UserDefinedUseCase, config UserUseCaseConfiguration) bool {
 	// Check if significant changes require re-approval
 	reviewRequired := config.ReviewRequired
-	
+
 	for _, field := range reviewRequired {
 		switch field {
 		case "min_quality_score_below_standard":
@@ -552,18 +552,18 @@ func (nsis *NetworkSchemaIntegratedService) changesRequireReapproval(existing, u
 			}
 		}
 	}
-	
+
 	return false
 }
 
 func (nsis *NetworkSchemaIntegratedService) saveUserDefinedUseCase(useCaseID string, useCase *UserDefinedUseCase) error {
 	useCasePath := fmt.Sprintf("/system/schema/user_use_cases/%s.json", useCaseID)
-	
+
 	data, err := json.MarshalIndent(useCase, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal use case: %w", err)
 	}
-	
+
 	metadata := map[string]string{
 		"content-type":   "application/json",
 		"use-case-id":    useCaseID,
@@ -574,10 +574,10 @@ func (nsis *NetworkSchemaIntegratedService) saveUserDefinedUseCase(useCaseID str
 		"is-active":      fmt.Sprintf("%t", useCase.IsActive),
 		"network-approved": fmt.Sprintf("%t", useCase.NetworkApproved),
 	}
-	
+
 	if err := nsis.vfs.WriteFile(context.Background(), useCasePath, data, metadata); err != nil {
 		return fmt.Errorf("failed to save use case to VFS: %w", err)
 	}
-	
+
 	return nil
 }

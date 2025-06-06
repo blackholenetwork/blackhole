@@ -40,33 +40,33 @@ func NewMemoryStorage() *MemoryStorage {
 func (ms *MemoryStorage) CreateSubscription(ctx context.Context, subscription *Subscription) error {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
-	
+
 	if _, exists := ms.subscriptions[subscription.ID]; exists {
 		return fmt.Errorf("subscription already exists: %s", subscription.ID)
 	}
-	
+
 	// Check for existing active subscription for user
 	if existingID, exists := ms.subscriptionsByUser[subscription.UserID]; exists {
 		if existing := ms.subscriptions[existingID]; existing != nil && existing.Status == SubscriptionActive {
 			return fmt.Errorf("user already has an active subscription")
 		}
 	}
-	
+
 	ms.subscriptions[subscription.ID] = subscription
 	ms.subscriptionsByUser[subscription.UserID] = subscription.ID
-	
+
 	return nil
 }
 
 func (ms *MemoryStorage) GetSubscription(ctx context.Context, id string) (*Subscription, error) {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
-	
+
 	subscription, exists := ms.subscriptions[id]
 	if !exists {
 		return nil, fmt.Errorf("subscription not found: %s", id)
 	}
-	
+
 	// Return a copy to prevent external modifications
 	return copySubscription(subscription), nil
 }
@@ -74,28 +74,28 @@ func (ms *MemoryStorage) GetSubscription(ctx context.Context, id string) (*Subsc
 func (ms *MemoryStorage) GetSubscriptionByUserID(ctx context.Context, userID string) (*Subscription, error) {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
-	
+
 	subscriptionID, exists := ms.subscriptionsByUser[userID]
 	if !exists {
 		return nil, fmt.Errorf("no subscription found for user: %s", userID)
 	}
-	
+
 	subscription, exists := ms.subscriptions[subscriptionID]
 	if !exists {
 		return nil, fmt.Errorf("subscription not found: %s", subscriptionID)
 	}
-	
+
 	return copySubscription(subscription), nil
 }
 
 func (ms *MemoryStorage) UpdateSubscription(ctx context.Context, subscription *Subscription) error {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
-	
+
 	if _, exists := ms.subscriptions[subscription.ID]; !exists {
 		return fmt.Errorf("subscription not found: %s", subscription.ID)
 	}
-	
+
 	ms.subscriptions[subscription.ID] = subscription
 	return nil
 }
@@ -103,35 +103,35 @@ func (ms *MemoryStorage) UpdateSubscription(ctx context.Context, subscription *S
 func (ms *MemoryStorage) DeleteSubscription(ctx context.Context, id string) error {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
-	
+
 	subscription, exists := ms.subscriptions[id]
 	if !exists {
 		return fmt.Errorf("subscription not found: %s", id)
 	}
-	
+
 	delete(ms.subscriptions, id)
 	delete(ms.subscriptionsByUser, subscription.UserID)
-	
+
 	return nil
 }
 
 func (ms *MemoryStorage) ListSubscriptions(ctx context.Context, filters SubscriptionFilters) ([]*Subscription, error) {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
-	
+
 	var result []*Subscription
-	
+
 	for _, subscription := range ms.subscriptions {
 		if ms.matchesSubscriptionFilters(subscription, filters) {
 			result = append(result, copySubscription(subscription))
 		}
 	}
-	
+
 	// Sort by creation date (newest first)
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].CreatedAt.After(result[j].CreatedAt)
 	})
-	
+
 	// Apply pagination
 	if filters.Offset > 0 {
 		if filters.Offset >= len(result) {
@@ -139,11 +139,11 @@ func (ms *MemoryStorage) ListSubscriptions(ctx context.Context, filters Subscrip
 		}
 		result = result[filters.Offset:]
 	}
-	
+
 	if filters.Limit > 0 && filters.Limit < len(result) {
 		result = result[:filters.Limit]
 	}
-	
+
 	return result, nil
 }
 
@@ -152,11 +152,11 @@ func (ms *MemoryStorage) ListSubscriptions(ctx context.Context, filters Subscrip
 func (ms *MemoryStorage) CreatePayment(ctx context.Context, payment *Payment) error {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
-	
+
 	if _, exists := ms.payments[payment.ID]; exists {
 		return fmt.Errorf("payment already exists: %s", payment.ID)
 	}
-	
+
 	ms.payments[payment.ID] = payment
 	return nil
 }
@@ -164,23 +164,23 @@ func (ms *MemoryStorage) CreatePayment(ctx context.Context, payment *Payment) er
 func (ms *MemoryStorage) GetPayment(ctx context.Context, id string) (*Payment, error) {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
-	
+
 	payment, exists := ms.payments[id]
 	if !exists {
 		return nil, fmt.Errorf("payment not found: %s", id)
 	}
-	
+
 	return copyPayment(payment), nil
 }
 
 func (ms *MemoryStorage) UpdatePayment(ctx context.Context, payment *Payment) error {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
-	
+
 	if _, exists := ms.payments[payment.ID]; !exists {
 		return fmt.Errorf("payment not found: %s", payment.ID)
 	}
-	
+
 	ms.payments[payment.ID] = payment
 	return nil
 }
@@ -188,20 +188,20 @@ func (ms *MemoryStorage) UpdatePayment(ctx context.Context, payment *Payment) er
 func (ms *MemoryStorage) ListPayments(ctx context.Context, filters PaymentFilters) ([]*Payment, error) {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
-	
+
 	var result []*Payment
-	
+
 	for _, payment := range ms.payments {
 		if ms.matchesPaymentFilters(payment, filters) {
 			result = append(result, copyPayment(payment))
 		}
 	}
-	
+
 	// Sort by creation date (newest first)
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].CreatedAt.After(result[j].CreatedAt)
 	})
-	
+
 	// Apply pagination
 	if filters.Offset > 0 {
 		if filters.Offset >= len(result) {
@@ -209,11 +209,11 @@ func (ms *MemoryStorage) ListPayments(ctx context.Context, filters PaymentFilter
 		}
 		result = result[filters.Offset:]
 	}
-	
+
 	if filters.Limit > 0 && filters.Limit < len(result) {
 		result = result[:filters.Limit]
 	}
-	
+
 	return result, nil
 }
 
@@ -222,53 +222,53 @@ func (ms *MemoryStorage) ListPayments(ctx context.Context, filters PaymentFilter
 func (ms *MemoryStorage) CreatePaymentMethod(ctx context.Context, method *PaymentMethod) error {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
-	
+
 	if _, exists := ms.paymentMethods[method.ID]; exists {
 		return fmt.Errorf("payment method already exists: %s", method.ID)
 	}
-	
+
 	ms.paymentMethods[method.ID] = method
 	ms.paymentMethodsByUser[method.UserID] = append(ms.paymentMethodsByUser[method.UserID], method.ID)
-	
+
 	return nil
 }
 
 func (ms *MemoryStorage) GetPaymentMethod(ctx context.Context, id string) (*PaymentMethod, error) {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
-	
+
 	method, exists := ms.paymentMethods[id]
 	if !exists {
 		return nil, fmt.Errorf("payment method not found: %s", id)
 	}
-	
+
 	return copyPaymentMethod(method), nil
 }
 
 func (ms *MemoryStorage) ListPaymentMethods(ctx context.Context, userID string) ([]*PaymentMethod, error) {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
-	
+
 	methodIDs := ms.paymentMethodsByUser[userID]
 	var result []*PaymentMethod
-	
+
 	for _, methodID := range methodIDs {
 		if method, exists := ms.paymentMethods[methodID]; exists {
 			result = append(result, copyPaymentMethod(method))
 		}
 	}
-	
+
 	return result, nil
 }
 
 func (ms *MemoryStorage) UpdatePaymentMethod(ctx context.Context, method *PaymentMethod) error {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
-	
+
 	if _, exists := ms.paymentMethods[method.ID]; !exists {
 		return fmt.Errorf("payment method not found: %s", method.ID)
 	}
-	
+
 	ms.paymentMethods[method.ID] = method
 	return nil
 }
@@ -276,14 +276,14 @@ func (ms *MemoryStorage) UpdatePaymentMethod(ctx context.Context, method *Paymen
 func (ms *MemoryStorage) DeletePaymentMethod(ctx context.Context, id string) error {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
-	
+
 	method, exists := ms.paymentMethods[id]
 	if !exists {
 		return fmt.Errorf("payment method not found: %s", id)
 	}
-	
+
 	delete(ms.paymentMethods, id)
-	
+
 	// Remove from user's list
 	methodIDs := ms.paymentMethodsByUser[method.UserID]
 	for i, methodID := range methodIDs {
@@ -292,7 +292,7 @@ func (ms *MemoryStorage) DeletePaymentMethod(ctx context.Context, id string) err
 			break
 		}
 	}
-	
+
 	return nil
 }
 
@@ -301,7 +301,7 @@ func (ms *MemoryStorage) DeletePaymentMethod(ctx context.Context, id string) err
 func (ms *MemoryStorage) CreateInvoice(ctx context.Context, invoice *Invoice) error {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
-	
+
 	ms.invoices[invoice.ID] = invoice
 	return nil
 }
@@ -309,34 +309,34 @@ func (ms *MemoryStorage) CreateInvoice(ctx context.Context, invoice *Invoice) er
 func (ms *MemoryStorage) GetInvoice(ctx context.Context, id string) (*Invoice, error) {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
-	
+
 	invoice, exists := ms.invoices[id]
 	if !exists {
 		return nil, fmt.Errorf("invoice not found: %s", id)
 	}
-	
+
 	return copyInvoice(invoice), nil
 }
 
 func (ms *MemoryStorage) ListInvoices(ctx context.Context, filters InvoiceFilters) ([]*Invoice, error) {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
-	
+
 	var result []*Invoice
-	
+
 	for _, invoice := range ms.invoices {
 		if ms.matchesInvoiceFilters(invoice, filters) {
 			result = append(result, copyInvoice(invoice))
 		}
 	}
-	
+
 	return result, nil
 }
 
 func (ms *MemoryStorage) UpdateInvoice(ctx context.Context, invoice *Invoice) error {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
-	
+
 	ms.invoices[invoice.ID] = invoice
 	return nil
 }
@@ -346,7 +346,7 @@ func (ms *MemoryStorage) UpdateInvoice(ctx context.Context, invoice *Invoice) er
 func (ms *MemoryStorage) CreateSubscriptionChange(ctx context.Context, change *SubscriptionChange) error {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
-	
+
 	ms.subscriptionChanges[change.SubscriptionID] = append(ms.subscriptionChanges[change.SubscriptionID], change)
 	return nil
 }
@@ -354,11 +354,11 @@ func (ms *MemoryStorage) CreateSubscriptionChange(ctx context.Context, change *S
 func (ms *MemoryStorage) ListSubscriptionChanges(ctx context.Context, subscriptionID string) ([]*SubscriptionChange, error) {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
-	
+
 	changes := ms.subscriptionChanges[subscriptionID]
 	result := make([]*SubscriptionChange, len(changes))
 	copy(result, changes)
-	
+
 	return result, nil
 }
 
@@ -367,7 +367,7 @@ func (ms *MemoryStorage) ListSubscriptionChanges(ctx context.Context, subscripti
 func (ms *MemoryStorage) CreateUsageRecord(ctx context.Context, record *UsageRecord) error {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
-	
+
 	ms.usageRecords[record.SubscriptionID] = append(ms.usageRecords[record.SubscriptionID], record)
 	return nil
 }
@@ -375,16 +375,16 @@ func (ms *MemoryStorage) CreateUsageRecord(ctx context.Context, record *UsageRec
 func (ms *MemoryStorage) GetUsageRecords(ctx context.Context, subscriptionID string, start, end time.Time) ([]*UsageRecord, error) {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
-	
+
 	allRecords := ms.usageRecords[subscriptionID]
 	var result []*UsageRecord
-	
+
 	for _, record := range allRecords {
 		if record.RecordedAt.After(start) && record.RecordedAt.Before(end) {
 			result = append(result, record)
 		}
 	}
-	
+
 	return result, nil
 }
 
@@ -393,19 +393,19 @@ func (ms *MemoryStorage) GetUsageRecords(ctx context.Context, subscriptionID str
 func (ms *MemoryStorage) GetStats(ctx context.Context) (*ContractStats, error) {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
-	
+
 	stats := &ContractStats{
 		SubscriptionsByTier: make(map[SubscriptionTier]int),
 		RevenueByTier:       make(map[SubscriptionTier]float64),
 		LastUpdated:         time.Now(),
 	}
-	
+
 	// Calculate subscription statistics
 	for _, subscription := range ms.subscriptions {
 		stats.TotalSubscriptions++
 		stats.SubscriptionsByTier[subscription.Tier]++
 		stats.RevenueByTier[subscription.Tier] += subscription.MonthlyAmount
-		
+
 		switch subscription.Status {
 		case SubscriptionActive:
 			stats.ActiveSubscriptions++
@@ -416,11 +416,11 @@ func (ms *MemoryStorage) GetStats(ctx context.Context) (*ContractStats, error) {
 			stats.CancelledSubscriptions++
 		}
 	}
-	
+
 	// Calculate payment statistics
 	totalPayments := 0
 	successfulPayments := 0
-	
+
 	for _, payment := range ms.payments {
 		totalPayments++
 		if payment.Status == PaymentCompleted {
@@ -428,15 +428,15 @@ func (ms *MemoryStorage) GetStats(ctx context.Context) (*ContractStats, error) {
 			stats.TotalRevenue += payment.Amount
 		}
 	}
-	
+
 	if totalPayments > 0 {
 		stats.PaymentSuccessRate = float64(successfulPayments) / float64(totalPayments)
 	}
-	
+
 	if stats.ActiveSubscriptions > 0 {
 		stats.AverageRevenuePerUser = stats.MonthlyRecurringRevenue / float64(stats.ActiveSubscriptions)
 	}
-	
+
 	return stats, nil
 }
 

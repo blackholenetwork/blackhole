@@ -15,21 +15,21 @@ type UnusedFundsDistributor struct {
 	logger                zerolog.Logger
 	config                *Config
 	marketPricing         *MarketPricingModel
-	
+
 	// Accumulated unused funds from 25% infrastructure pool when no active providers
 	unusedFundsPool       float64
 	lastDistributionTime  time.Time
-	
+
 	// Distribution settings
 	distributionInterval  time.Duration // How often to distribute unused funds
-	
+
 	// Provider usage tracking for ALL users (subscribers + free users)
 	providerUsageAllUsers map[string]*ProviderUsageAllUsers
-	
+
 	// Historical tracking
 	distributionHistory   []*UnusedFundsDistribution
 	maxHistorySize        int
-	
+
 	// Control
 	started               bool
 	stopChan              chan struct{}
@@ -40,21 +40,21 @@ type UnusedFundsDistributor struct {
 type ProviderUsageAllUsers struct {
 	ProviderID              string    `json:"provider_id"`
 	LastUpdateTime          time.Time `json:"last_update_time"`
-	
+
 	// Usage from paying subscribers
 	SubscriberStorageGBHours  float64 `json:"subscriber_storage_gb_hours"`
 	SubscriberBandwidthGB     float64 `json:"subscriber_bandwidth_gb"`
 	SubscriberCPUHours        float64 `json:"subscriber_cpu_hours"`
 	SubscriberGPUHours        float64 `json:"subscriber_gpu_hours"`
 	SubscriberMemoryGBHours   float64 `json:"subscriber_memory_gb_hours"`
-	
+
 	// Usage from free users
 	FreeUserStorageGBHours    float64 `json:"free_user_storage_gb_hours"`
 	FreeUserBandwidthGB       float64 `json:"free_user_bandwidth_gb"`
 	FreeUserCPUHours          float64 `json:"free_user_cpu_hours"`
 	FreeUserGPUHours          float64 `json:"free_user_gpu_hours"`
 	FreeUserMemoryGBHours     float64 `json:"free_user_memory_gb_hours"`
-	
+
 	// Total market value (subscribers + free users)
 	TotalMarketValue          float64 `json:"total_market_value"`
 }
@@ -87,22 +87,22 @@ func NewUnusedFundsDistributor(config *Config, logger zerolog.Logger) *UnusedFun
 func (ufd *UnusedFundsDistributor) Start(ctx context.Context) error {
 	ufd.mu.Lock()
 	defer ufd.mu.Unlock()
-	
+
 	if ufd.started {
 		return fmt.Errorf("unused funds distributor already started")
 	}
-	
+
 	ufd.logger.Info().Msg("Starting unused funds distributor")
-	
+
 	// Start distribution worker
 	ufd.wg.Add(1)
 	go ufd.distributionWorker(ctx)
-	
+
 	ufd.started = true
 	ufd.logger.Info().
 		Dur("interval", ufd.distributionInterval).
 		Msg("Unused funds distributor started")
-	
+
 	return nil
 }
 
@@ -110,19 +110,19 @@ func (ufd *UnusedFundsDistributor) Start(ctx context.Context) error {
 func (ufd *UnusedFundsDistributor) Stop(ctx context.Context) error {
 	ufd.mu.Lock()
 	defer ufd.mu.Unlock()
-	
+
 	if !ufd.started {
 		return nil
 	}
-	
+
 	ufd.logger.Info().Msg("Stopping unused funds distributor")
-	
+
 	close(ufd.stopChan)
 	ufd.wg.Wait()
-	
+
 	ufd.started = false
 	ufd.logger.Info().Msg("Unused funds distributor stopped")
-	
+
 	return nil
 }
 
@@ -130,9 +130,9 @@ func (ufd *UnusedFundsDistributor) Stop(ctx context.Context) error {
 func (ufd *UnusedFundsDistributor) AddUnusedFunds(amount float64) {
 	ufd.mu.Lock()
 	defer ufd.mu.Unlock()
-	
+
 	ufd.unusedFundsPool += amount
-	
+
 	ufd.logger.Debug().
 		Float64("amount", amount).
 		Float64("total_pool", ufd.unusedFundsPool).
@@ -146,9 +146,9 @@ func (ufd *UnusedFundsDistributor) RecordProviderUsageAllUsers(
 ) {
 	ufd.mu.Lock()
 	defer ufd.mu.Unlock()
-	
+
 	now := time.Now()
-	
+
 	usage, exists := ufd.providerUsageAllUsers[providerID]
 	if !exists {
 		usage = &ProviderUsageAllUsers{
@@ -156,26 +156,26 @@ func (ufd *UnusedFundsDistributor) RecordProviderUsageAllUsers(
 		}
 		ufd.providerUsageAllUsers[providerID] = usage
 	}
-	
+
 	usage.LastUpdateTime = now
-	
+
 	// Record subscriber usage
 	usage.SubscriberStorageGBHours = subscriberUsage.StorageGBHours
 	usage.SubscriberBandwidthGB = subscriberUsage.BandwidthGB
 	usage.SubscriberCPUHours = subscriberUsage.CPUHours
 	usage.SubscriberGPUHours = subscriberUsage.GPUHours
 	usage.SubscriberMemoryGBHours = subscriberUsage.MemoryGBHours
-	
+
 	// Record free user usage
 	usage.FreeUserStorageGBHours = freeUserUsage.StorageGBHours
 	usage.FreeUserBandwidthGB = freeUserUsage.BandwidthGB
 	usage.FreeUserCPUHours = freeUserUsage.CPUHours
 	usage.FreeUserGPUHours = freeUserUsage.GPUHours
 	usage.FreeUserMemoryGBHours = freeUserUsage.MemoryGBHours
-	
+
 	// Calculate total market value (subscribers + free users)
 	usage.TotalMarketValue = ufd.calculateTotalMarketValue(usage)
-	
+
 	ufd.logger.Debug().
 		Str("provider_id", providerID).
 		Float64("subscriber_market_value", ufd.calculateSubscriberMarketValue(usage)).
@@ -192,56 +192,56 @@ func (ufd *UnusedFundsDistributor) calculateTotalMarketValue(usage *ProviderUsag
 // calculateSubscriberMarketValue calculates market value from subscriber usage only
 func (ufd *UnusedFundsDistributor) calculateSubscriberMarketValue(usage *ProviderUsageAllUsers) float64 {
 	value := 0.0
-	
+
 	// Storage value (subscribers only)
 	storageHourlyRate := ufd.marketPricing.BaseRates.StoragePerGBMonth / (30.44 * 24)
 	value += usage.SubscriberStorageGBHours * storageHourlyRate
-	
+
 	// Bandwidth value (subscribers only)
 	value += usage.SubscriberBandwidthGB * ufd.marketPricing.BaseRates.BandwidthPerGB
-	
+
 	// CPU value (subscribers only)
 	value += usage.SubscriberCPUHours * ufd.marketPricing.BaseRates.ComputePerCPUHour
-	
+
 	// GPU value (subscribers only)
 	value += usage.SubscriberGPUHours * ufd.marketPricing.BaseRates.GPUComputePerHour
-	
+
 	// Memory value (subscribers only)
 	value += usage.SubscriberMemoryGBHours * ufd.marketPricing.BaseRates.MemoryPerGBHour
-	
+
 	return value
 }
 
 // calculateFreeUserMarketValue calculates market value from free user usage
 func (ufd *UnusedFundsDistributor) calculateFreeUserMarketValue(usage *ProviderUsageAllUsers) float64 {
 	value := 0.0
-	
+
 	// Storage value (free users)
 	storageHourlyRate := ufd.marketPricing.BaseRates.StoragePerGBMonth / (30.44 * 24)
 	value += usage.FreeUserStorageGBHours * storageHourlyRate
-	
+
 	// Bandwidth value (free users)
 	value += usage.FreeUserBandwidthGB * ufd.marketPricing.BaseRates.BandwidthPerGB
-	
+
 	// CPU value (free users)
 	value += usage.FreeUserCPUHours * ufd.marketPricing.BaseRates.ComputePerCPUHour
-	
+
 	// GPU value (free users)
 	value += usage.FreeUserGPUHours * ufd.marketPricing.BaseRates.GPUComputePerHour
-	
+
 	// Memory value (free users)
 	value += usage.FreeUserMemoryGBHours * ufd.marketPricing.BaseRates.MemoryPerGBHour
-	
+
 	return value
 }
 
 // distributionWorker runs the periodic unused funds distribution
 func (ufd *UnusedFundsDistributor) distributionWorker(ctx context.Context) {
 	defer ufd.wg.Done()
-	
+
 	ticker := time.NewTicker(ufd.distributionInterval)
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -258,56 +258,56 @@ func (ufd *UnusedFundsDistributor) distributionWorker(ctx context.Context) {
 func (ufd *UnusedFundsDistributor) distributeUnusedFunds() {
 	ufd.mu.Lock()
 	defer ufd.mu.Unlock()
-	
+
 	if ufd.unusedFundsPool <= 0 {
 		ufd.logger.Debug().
 			Float64("unused_pool", ufd.unusedFundsPool).
 			Msg("No unused funds to distribute")
 		return
 	}
-	
+
 	now := time.Now()
-	
+
 	// Calculate total market value from ALL providers (subscribers + free users)
 	totalMarketValue := 0.0
 	activeProviders := []string{}
-	
+
 	for providerID, usage := range ufd.providerUsageAllUsers {
 		if usage.TotalMarketValue > 0 && time.Since(usage.LastUpdateTime) < 7*24*time.Hour {
 			totalMarketValue += usage.TotalMarketValue
 			activeProviders = append(activeProviders, providerID)
 		}
 	}
-	
+
 	if totalMarketValue <= 0 || len(activeProviders) == 0 {
 		ufd.logger.Info().
 			Float64("unused_pool", ufd.unusedFundsPool).
 			Msg("No active providers with market value - keeping unused funds for next period")
 		return
 	}
-	
+
 	// Distribute ALL unused funds (100%) to providers based on total market value ratio
 	distribution := &UnusedFundsDistribution{
 		Timestamp:        now,
 		TotalAmount:      ufd.unusedFundsPool,
 		ProviderRewards:  make(map[string]float64),
-		DistributionPeriod: fmt.Sprintf("%s to %s", 
-			now.Add(-ufd.distributionInterval).Format("2006-01-02"), 
+		DistributionPeriod: fmt.Sprintf("%s to %s",
+			now.Add(-ufd.distributionInterval).Format("2006-01-02"),
 			now.Format("2006-01-02")),
 		TotalProviders:   len(activeProviders),
 		TotalMarketValue: totalMarketValue,
 	}
-	
+
 	// Distribute based on market value ratios (subscribers + free users)
 	for _, providerID := range activeProviders {
 		usage := ufd.providerUsageAllUsers[providerID]
-		
+
 		// Calculate provider's share of total market value
 		marketValueRatio := usage.TotalMarketValue / totalMarketValue
 		providerReward := ufd.unusedFundsPool * marketValueRatio
-		
+
 		distribution.ProviderRewards[providerID] = providerReward
-		
+
 		ufd.logger.Debug().
 			Str("provider_id", providerID).
 			Float64("total_market_value", usage.TotalMarketValue).
@@ -317,17 +317,17 @@ func (ufd *UnusedFundsDistributor) distributeUnusedFunds() {
 			Float64("reward", providerReward).
 			Msg("Unused funds provider reward calculated")
 	}
-	
+
 	// Add to distribution history
 	ufd.distributionHistory = append(ufd.distributionHistory, distribution)
 	if len(ufd.distributionHistory) > ufd.maxHistorySize {
 		ufd.distributionHistory = ufd.distributionHistory[1:]
 	}
-	
+
 	// Clear unused funds pool completely (all funds distributed)
 	ufd.unusedFundsPool = 0
 	ufd.lastDistributionTime = now
-	
+
 	ufd.logger.Info().
 		Float64("total_distributed", distribution.TotalAmount).
 		Int("providers", len(activeProviders)).
@@ -339,7 +339,7 @@ func (ufd *UnusedFundsDistributor) distributeUnusedFunds() {
 func (ufd *UnusedFundsDistributor) GetUnusedFundsPool() float64 {
 	ufd.mu.RLock()
 	defer ufd.mu.RUnlock()
-	
+
 	return ufd.unusedFundsPool
 }
 
@@ -347,13 +347,13 @@ func (ufd *UnusedFundsDistributor) GetUnusedFundsPool() float64 {
 func (ufd *UnusedFundsDistributor) GetProviderUsageAllUsers() map[string]*ProviderUsageAllUsers {
 	ufd.mu.RLock()
 	defer ufd.mu.RUnlock()
-	
+
 	result := make(map[string]*ProviderUsageAllUsers)
 	for providerID, usage := range ufd.providerUsageAllUsers {
 		usageCopy := *usage
 		result[providerID] = &usageCopy
 	}
-	
+
 	return result
 }
 
@@ -361,14 +361,14 @@ func (ufd *UnusedFundsDistributor) GetProviderUsageAllUsers() map[string]*Provid
 func (ufd *UnusedFundsDistributor) GetDistributionHistory(limit int) []*UnusedFundsDistribution {
 	ufd.mu.RLock()
 	defer ufd.mu.RUnlock()
-	
+
 	if limit <= 0 || limit > len(ufd.distributionHistory) {
 		limit = len(ufd.distributionHistory)
 	}
-	
+
 	start := len(ufd.distributionHistory) - limit
 	result := make([]*UnusedFundsDistribution, limit)
-	
+
 	for i := 0; i < limit; i++ {
 		distribution := ufd.distributionHistory[start+i]
 		distCopy := *distribution
@@ -378,7 +378,7 @@ func (ufd *UnusedFundsDistributor) GetDistributionHistory(limit int) []*UnusedFu
 		}
 		result[i] = &distCopy
 	}
-	
+
 	return result
 }
 
@@ -386,12 +386,12 @@ func (ufd *UnusedFundsDistributor) GetDistributionHistory(limit int) []*UnusedFu
 func (ufd *UnusedFundsDistributor) GetStats() *UnusedFundsStats {
 	ufd.mu.RLock()
 	defer ufd.mu.RUnlock()
-	
+
 	activeProviders := 0
 	totalMarketValue := 0.0
 	totalSubscriberValue := 0.0
 	totalFreeUserValue := 0.0
-	
+
 	for _, usage := range ufd.providerUsageAllUsers {
 		if usage.TotalMarketValue > 0 && time.Since(usage.LastUpdateTime) < 7*24*time.Hour {
 			activeProviders++
@@ -400,12 +400,12 @@ func (ufd *UnusedFundsDistributor) GetStats() *UnusedFundsStats {
 			totalFreeUserValue += ufd.calculateFreeUserMarketValue(usage)
 		}
 	}
-	
+
 	var totalDistributedAllTime float64
 	for _, distribution := range ufd.distributionHistory {
 		totalDistributedAllTime += distribution.TotalAmount
 	}
-	
+
 	return &UnusedFundsStats{
 		CurrentUnusedPool:       ufd.unusedFundsPool,
 		ActiveProviders:         activeProviders,

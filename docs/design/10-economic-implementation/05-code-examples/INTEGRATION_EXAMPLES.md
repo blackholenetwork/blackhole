@@ -12,7 +12,7 @@ package myservice
 import (
     "context"
     "time"
-    
+
     "github.com/blackhole/pkg/economic/incentive"
 )
 
@@ -26,7 +26,7 @@ func (s *MyService) ProcessUserFile(ctx context.Context, userID string, fileData
     if err != nil {
         return err
     }
-    
+
     // Record storage usage
     storageEvent := incentive.ResourceUsageEvent{
         EventID:      generateEventID(),
@@ -42,12 +42,12 @@ func (s *MyService) ProcessUserFile(ctx context.Context, userID string, fileData
             Chargeable:    true,
         },
     }
-    
+
     if err := s.economicTracker.TrackResourceUsage(ctx, storageEvent); err != nil {
         log.Printf("Failed to track storage usage: %v", err)
         // Don't fail the operation, just log the error
     }
-    
+
     return s.storeFile(processed)
 }
 ```
@@ -76,11 +76,11 @@ func (cs *ContentService) ViewContent(ctx context.Context, contentID, userID str
         Timestamp:   time.Now(),
         Value:       0.01, // $0.01 per view
     }
-    
+
     if err := cs.economicService.TrackContentActivity(ctx, contentEvent); err != nil {
         log.Printf("Failed to track content activity: %v", err)
     }
-    
+
     return cs.serveContent(contentID)
 }
 
@@ -89,7 +89,7 @@ func (cs *ContentService) InvestInContent(ctx context.Context, contentID, invest
     if amount < 10.00 {
         return errors.New("minimum investment is $10.00")
     }
-    
+
     // Create investment
     investment := &incentive.ContentInvestment{
         InvestmentID:    generateInvestmentID(),
@@ -99,7 +99,7 @@ func (cs *ContentService) InvestInContent(ctx context.Context, contentID, invest
         PurchaseDate:    time.Now(),
         IsActive:        true,
     }
-    
+
     // Process through economic system
     return cs.economicService.ProcessContentInvestment(ctx, investment)
 }
@@ -127,13 +127,13 @@ func (sm *SubscriptionManager) UpgradeSubscription(ctx context.Context, userID s
     if err != nil {
         return fmt.Errorf("failed to get current subscription: %w", err)
     }
-    
+
     // Calculate prorated amount
     proratedAmount, err := sm.calculateProratedUpgrade(currentSub, newTier)
     if err != nil {
         return fmt.Errorf("failed to calculate prorated amount: %w", err)
     }
-    
+
     // Process payment
     paymentReq := &contract.PaymentRequest{
         UserID:        userID,
@@ -142,11 +142,11 @@ func (sm *SubscriptionManager) UpgradeSubscription(ctx context.Context, userID s
         Description:   fmt.Sprintf("Upgrade to %s tier", newTier),
         PaymentMethod: currentSub.PaymentMethod,
     }
-    
+
     if err := sm.contractService.ProcessPayment(ctx, paymentReq); err != nil {
         return fmt.Errorf("payment failed: %w", err)
     }
-    
+
     // Update subscription
     return sm.contractService.UpdateSubscriptionTier(ctx, userID, newTier)
 }
@@ -154,12 +154,12 @@ func (sm *SubscriptionManager) UpgradeSubscription(ctx context.Context, userID s
 func (sm *SubscriptionManager) calculateProratedUpgrade(current *contract.Subscription, newTier contract.SubscriptionTier) (float64, error) {
     newPrice := sm.contractService.GetTierPrice(newTier)
     currentPrice := current.Price
-    
+
     // Calculate remaining days in current billing cycle
     now := time.Now()
     daysRemaining := int(current.EndDate.Sub(now).Hours() / 24)
     daysInCycle := 30 // Assuming monthly billing
-    
+
     // Calculate prorated difference
     dailyDifference := (newPrice - currentPrice) / float64(daysInCycle)
     return dailyDifference * float64(daysRemaining), nil
@@ -187,19 +187,19 @@ func (h *PaymentWebhookHandler) HandleStripeWebhook(w http.ResponseWriter, r *ht
         http.Error(w, "Failed to read body", http.StatusBadRequest)
         return
     }
-    
+
     // Verify webhook signature
     if !h.verifyStripeSignature(payload, r.Header.Get("Stripe-Signature")) {
         http.Error(w, "Invalid signature", http.StatusUnauthorized)
         return
     }
-    
+
     var event contract.StripeEvent
     if err := json.Unmarshal(payload, &event); err != nil {
         http.Error(w, "Invalid JSON", http.StatusBadRequest)
         return
     }
-    
+
     switch event.Type {
     case "payment_intent.succeeded":
         if err := h.handlePaymentSuccess(event.Data); err != nil {
@@ -214,7 +214,7 @@ func (h *PaymentWebhookHandler) HandleStripeWebhook(w http.ResponseWriter, r *ht
             return
         }
     }
-    
+
     w.WriteHeader(http.StatusOK)
 }
 
@@ -223,7 +223,7 @@ func (h *PaymentWebhookHandler) handlePaymentSuccess(data json.RawMessage) error
     if err := json.Unmarshal(data, &paymentIntent); err != nil {
         return err
     }
-    
+
     // Update subscription status
     return h.contractService.ActivateSubscription(context.Background(), paymentIntent.Metadata.UserID)
 }
@@ -240,7 +240,7 @@ import (
     "context"
     "encoding/json"
     "log"
-    
+
     "github.com/gofiber/websocket/v2"
     "github.com/blackhole/pkg/economic/incentive"
 )
@@ -252,15 +252,15 @@ type DashboardHandler struct {
 
 func (d *DashboardHandler) StreamEconomicUpdates(c *websocket.Conn) {
     userID := c.Locals("user_id").(string)
-    
+
     // Register connection
     d.activeConnections[userID] = c
     defer delete(d.activeConnections, userID)
-    
+
     // Subscribe to user's economic events
     eventChan := d.incentiveService.SubscribeToUserEvents(userID)
     defer d.incentiveService.UnsubscribeFromUserEvents(userID)
-    
+
     for {
         select {
         case event := <-eventChan:
@@ -269,7 +269,7 @@ func (d *DashboardHandler) StreamEconomicUpdates(c *websocket.Conn) {
                 log.Printf("WebSocket write error for user %s: %v", userID, err)
                 return
             }
-            
+
         case <-c.Context().Done():
             return
         }
@@ -316,7 +316,7 @@ type EconomicsAPIHandler struct {
 func (h *EconomicsAPIHandler) GetUserDashboard(c *fiber.Ctx) error {
     userID := c.Locals("user_id").(string)
     userType := c.Locals("user_type").(string)
-    
+
     switch userType {
     case "subscriber":
         dashboard, err := h.getSubscriberDashboard(userID)
@@ -324,21 +324,21 @@ func (h *EconomicsAPIHandler) GetUserDashboard(c *fiber.Ctx) error {
             return c.Status(500).JSON(fiber.Map{"error": err.Error()})
         }
         return c.JSON(dashboard)
-        
+
     case "content_creator":
         dashboard, err := h.getContentCreatorDashboard(userID)
         if err != nil {
             return c.Status(500).JSON(fiber.Map{"error": err.Error()})
         }
         return c.JSON(dashboard)
-        
+
     case "infrastructure_provider":
         dashboard, err := h.getInfrastructureProviderDashboard(userID)
         if err != nil {
             return c.Status(500).JSON(fiber.Map{"error": err.Error()})
         }
         return c.JSON(dashboard)
-        
+
     default:
         return c.Status(400).JSON(fiber.Map{"error": "Unknown user type"})
     }
@@ -349,17 +349,17 @@ func (h *EconomicsAPIHandler) getSubscriberDashboard(userID string) (*Subscriber
     if err != nil {
         return nil, err
     }
-    
+
     usage, err := h.incentiveService.GetCurrentUsage(userID)
     if err != nil {
         return nil, err
     }
-    
+
     distribution, err := h.incentiveService.GetRevenueDistribution(userID)
     if err != nil {
         return nil, err
     }
-    
+
     return &SubscriberDashboard{
         UserType:             "subscriber",
         Subscription:         subscription,
@@ -379,7 +379,7 @@ package provider
 import (
     "context"
     "time"
-    
+
     "github.com/blackhole/pkg/economic/incentive"
     "github.com/blackhole/pkg/resources/storage"
 )
@@ -394,7 +394,7 @@ type InfrastructureProvider struct {
 func (p *InfrastructureProvider) Start(ctx context.Context) error {
     // Start usage reporting
     go p.startUsageReporting(ctx)
-    
+
     // Register as infrastructure provider
     return p.economicService.RegisterInfrastructureProvider(ctx, &incentive.ProviderRegistration{
         ProviderID:   p.providerID,
@@ -412,7 +412,7 @@ func (p *InfrastructureProvider) Start(ctx context.Context) error {
 func (p *InfrastructureProvider) startUsageReporting(ctx context.Context) {
     ticker := time.NewTicker(10 * time.Second)
     defer ticker.Stop()
-    
+
     for {
         select {
         case <-ticker.C:
@@ -431,7 +431,7 @@ func (p *InfrastructureProvider) reportCurrentUsage(ctx context.Context) error {
     if err != nil {
         return err
     }
-    
+
     // Report to economic system
     usageEvent := &incentive.ProviderUsageReport{
         ProviderID:   p.providerID,
@@ -445,7 +445,7 @@ func (p *InfrastructureProvider) reportCurrentUsage(ctx context.Context) error {
             },
         },
     }
-    
+
     return p.economicService.ReportProviderUsage(ctx, usageEvent)
 }
 ```
@@ -511,7 +511,7 @@ import (
     "context"
     "testing"
     "time"
-    
+
     "github.com/stretchr/testify/assert"
     "github.com/blackhole/pkg/economic/incentive"
     "github.com/blackhole/pkg/economic/contract"
@@ -522,9 +522,9 @@ func TestSubscriptionAndUsageFlow(t *testing.T) {
     ctx := context.Background()
     economicService := setupTestEconomicService(t)
     contractService := setupTestContractService(t)
-    
+
     userID := "test_user_123"
-    
+
     // Test subscription creation
     subscription := &contract.Subscription{
         UserID:    userID,
@@ -533,10 +533,10 @@ func TestSubscriptionAndUsageFlow(t *testing.T) {
         Currency:  "USD",
         AutoRenew: true,
     }
-    
+
     err := contractService.CreateSubscription(ctx, subscription)
     assert.NoError(t, err)
-    
+
     // Test usage tracking
     usageEvent := incentive.ResourceUsageEvent{
         UserID:       userID,
@@ -546,21 +546,21 @@ func TestSubscriptionAndUsageFlow(t *testing.T) {
         Unit:         "GB",
         Timestamp:    time.Now(),
     }
-    
+
     err = economicService.TrackResourceUsage(ctx, usageEvent)
     assert.NoError(t, err)
-    
+
     // Verify billing calculation
     time.Sleep(100 * time.Millisecond) // Allow async processing
-    
+
     usage, err := economicService.GetCurrentUsage(userID)
     assert.NoError(t, err)
     assert.Equal(t, 1.5, usage.StorageGB)
-    
+
     // Test monthly billing
     err = economicService.ProcessMonthlyBilling(ctx)
     assert.NoError(t, err)
-    
+
     // Verify charges
     charges, err := contractService.GetUserCharges(ctx, userID)
     assert.NoError(t, err)
@@ -593,19 +593,19 @@ func (s *ServiceWithEconomics) ProcessRequest(ctx context.Context, req *Request)
     if err != nil {
         return nil, err
     }
-    
+
     // Try to record economic activity
     if err := s.recordEconomicActivity(ctx, req, response); err != nil {
         // Log the error but don't fail the request
         log.Printf("Economic tracking failed: %v", err)
-        
+
         // Optionally enter fallback mode
         s.fallbackMode = true
-        
+
         // Could also queue for retry
         s.queueEconomicEvent(req, response)
     }
-    
+
     return response, nil
 }
 
@@ -614,7 +614,7 @@ func (s *ServiceWithEconomics) recordEconomicActivity(ctx context.Context, req *
         // Skip economic tracking in fallback mode
         return nil
     }
-    
+
     event := s.createEconomicEvent(req, resp)
     return s.economicService.TrackResourceUsage(ctx, event)
 }

@@ -4,20 +4,20 @@ import (
 	"context"
 	"io"
 	"time"
-	
+
 	"github.com/blackholenetwork/blackhole/pkg/core"
 )
 
 // CIDService defines the interface for pure content-based storage (metadata-free)
 type CIDService interface {
 	core.Service
-	
+
 	// Pure content operations (no metadata required)
 	Store(ctx context.Context, reader io.Reader) (ContentCID, error)
 	Retrieve(ctx context.Context, cid ContentCID) (io.ReadCloser, error)
 	Delete(ctx context.Context, cid ContentCID) error
 	HasContent(ctx context.Context, cid ContentCID) bool
-	
+
 	// Minimal info derivable from CID and system state
 	GetContentInfo(ctx context.Context, cid ContentCID) (ContentInfo, error)
 }
@@ -25,7 +25,7 @@ type CIDService interface {
 // Enhanced CID Service with optional user metadata (separate from content)
 type EnhancedCIDService interface {
 	CIDService
-	
+
 	// Optional user metadata operations (stored separately from content)
 	StoreWithMetadata(ctx context.Context, reader io.Reader, userMeta UserMetadata) (ContentCID, error)
 	GetUserMetadata(ctx context.Context, cid ContentCID, userID string) (UserMetadata, error)
@@ -54,8 +54,8 @@ type ComparisonExample struct {
 	// OLD WAY (Metadata-based FileID)
 	OldFileID   string       `json:"old_file_id"`   // "a1b2c3d4e5f6..." (metadata+timestamp hash)
 	OldMetadata string       `json:"old_metadata"`  // "Stored filename, size, etc."
-	
-	// NEW WAY (Content-based CID) 
+
+	// NEW WAY (Content-based CID)
 	NewCID      ContentCID   `json:"new_cid"`       // "bafybei..." (content hash)
 	NewMetadata *UserMetadata `json:"new_metadata,omitempty"` // Optional user metadata
 }
@@ -82,7 +82,7 @@ type UsageExamples struct {
 	// Minimal usage (zero metadata)
 	MinimalStore    string `json:"minimal_store"`    // "cid := Store(fileContent)"
 	MinimalRetrieve string `json:"minimal_retrieve"` // "content := Retrieve(cid)"
-	
+
 	// Enhanced usage (with user metadata)
 	EnhancedStore    string `json:"enhanced_store"`    // "cid := StoreWithMetadata(content, userMeta)"
 	EnhancedRetrieve string `json:"enhanced_retrieve"` // "content, meta := RetrieveWithMetadata(cid, userID)"
@@ -97,11 +97,11 @@ type CIDSystemCapabilities struct {
 	ContentType     string `json:"content_type"`     // "detected from content"
 	ChunkCIDs       string `json:"chunk_cids"`       // "deterministic from content"
 	StoragePositions string `json:"storage_positions"` // "deterministic from chunk CIDs"
-	
+
 	// What we need minimal tracking for (optional)
 	AccessPatterns  string `json:"access_patterns"`  // "for demand-based optimization"
 	NetworkHealth   string `json:"network_health"`   // "for position health monitoring"
-	
+
 	// What becomes user responsibility
 	FileNaming      string `json:"file_naming"`      // "user manages their own filename mappings"
 	Organization    string `json:"organization"`     // "user manages tags and folders"
@@ -116,7 +116,7 @@ type PerformanceImplications struct {
 		CacheFriendly   string `json:"cache_friendly"`  // "Popular content naturally cached"
 		PredictableLoad string `json:"predictable_load"` // "Same content → same positions"
 	} `json:"positives"`
-	
+
 	Considerations struct {
 		CIDGeneration string `json:"cid_generation"` // "Must read full content to generate CID"
 		ChunkDiscovery string `json:"chunk_discovery"` // "Need sophisticated chunk finding for retrieval"

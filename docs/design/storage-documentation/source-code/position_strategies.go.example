@@ -212,12 +212,12 @@ func (pce *PositionClaimingEngine) calculateConservativeClaiming(node *NodeDetai
 	// Conservative: Large buffer, slow expansion
 	availableWithBuffer := int64(float64(node.AvailableStorage) / node.PositionStrategy.ConservativeBuffer)
 	targetPositions := int(availableWithBuffer / node.PositionStrategy.StoragePerPosition)
-	
+
 	rec.RecommendedPositions = min(targetPositions, node.PositionStrategy.MaxPositions)
 	rec.PositionsToClaim = max(0, rec.RecommendedPositions - rec.CurrentPositions)
 	rec.RiskLevel = LowRisk
 	rec.ExpectedStorageNeeded = int64(rec.PositionsToClaim) * node.PositionStrategy.StoragePerPosition
-	
+
 	if rec.CurrentFillRate > node.PositionStrategy.FillRateThreshold {
 		rec.RecommendedAction = StopClaiming
 		rec.Reasoning = "Fill rate exceeds conservative threshold - stopping new claims"
@@ -228,7 +228,7 @@ func (pce *PositionClaimingEngine) calculateConservativeClaiming(node *NodeDetai
 		rec.RecommendedAction = Optimize
 		rec.Reasoning = "No new positions needed - consider optimizing strategy"
 	}
-	
+
 	return rec
 }
 
@@ -236,12 +236,12 @@ func (pce *PositionClaimingEngine) calculateAggressiveClaiming(node *NodeDetails
 	// Aggressive: Small buffer, fast expansion
 	availableWithBuffer := int64(float64(node.AvailableStorage) / node.PositionStrategy.ConservativeBuffer)
 	targetPositions := int(availableWithBuffer / node.PositionStrategy.StoragePerPosition)
-	
+
 	rec.RecommendedPositions = min(targetPositions, node.PositionStrategy.MaxPositions)
 	rec.PositionsToClaim = max(0, rec.RecommendedPositions - rec.CurrentPositions)
 	rec.RiskLevel = HighRisk
 	rec.ExpectedStorageNeeded = int64(rec.PositionsToClaim) * node.PositionStrategy.StoragePerPosition
-	
+
 	if rec.CurrentFillRate > node.PositionStrategy.FillRateThreshold {
 		rec.RecommendedAction = StopClaiming
 		rec.Reasoning = "Fill rate exceeds aggressive threshold - immediate stop"
@@ -252,7 +252,7 @@ func (pce *PositionClaimingEngine) calculateAggressiveClaiming(node *NodeDetails
 		rec.RecommendedAction = ClaimMore
 		rec.Reasoning = "Maintain aggressive expansion"
 	}
-	
+
 	return rec
 }
 
@@ -260,7 +260,7 @@ func (pce *PositionClaimingEngine) calculateDynamicClaiming(node *NodeDetails, r
 	// Dynamic: Adjust based on current conditions
 	var storagePerPosition int64
 	var riskLevel RiskLevel
-	
+
 	// Adjust storage per position based on fill rate
 	if rec.CurrentFillRate < 0.4 {
 		storagePerPosition = 2 * 1024 * 1024 * 1024 // 2GB - more aggressive when empty
@@ -272,15 +272,15 @@ func (pce *PositionClaimingEngine) calculateDynamicClaiming(node *NodeDetails, r
 		storagePerPosition = 10 * 1024 * 1024 * 1024 // 10GB - conservative when filling
 		riskLevel = LowRisk
 	}
-	
+
 	availableWithBuffer := int64(float64(node.AvailableStorage) / node.PositionStrategy.ConservativeBuffer)
 	targetPositions := int(availableWithBuffer / storagePerPosition)
-	
+
 	rec.RecommendedPositions = min(targetPositions, node.PositionStrategy.MaxPositions)
 	rec.PositionsToClaim = max(0, rec.RecommendedPositions - rec.CurrentPositions)
 	rec.RiskLevel = riskLevel
 	rec.ExpectedStorageNeeded = int64(rec.PositionsToClaim) * storagePerPosition
-	
+
 	// Dynamic decision making
 	if rec.CurrentFillRate > 0.8 {
 		rec.RecommendedAction = StopClaiming
@@ -292,7 +292,7 @@ func (pce *PositionClaimingEngine) calculateDynamicClaiming(node *NodeDetails, r
 		rec.RecommendedAction = ClaimNormal
 		rec.Reasoning = "Balanced utilization - normal claiming rate"
 	}
-	
+
 	return rec
 }
 
@@ -304,7 +304,7 @@ func (pce *PositionClaimingEngine) calculateReputationClaiming(node *NodeDetails
 		rec.RiskLevel = HighRisk
 		return rec
 	}
-	
+
 	// Calculate max positions based on reputation
 	var maxPositions int
 	if reputation.TotalScore >= 0.9 {
@@ -320,15 +320,15 @@ func (pce *PositionClaimingEngine) calculateReputationClaiming(node *NodeDetails
 		maxPositions = 100 // New/poor reputation
 		rec.RiskLevel = HighRisk
 	}
-	
+
 	availableWithBuffer := int64(float64(node.AvailableStorage) / node.PositionStrategy.ConservativeBuffer)
 	targetPositions := int(availableWithBuffer / node.PositionStrategy.StoragePerPosition)
 	targetPositions = min(targetPositions, maxPositions)
-	
+
 	rec.RecommendedPositions = targetPositions
 	rec.PositionsToClaim = max(0, rec.RecommendedPositions - rec.CurrentPositions)
 	rec.ExpectedStorageNeeded = int64(rec.PositionsToClaim) * node.PositionStrategy.StoragePerPosition
-	
+
 	if rec.CurrentPositions >= maxPositions {
 		rec.RecommendedAction = StopClaiming
 		rec.Reasoning = fmt.Sprintf("Reached reputation limit (%d positions for score %.2f)", maxPositions, reputation.TotalScore)
@@ -339,6 +339,6 @@ func (pce *PositionClaimingEngine) calculateReputationClaiming(node *NodeDetails
 		rec.RecommendedAction = Optimize
 		rec.Reasoning = "Consider improving reputation to claim more positions"
 	}
-	
+
 	return rec
 }

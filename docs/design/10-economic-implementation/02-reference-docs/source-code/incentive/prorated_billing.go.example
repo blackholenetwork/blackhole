@@ -14,23 +14,23 @@ type ProratedBillingEngine struct {
 	mu               sync.RWMutex
 	logger           zerolog.Logger
 	config           *Config
-	
+
 	// Active subscriptions with prorated billing
 	activeSubscriptions map[string]*ProratedSubscription
-	
+
 	// Per-second revenue calculation
 	revenuePerSecond    float64
 	lastCalculationTime time.Time
-	
+
 	// Real-time distribution pools
 	contentPool         float64 // 70% - distributed immediately
 	networkOpsPool      float64 // 2.5% - distributed immediately
 	appDeveloperPool    float64 // 2.5% - distributed immediately
 	infrastructurePool  float64 // 25% - prorated per second based on usage
-	
+
 	// Accumulated unused funds
 	unusedFunds         float64
-	
+
 	// Control
 	started             bool
 	stopChan            chan struct{}
@@ -45,15 +45,15 @@ type ProratedSubscription struct {
 	StartTime       time.Time            `json:"start_time"`
 	EndTime         *time.Time           `json:"end_time,omitempty"`
 	Status          SubscriptionStatus   `json:"status"`
-	
+
 	// Prorated calculations
 	SecondsInMonth  float64              `json:"seconds_in_month"`  // ~2,592,000 seconds
 	RevenuePerSecond float64             `json:"revenue_per_second"`
-	
+
 	// Usage tracking
 	TotalSecondsActive   int64            `json:"total_seconds_active"`
 	TotalAmountGenerated float64          `json:"total_amount_generated"`
-	
+
 	CreatedAt       time.Time            `json:"created_at"`
 	UpdatedAt       time.Time            `json:"updated_at"`
 }
@@ -73,24 +73,24 @@ func NewProratedBillingEngine(config *Config, logger zerolog.Logger) *ProratedBi
 func (pbe *ProratedBillingEngine) Start(ctx context.Context) error {
 	pbe.mu.Lock()
 	defer pbe.mu.Unlock()
-	
+
 	if pbe.started {
 		return fmt.Errorf("prorated billing engine already started")
 	}
-	
+
 	pbe.logger.Info().Msg("Starting prorated billing engine")
-	
+
 	// Start per-second revenue calculation worker
 	pbe.wg.Add(1)
 	go pbe.revenueCalculationWorker(ctx)
-	
+
 	// Start distribution workers
 	pbe.wg.Add(1)
 	go pbe.distributionWorker(ctx)
-	
+
 	pbe.started = true
 	pbe.logger.Info().Msg("Prorated billing engine started")
-	
+
 	return nil
 }
 
@@ -98,19 +98,19 @@ func (pbe *ProratedBillingEngine) Start(ctx context.Context) error {
 func (pbe *ProratedBillingEngine) Stop(ctx context.Context) error {
 	pbe.mu.Lock()
 	defer pbe.mu.Unlock()
-	
+
 	if !pbe.started {
 		return nil
 	}
-	
+
 	pbe.logger.Info().Msg("Stopping prorated billing engine")
-	
+
 	close(pbe.stopChan)
 	pbe.wg.Wait()
-	
+
 	pbe.started = false
 	pbe.logger.Info().Msg("Prorated billing engine stopped")
-	
+
 	return nil
 }
 
@@ -118,7 +118,7 @@ func (pbe *ProratedBillingEngine) Stop(ctx context.Context) error {
 func (pbe *ProratedBillingEngine) AddProratedSubscription(userID string, tier SubscriptionTier, startTime time.Time) error {
 	pbe.mu.Lock()
 	defer pbe.mu.Unlock()
-	
+
 	var monthlyAmount float64
 	switch tier {
 	case TierNormal:
@@ -132,11 +132,11 @@ func (pbe *ProratedBillingEngine) AddProratedSubscription(userID string, tier Su
 	default:
 		return fmt.Errorf("invalid subscription tier: %s", tier)
 	}
-	
+
 	// Calculate seconds in a month (30.44 days average)
 	secondsInMonth := 30.44 * 24 * 3600 // ~2,630,016 seconds
 	revenuePerSecond := monthlyAmount / secondsInMonth
-	
+
 	subscription := &ProratedSubscription{
 		UserID:           userID,
 		Tier:             tier,
@@ -148,16 +148,16 @@ func (pbe *ProratedBillingEngine) AddProratedSubscription(userID string, tier Su
 		CreatedAt:        time.Now(),
 		UpdatedAt:        time.Now(),
 	}
-	
+
 	pbe.activeSubscriptions[userID] = subscription
-	
+
 	pbe.logger.Info().
 		Str("user_id", userID).
 		Str("tier", string(tier)).
 		Float64("monthly_amount", monthlyAmount).
 		Float64("revenue_per_second", revenuePerSecond).
 		Msg("Prorated subscription added")
-	
+
 	return nil
 }
 
@@ -165,36 +165,36 @@ func (pbe *ProratedBillingEngine) AddProratedSubscription(userID string, tier Su
 func (pbe *ProratedBillingEngine) CancelProratedSubscription(userID string) error {
 	pbe.mu.Lock()
 	defer pbe.mu.Unlock()
-	
+
 	subscription, exists := pbe.activeSubscriptions[userID]
 	if !exists {
 		return fmt.Errorf("subscription not found for user: %s", userID)
 	}
-	
+
 	now := time.Now()
 	subscription.Status = SubscriptionCancelled
 	subscription.EndTime = &now
 	subscription.UpdatedAt = now
-	
+
 	pbe.logger.Info().
 		Str("user_id", userID).
 		Float64("total_generated", subscription.TotalAmountGenerated).
 		Int64("total_seconds", subscription.TotalSecondsActive).
 		Msg("Prorated subscription cancelled")
-	
+
 	// Remove from active subscriptions
 	delete(pbe.activeSubscriptions, userID)
-	
+
 	return nil
 }
 
 // revenueCalculationWorker calculates revenue per second from all active subscriptions
 func (pbe *ProratedBillingEngine) revenueCalculationWorker(ctx context.Context) {
 	defer pbe.wg.Done()
-	
+
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -211,38 +211,38 @@ func (pbe *ProratedBillingEngine) revenueCalculationWorker(ctx context.Context) 
 func (pbe *ProratedBillingEngine) calculateSecondlyRevenue() {
 	pbe.mu.Lock()
 	defer pbe.mu.Unlock()
-	
+
 	now := time.Now()
-	
+
 	// Calculate total revenue per second from all active subscriptions
 	var totalRevenuePerSecond float64
 	for _, subscription := range pbe.activeSubscriptions {
 		if subscription.Status == SubscriptionActive {
 			totalRevenuePerSecond += subscription.RevenuePerSecond
-			
+
 			// Update subscription stats
 			subscription.TotalSecondsActive++
 			subscription.TotalAmountGenerated += subscription.RevenuePerSecond
 		}
 	}
-	
+
 	pbe.revenuePerSecond = totalRevenuePerSecond
-	
+
 	// Distribute into pools based on 70/2.5/2.5/25 split
 	if totalRevenuePerSecond > 0 {
 		contentRevenue := totalRevenuePerSecond * pbe.config.MarketPricing.ContentCreatorPercentage
 		networkOpsRevenue := totalRevenuePerSecond * pbe.config.MarketPricing.NetworkOpsPercentage
 		appDevRevenue := totalRevenuePerSecond * pbe.config.MarketPricing.AppDeveloperPercentage
 		infrastructureRevenue := totalRevenuePerSecond * pbe.config.MarketPricing.InfrastructurePercentage
-		
+
 		pbe.contentPool += contentRevenue
 		pbe.networkOpsPool += networkOpsRevenue
 		pbe.appDeveloperPool += appDevRevenue
 		pbe.infrastructurePool += infrastructureRevenue
 	}
-	
+
 	pbe.lastCalculationTime = now
-	
+
 	pbe.logger.Debug().
 		Float64("revenue_per_second", totalRevenuePerSecond).
 		Int("active_subscriptions", len(pbe.activeSubscriptions)).
@@ -254,15 +254,15 @@ func (pbe *ProratedBillingEngine) calculateSecondlyRevenue() {
 // distributionWorker handles distribution of accumulated pools
 func (pbe *ProratedBillingEngine) distributionWorker(ctx context.Context) {
 	defer pbe.wg.Done()
-	
+
 	// Distribute fixed pools every 10 seconds
 	fixedDistributionTicker := time.NewTicker(10 * time.Second)
 	defer fixedDistributionTicker.Stop()
-	
+
 	// Distribute infrastructure pool every second based on usage
 	infrastructureTicker := time.NewTicker(time.Second)
 	defer infrastructureTicker.Stop()
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -283,13 +283,13 @@ func (pbe *ProratedBillingEngine) distributeFixedPools() {
 	contentAmount := pbe.contentPool
 	networkOpsAmount := pbe.networkOpsPool
 	appDevAmount := pbe.appDeveloperPool
-	
+
 	// Reset pools after reading amounts
 	pbe.contentPool = 0
 	pbe.networkOpsPool = 0
 	pbe.appDeveloperPool = 0
 	pbe.mu.Unlock()
-	
+
 	// Distribute to content creators (will be handled by real-time content distributor)
 	if contentAmount > 0 {
 		pbe.logger.Debug().
@@ -297,7 +297,7 @@ func (pbe *ProratedBillingEngine) distributeFixedPools() {
 			Msg("Content pool ready for real-time distribution")
 		// The content will be fed to RealTimeContentDistributor via integration
 	}
-	
+
 	// Network operations pool goes to single account (no distribution needed)
 	if networkOpsAmount > 0 {
 		pbe.logger.Debug().
@@ -305,7 +305,7 @@ func (pbe *ProratedBillingEngine) distributeFixedPools() {
 			Msg("Network operations pool allocated to single account")
 		// This goes directly to network operations account
 	}
-	
+
 	// Distribute to app developers (will be handled by real-time app developer distributor)
 	if appDevAmount > 0 {
 		pbe.logger.Debug().
@@ -319,18 +319,18 @@ func (pbe *ProratedBillingEngine) distributeFixedPools() {
 func (pbe *ProratedBillingEngine) distributeInfrastructurePool() {
 	pbe.mu.Lock()
 	defer pbe.mu.Unlock()
-	
+
 	if pbe.infrastructurePool <= 0 {
 		return
 	}
-	
+
 	// TODO: Integrate with real-time usage tracker to get current provider contributions
 	// For now, accumulate in unused funds if no active providers
-	
+
 	// Get current infrastructure usage (this would come from the usage tracker)
 	// If no active providers, add to unused funds
 	hasActiveProviders := false // This would be determined by checking usage tracker
-	
+
 	if !hasActiveProviders {
 		pbe.unusedFunds += pbe.infrastructurePool
 		pbe.logger.Debug().
@@ -343,7 +343,7 @@ func (pbe *ProratedBillingEngine) distributeInfrastructurePool() {
 			Float64("amount", pbe.infrastructurePool).
 			Msg("Distributing infrastructure pool to active providers")
 	}
-	
+
 	pbe.infrastructurePool = 0
 }
 
@@ -351,7 +351,7 @@ func (pbe *ProratedBillingEngine) distributeInfrastructurePool() {
 func (pbe *ProratedBillingEngine) GetCurrentRevenueRate() float64 {
 	pbe.mu.RLock()
 	defer pbe.mu.RUnlock()
-	
+
 	return pbe.revenuePerSecond
 }
 
@@ -359,7 +359,7 @@ func (pbe *ProratedBillingEngine) GetCurrentRevenueRate() float64 {
 func (pbe *ProratedBillingEngine) GetPoolAmounts() map[string]float64 {
 	pbe.mu.RLock()
 	defer pbe.mu.RUnlock()
-	
+
 	return map[string]float64{
 		"content":        pbe.contentPool,
 		"network_ops":    pbe.networkOpsPool,
@@ -373,14 +373,14 @@ func (pbe *ProratedBillingEngine) GetPoolAmounts() map[string]float64 {
 func (pbe *ProratedBillingEngine) GetActiveSubscriptions() map[string]*ProratedSubscription {
 	pbe.mu.RLock()
 	defer pbe.mu.RUnlock()
-	
+
 	// Return a copy to prevent external modification
 	result := make(map[string]*ProratedSubscription)
 	for userID, subscription := range pbe.activeSubscriptions {
 		sub := *subscription
 		result[userID] = &sub
 	}
-	
+
 	return result
 }
 
@@ -388,17 +388,17 @@ func (pbe *ProratedBillingEngine) GetActiveSubscriptions() map[string]*ProratedS
 func (pbe *ProratedBillingEngine) GetStats() *ProratedBillingStats {
 	pbe.mu.RLock()
 	defer pbe.mu.RUnlock()
-	
+
 	activeCount := len(pbe.activeSubscriptions)
-	
+
 	var totalMonthlyRevenue float64
 	tierCounts := make(map[SubscriptionTier]int)
-	
+
 	for _, subscription := range pbe.activeSubscriptions {
 		totalMonthlyRevenue += subscription.MonthlyAmount
 		tierCounts[subscription.Tier]++
 	}
-	
+
 	return &ProratedBillingStats{
 		ActiveSubscriptions:    activeCount,
 		TotalMonthlyRevenue:    totalMonthlyRevenue,

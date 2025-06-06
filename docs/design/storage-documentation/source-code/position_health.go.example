@@ -12,12 +12,12 @@ type PositionHealthMonitor struct {
 	positionMetrics  map[GlobalPosition]*PositionHealthMetrics
 	healthThresholds *HealthThresholds
 	mutex            sync.RWMutex
-	
+
 	// Grace period settings
 	improvementGracePeriod   time.Duration // Time to allow for improvement
 	maxImprovementChances    int           // Maximum chances given before negotiation
 	healthCheckInterval      time.Duration // How often to check health
-	
+
 	// Negotiation triggers
 	autoNegotiationEnabled   bool    // Enable automatic negotiation triggers
 	healthScoreWeight        float64 // Weight of health score in negotiations
@@ -27,31 +27,31 @@ type PositionHealthMonitor struct {
 type PositionHealthMetrics struct {
 	Position         GlobalPosition `json:"position"`
 	OwnerNode        NodeID         `json:"owner_node"`
-	
+
 	// Performance metrics
 	AverageResponseTime   time.Duration `json:"average_response_time"`
 	SuccessRate          float64       `json:"success_rate"`
 	UptimePercentage     float64       `json:"uptime_percentage"`
-	
+
 	// Request tracking
 	TotalRequests        int64         `json:"total_requests"`
 	SuccessfulRequests   int64         `json:"successful_requests"`
 	FailedRequests       int64         `json:"failed_requests"`
-	
+
 	// Availability tracking
 	LastSeenOnline       time.Time     `json:"last_seen_online"`
 	TotalDowntime        time.Duration `json:"total_downtime"`
 	ConsecutiveFailures  int           `json:"consecutive_failures"`
-	
+
 	// Health status
 	HealthScore          float64       `json:"health_score"`
 	HealthStatus         HealthStatus  `json:"health_status"`
-	
+
 	// Improvement tracking
 	ImprovementChancesGiven int         `json:"improvement_chances_given"`
 	LastImprovementChance   time.Time   `json:"last_improvement_chance"`
 	HealthTrend             HealthTrend `json:"health_trend"`
-	
+
 	// Monitoring metadata
 	FirstMonitored       time.Time     `json:"first_monitored"`
 	LastHealthCheck      time.Time     `json:"last_health_check"`
@@ -64,17 +64,17 @@ type HealthThresholds struct {
 	CriticalResponseTime     time.Duration `json:"critical_response_time"`     // 10 seconds
 	CriticalSuccessRate      float64       `json:"critical_success_rate"`      // 50%
 	CriticalUptimePercentage float64       `json:"critical_uptime_percentage"` // 80%
-	
+
 	// Warning thresholds (grace period starts)
 	WarningResponseTime      time.Duration `json:"warning_response_time"`      // 2 seconds
 	WarningSuccessRate       float64       `json:"warning_success_rate"`       // 90%
 	WarningUptimePercentage  float64       `json:"warning_uptime_percentage"`  // 95%
-	
+
 	// Healthy thresholds (good performance)
 	HealthyResponseTime      time.Duration `json:"healthy_response_time"`      // 500ms
 	HealthySuccessRate       float64       `json:"healthy_success_rate"`       // 99%
 	HealthyUptimePercentage  float64       `json:"healthy_uptime_percentage"`  // 99.5%
-	
+
 	// Consecutive failure limits
 	MaxConsecutiveFailures   int           `json:"max_consecutive_failures"`   // 5 failures
 }
@@ -133,17 +133,17 @@ func DefaultHealthThresholds() *HealthThresholds {
 		CriticalResponseTime:     10 * time.Second,
 		CriticalSuccessRate:      0.5,  // 50%
 		CriticalUptimePercentage: 0.8,  // 80%
-		
+
 		// Warning thresholds
 		WarningResponseTime:      2 * time.Second,
 		WarningSuccessRate:       0.9,  // 90%
 		WarningUptimePercentage:  0.95, // 95%
-		
+
 		// Healthy thresholds
 		HealthyResponseTime:      500 * time.Millisecond,
 		HealthySuccessRate:       0.99,  // 99%
 		HealthyUptimePercentage:  0.995, // 99.5%
-		
+
 		// Failure limits
 		MaxConsecutiveFailures:   5,
 	}
@@ -153,9 +153,9 @@ func DefaultHealthThresholds() *HealthThresholds {
 func (phm *PositionHealthMonitor) RecordPositionOperation(position GlobalPosition, ownerNode NodeID, success bool, responseTime time.Duration) {
 	phm.mutex.Lock()
 	defer phm.mutex.Unlock()
-	
+
 	metrics := phm.getOrCreateMetrics(position, ownerNode)
-	
+
 	// Update request counts
 	metrics.TotalRequests++
 	if success {
@@ -165,7 +165,7 @@ func (phm *PositionHealthMonitor) RecordPositionOperation(position GlobalPositio
 		metrics.FailedRequests++
 		metrics.ConsecutiveFailures++
 	}
-	
+
 	// Update response time (moving average)
 	if metrics.AverageResponseTime == 0 {
 		metrics.AverageResponseTime = responseTime
@@ -173,15 +173,15 @@ func (phm *PositionHealthMonitor) RecordPositionOperation(position GlobalPositio
 		// Simple moving average with weight towards recent measurements
 		metrics.AverageResponseTime = (metrics.AverageResponseTime*9 + responseTime) / 10
 	}
-	
+
 	// Update success rate
 	metrics.SuccessRate = float64(metrics.SuccessfulRequests) / float64(metrics.TotalRequests)
-	
+
 	// Update last seen if successful
 	if success {
 		metrics.LastSeenOnline = time.Now()
 	}
-	
+
 	// Recalculate health score and status
 	phm.updateHealthStatus(metrics)
 }
@@ -190,19 +190,19 @@ func (phm *PositionHealthMonitor) RecordPositionOperation(position GlobalPositio
 func (phm *PositionHealthMonitor) RecordNodeDowntime(nodeID NodeID, downtime time.Duration) {
 	phm.mutex.Lock()
 	defer phm.mutex.Unlock()
-	
+
 	// Update all positions owned by this node
 	for _, metrics := range phm.positionMetrics {
 		if metrics.OwnerNode == nodeID {
 			metrics.TotalDowntime += downtime
-			
+
 			// Recalculate uptime percentage
 			totalTime := time.Since(metrics.FirstMonitored)
 			if totalTime > 0 {
 				uptime := totalTime - metrics.TotalDowntime
 				metrics.UptimePercentage = float64(uptime) / float64(totalTime)
 			}
-			
+
 			// Update health status
 			phm.updateHealthStatus(metrics)
 		}
@@ -219,7 +219,7 @@ func (phm *PositionHealthMonitor) getOrCreateMetrics(position GlobalPosition, ow
 		}
 		return metrics
 	}
-	
+
 	// Create new metrics
 	now := time.Now()
 	metrics := &PositionHealthMetrics{
@@ -234,7 +234,7 @@ func (phm *PositionHealthMonitor) getOrCreateMetrics(position GlobalPosition, ow
 		LastHealthCheck:         now,
 		NextNegotiationCheck:    now.Add(phm.improvementGracePeriod),
 	}
-	
+
 	phm.positionMetrics[position] = metrics
 	return metrics
 }
@@ -243,10 +243,10 @@ func (phm *PositionHealthMonitor) getOrCreateMetrics(position GlobalPosition, ow
 func (phm *PositionHealthMonitor) updateHealthStatus(metrics *PositionHealthMetrics) {
 	thresholds := phm.healthThresholds
 	now := time.Now()
-	
+
 	// Calculate health score (0.0 to 1.0)
 	healthScore := 0.0
-	
+
 	// Response time component (0.0 to 0.33)
 	if metrics.AverageResponseTime <= thresholds.HealthyResponseTime {
 		healthScore += 0.33
@@ -256,7 +256,7 @@ func (phm *PositionHealthMonitor) updateHealthStatus(metrics *PositionHealthMetr
 		healthScore += 0.11
 	}
 	// else 0 points for response time
-	
+
 	// Success rate component (0.0 to 0.33)
 	if metrics.SuccessRate >= thresholds.HealthySuccessRate {
 		healthScore += 0.33
@@ -266,7 +266,7 @@ func (phm *PositionHealthMonitor) updateHealthStatus(metrics *PositionHealthMetr
 		healthScore += 0.11
 	}
 	// else 0 points for success rate
-	
+
 	// Uptime component (0.0 to 0.34)
 	if metrics.UptimePercentage >= thresholds.HealthyUptimePercentage {
 		healthScore += 0.34
@@ -276,11 +276,11 @@ func (phm *PositionHealthMonitor) updateHealthStatus(metrics *PositionHealthMetr
 		healthScore += 0.11
 	}
 	// else 0 points for uptime
-	
+
 	// Store previous health score for trend calculation
 	previousScore := metrics.HealthScore
 	metrics.HealthScore = healthScore
-	
+
 	// Calculate health trend
 	if previousScore > 0 {
 		if healthScore > previousScore+0.05 {
@@ -291,10 +291,10 @@ func (phm *PositionHealthMonitor) updateHealthStatus(metrics *PositionHealthMetr
 			metrics.HealthTrend = TrendStable
 		}
 	}
-	
+
 	// Determine health status
 	previousStatus := metrics.HealthStatus
-	
+
 	if metrics.ConsecutiveFailures >= thresholds.MaxConsecutiveFailures {
 		metrics.HealthStatus = HealthFailed
 	} else if metrics.AverageResponseTime > thresholds.CriticalResponseTime ||
@@ -312,9 +312,9 @@ func (phm *PositionHealthMonitor) updateHealthStatus(metrics *PositionHealthMetr
 	} else {
 		metrics.HealthStatus = HealthGood
 	}
-	
+
 	metrics.LastHealthCheck = now
-	
+
 	// Check if health status degraded and we need to start grace period
 	if phm.isHealthDegraded(previousStatus, metrics.HealthStatus) {
 		phm.handleHealthDegradation(metrics)
@@ -330,20 +330,20 @@ func (phm *PositionHealthMonitor) isHealthDegraded(previous, current HealthStatu
 		HealthCritical:  1,
 		HealthFailed:    0,
 	}
-	
+
 	return statusOrder[current] < statusOrder[previous]
 }
 
 // handleHealthDegradation handles when a position's health degrades
 func (phm *PositionHealthMonitor) handleHealthDegradation(metrics *PositionHealthMetrics) {
 	now := time.Now()
-	
+
 	// If this is the first degradation or grace period expired, start new grace period
 	if metrics.ImprovementChancesGiven == 0 || now.After(metrics.NextNegotiationCheck) {
 		metrics.ImprovementChancesGiven++
 		metrics.LastImprovementChance = now
 		metrics.NextNegotiationCheck = now.Add(phm.improvementGracePeriod)
-		
+
 		// Log the improvement opportunity
 		fmt.Printf("Position %d health degraded to %s. Giving improvement chance %d/%d to node %s\n",
 			metrics.Position, metrics.HealthStatus, metrics.ImprovementChancesGiven, phm.maxImprovementChances, metrics.OwnerNode)
@@ -355,17 +355,17 @@ func (phm *PositionHealthMonitor) CheckForNegotiationTriggers() []*HealthTrigger
 	if !phm.autoNegotiationEnabled {
 		return nil
 	}
-	
+
 	phm.mutex.RLock()
 	defer phm.mutex.RUnlock()
-	
+
 	var triggers []*HealthTriggeredNegotiation
 	now := time.Now()
-	
+
 	for position, metrics := range phm.positionMetrics {
 		// Check if negotiation should be triggered
 		shouldTrigger, reason := phm.shouldTriggerNegotiation(metrics, now)
-		
+
 		if shouldTrigger {
 			trigger := &HealthTriggeredNegotiation{
 				Position:               position,
@@ -376,11 +376,11 @@ func (phm *PositionHealthMonitor) CheckForNegotiationTriggers() []*HealthTrigger
 				GracePeriodExpired:     now.After(metrics.NextNegotiationCheck),
 				TriggeredAt:           now,
 			}
-			
+
 			triggers = append(triggers, trigger)
 		}
 	}
-	
+
 	return triggers
 }
 
@@ -390,31 +390,31 @@ func (phm *PositionHealthMonitor) shouldTriggerNegotiation(metrics *PositionHeal
 	if metrics.HealthStatus == HealthFailed {
 		return true, "position failed - immediate handover required"
 	}
-	
+
 	if metrics.HealthStatus == HealthCritical {
 		// If critical and already given max chances
 		if metrics.ImprovementChancesGiven >= phm.maxImprovementChances {
 			return true, "critical health after maximum improvement chances"
 		}
-		
+
 		// If critical and grace period expired
 		if metrics.ImprovementChancesGiven > 0 && now.After(metrics.NextNegotiationCheck) {
 			return true, "critical health with expired grace period"
 		}
 	}
-	
+
 	// Warning level with exhausted improvement chances
 	if metrics.HealthStatus == HealthWarning {
 		if metrics.ImprovementChancesGiven >= phm.maxImprovementChances && now.After(metrics.NextNegotiationCheck) {
 			return true, "warning health after maximum improvement chances"
 		}
 	}
-	
+
 	// Declining trend with multiple chances used
 	if metrics.HealthTrend == TrendDeclining && metrics.ImprovementChancesGiven >= 2 && now.After(metrics.NextNegotiationCheck) {
 		return true, "consistently declining health trend"
 	}
-	
+
 	return false, ""
 }
 
@@ -422,7 +422,7 @@ func (phm *PositionHealthMonitor) shouldTriggerNegotiation(metrics *PositionHeal
 func (phm *PositionHealthMonitor) GetPositionHealth(position GlobalPosition) (*PositionHealthMetrics, bool) {
 	phm.mutex.RLock()
 	defer phm.mutex.RUnlock()
-	
+
 	metrics, exists := phm.positionMetrics[position]
 	return metrics, exists
 }
@@ -431,14 +431,14 @@ func (phm *PositionHealthMonitor) GetPositionHealth(position GlobalPosition) (*P
 func (phm *PositionHealthMonitor) GetAllPositionHealth() map[GlobalPosition]*PositionHealthMetrics {
 	phm.mutex.RLock()
 	defer phm.mutex.RUnlock()
-	
+
 	// Return a copy to avoid race conditions
 	healthCopy := make(map[GlobalPosition]*PositionHealthMetrics)
 	for position, metrics := range phm.positionMetrics {
 		metricsCopy := *metrics
 		healthCopy[position] = &metricsCopy
 	}
-	
+
 	return healthCopy
 }
 
@@ -446,25 +446,25 @@ func (phm *PositionHealthMonitor) GetAllPositionHealth() map[GlobalPosition]*Pos
 func (phm *PositionHealthMonitor) GetHealthSummary() map[string]interface{} {
 	phm.mutex.RLock()
 	defer phm.mutex.RUnlock()
-	
+
 	statusCounts := make(map[HealthStatus]int)
 	trendCounts := make(map[HealthTrend]int)
 	totalScore := 0.0
 	totalPositions := len(phm.positionMetrics)
 	improvementChancesTotal := 0
-	
+
 	for _, metrics := range phm.positionMetrics {
 		statusCounts[metrics.HealthStatus]++
 		trendCounts[metrics.HealthTrend]++
 		totalScore += metrics.HealthScore
 		improvementChancesTotal += metrics.ImprovementChancesGiven
 	}
-	
+
 	var averageScore float64
 	if totalPositions > 0 {
 		averageScore = totalScore / float64(totalPositions)
 	}
-	
+
 	return map[string]interface{}{
 		"total_positions":              totalPositions,
 		"average_health_score":         averageScore,

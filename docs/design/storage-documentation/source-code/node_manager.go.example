@@ -15,10 +15,10 @@ type NodeManager struct {
 	mutex           sync.RWMutex
 	bucketSystem    *SimpleBucketSystem
 	localNodeID     NodeID
-	
+
 	// Advanced negotiation engine for mature networks
 	negotiationEngine *PositionNegotiationEngine
-	
+
 	// Position health monitoring
 	healthMonitor *PositionHealthMonitor
 }
@@ -94,13 +94,13 @@ func NewNodeManager(bucketSystem *SimpleBucketSystem, localNodeID NodeID) *NodeM
 		bucketSystem:   bucketSystem,
 		localNodeID:    localNodeID,
 	}
-	
+
 	// Initialize health monitor
 	nm.healthMonitor = NewPositionHealthMonitor(nm)
-	
+
 	// Initialize negotiation engine
 	nm.negotiationEngine = NewPositionNegotiationEngine(nm)
-	
+
 	return nm
 }
 
@@ -113,7 +113,7 @@ func (nm *NodeManager) RegisterNode(nodeInfo *NodeDetails) error {
 	if _, exists := nm.nodes[nodeInfo.ID]; !exists {
 		nodeInfo.JoinedAt = time.Now()
 		nodeInfo.LastSeen = time.Now()
-		
+
 		// Initialize reputation
 		nm.reputations[nodeInfo.ID] = &NodeReputation{
 			OnlineTime:       1.0, // Start with perfect uptime
@@ -126,11 +126,11 @@ func (nm *NodeManager) RegisterNode(nodeInfo *NodeDetails) error {
 			LastUpdated:      time.Now(),
 			SuccessRate:      1.0, // Start with perfect success rate
 		}
-		
+
 		// Initialize empty position claims
 		nm.positionClaims[nodeInfo.ID] = make([]GlobalPosition, 0)
 	}
-	
+
 	nm.nodes[nodeInfo.ID] = nodeInfo
 	return nil
 }
@@ -156,7 +156,7 @@ func (nm *NodeManager) ClaimPositions(nodeID NodeID) (*PositionClaimResult, erro
 
 	// Generate candidate positions to claim
 	candidatePositions := nm.generateCandidatePositions(node, positionsToClaimCount)
-	
+
 	claimedPositions := make([]GlobalPosition, 0)
 	failedPositions := make([]GlobalPosition, 0)
 
@@ -185,25 +185,25 @@ func (nm *NodeManager) ClaimPositions(nodeID NodeID) (*PositionClaimResult, erro
 // calculatePositionsToClaim determines how many positions a node should claim
 func (nm *NodeManager) calculatePositionsToClaim(node *NodeDetails) int {
 	currentPositions := len(node.ClaimedPositions)
-	
+
 	switch node.PositionStrategy.Type {
 	case ConservativeStrategy:
 		// Conservative: 10GB per position with 50% buffer
 		targetPositions := int(node.AvailableStorage / (10 * 1024 * 1024 * 1024)) // 10GB
 		targetPositions = int(float64(targetPositions) * 0.5) // 50% buffer
 		return max(0, targetPositions - currentPositions)
-		
+
 	case AggressiveStrategy:
 		// Aggressive: 1GB per position with 10% buffer
 		targetPositions := int(node.AvailableStorage / (1 * 1024 * 1024 * 1024)) // 1GB
 		targetPositions = int(float64(targetPositions) * 0.9) // 10% buffer
 		return max(0, targetPositions - currentPositions)
-		
+
 	case DynamicStrategy:
 		// Dynamic: Adjust based on current fill rate
 		usedStorage := node.StorageCapacity - node.AvailableStorage
 		fillRate := float64(usedStorage) / float64(node.StorageCapacity)
-		
+
 		if fillRate < 0.5 {
 			// Under-utilized, claim more aggressively
 			targetPositions := int(node.AvailableStorage / (2 * 1024 * 1024 * 1024)) // 2GB
@@ -216,14 +216,14 @@ func (nm *NodeManager) calculatePositionsToClaim(node *NodeDetails) int {
 			targetPositions := int(node.AvailableStorage / (5 * 1024 * 1024 * 1024)) // 5GB
 			return max(0, targetPositions - currentPositions)
 		}
-		
+
 	case ReputationStrategy:
 		// Reputation-based: Claim based on reputation level
 		reputation := nm.reputations[node.ID]
 		if reputation == nil {
 			return 0
 		}
-		
+
 		// Higher reputation allows more positions
 		var maxPositions int
 		if reputation.TotalScore >= 0.9 {
@@ -235,28 +235,28 @@ func (nm *NodeManager) calculatePositionsToClaim(node *NodeDetails) int {
 		} else {
 			maxPositions = 100    // New node
 		}
-		
+
 		targetPositions := int(node.AvailableStorage / (5 * 1024 * 1024 * 1024)) // 5GB default
 		targetPositions = min(targetPositions, maxPositions)
 		return max(0, targetPositions - currentPositions)
 	}
-	
+
 	return 0
 }
 
 // generateCandidatePositions creates a list of positions the node could claim
 func (nm *NodeManager) generateCandidatePositions(node *NodeDetails, count int) []GlobalPosition {
 	candidates := make([]GlobalPosition, 0, count)
-	
+
 	// Use node ID as seed for deterministic but unique position selection
 	nodeHash := hashString(string(node.ID))
-	
+
 	// Generate positions starting from node's hash
 	for i := 0; i < count && len(candidates) < count; i++ {
 		candidate := GlobalPosition((nodeHash + uint64(i)) % TotalPositions)
 		candidates = append(candidates, candidate)
 	}
-	
+
 	return candidates
 }
 
@@ -267,7 +267,7 @@ func (nm *NodeManager) tryClaimPosition(nodeID NodeID, position GlobalPosition) 
 		// Position is claimed, check if we can compete for it
 		return nm.competeForPosition(nodeID, existingOwner, position)
 	}
-	
+
 	// Position is available
 	return true
 }
@@ -279,14 +279,14 @@ func (nm *NodeManager) competeForPosition(challengerID, currentOwnerID NodeID, p
 	if err != nil {
 		return false // Failed to negotiate, challenger doesn't get position
 	}
-	
+
 	// Check if challenger won the negotiation
 	if negotiationResult.WinningNode == challengerID {
 		// Transfer position to challenger
 		nm.transferPosition(currentOwnerID, challengerID, position)
 		return true
 	}
-	
+
 	return false // Owner keeps position
 }
 
@@ -301,11 +301,11 @@ func (nm *NodeManager) transferPosition(fromNodeID, toNodeID NodeID, position Gl
 			}
 		}
 	}
-	
+
 	// Add to new owner
 	nm.positionClaims[toNodeID] = append(nm.positionClaims[toNodeID], position)
 	nm.positionOwners[position] = toNodeID
-	
+
 	// Update node info
 	if fromNode := nm.nodes[fromNodeID]; fromNode != nil {
 		fromNode.ClaimedPositions = nm.positionClaims[fromNodeID]
@@ -319,7 +319,7 @@ func (nm *NodeManager) transferPosition(fromNodeID, toNodeID NodeID, position Gl
 func (nm *NodeManager) GetNodeForPosition(position GlobalPosition) (NodeID, bool) {
 	nm.mutex.RLock()
 	defer nm.mutex.RUnlock()
-	
+
 	nodeID, exists := nm.positionOwners[position]
 	return nodeID, exists
 }
@@ -327,7 +327,7 @@ func (nm *NodeManager) GetNodeForPosition(position GlobalPosition) (NodeID, bool
 // GetNodesForChunk returns nodes that can store a chunk (primary, secondary, tertiary)
 func (nm *NodeManager) GetNodesForChunk(chunkID ChunkCID) []NodeID {
 	locations := nm.bucketSystem.GetStorageLocations(chunkID)
-	
+
 	nodes := make([]NodeID, 0, 3)
 	if nodeID, exists := nm.GetNodeForPosition(locations.Primary.Global); exists {
 		nodes = append(nodes, nodeID)
@@ -338,7 +338,7 @@ func (nm *NodeManager) GetNodesForChunk(chunkID ChunkCID) []NodeID {
 	if nodeID, exists := nm.GetNodeForPosition(locations.Tertiary.Global); exists {
 		nodes = append(nodes, nodeID)
 	}
-	
+
 	return nodes
 }
 
@@ -346,47 +346,47 @@ func (nm *NodeManager) GetNodesForChunk(chunkID ChunkCID) []NodeID {
 func (nm *NodeManager) UpdateNodeReputation(nodeID NodeID, success bool, responseTime time.Duration) {
 	nm.mutex.Lock()
 	defer nm.mutex.Unlock()
-	
+
 	rep, exists := nm.reputations[nodeID]
 	if !exists {
 		return
 	}
-	
+
 	node := nm.nodes[nodeID]
 	if node == nil {
 		return
 	}
-	
+
 	// Update counters
 	if success {
 		node.SuccessCount++
 	} else {
 		node.FailureCount++
 	}
-	
+
 	// Update reputation metrics
 	totalOperations := node.SuccessCount + node.FailureCount
 	rep.SuccessRate = float64(node.SuccessCount) / float64(totalOperations)
 	rep.ChunksServed = int64(node.SuccessCount)
-	
+
 	// Update response time (moving average)
 	if responseTime > 0 {
 		rep.ResponseTime = (rep.ResponseTime + responseTime) / 2
 		node.AverageResponseTime = rep.ResponseTime
 	}
-	
+
 	// Calculate performance score (0.0-1.0)
 	// Based on success rate and response time
 	successScore := rep.SuccessRate
 	responseScore := 1.0 - minFloat(1.0, float64(rep.ResponseTime.Milliseconds())/1000.0) // 1s = 0.0 score
 	rep.PerformanceScore = (successScore + responseScore) / 2.0
-	
+
 	// Calculate reliability score based on uptime and consistency
 	uptime := time.Since(node.JoinedAt)
 	node.TotalUptime = uptime // Simplified - in real system would track actual uptime
 	rep.OnlineTime = 1.0 // Simplified - would track real uptime percentage
 	rep.ReliabilityScore = rep.OnlineTime * rep.SuccessRate
-	
+
 	// Calculate total reputation score
 	rep.TotalScore = (rep.ReliabilityScore + rep.PerformanceScore) / 2.0
 	rep.PositionCount = len(node.ClaimedPositions)
@@ -397,12 +397,12 @@ func (nm *NodeManager) UpdateNodeReputation(nodeID NodeID, success bool, respons
 func (nm *NodeManager) GetNodeStats(nodeID NodeID) (*NodeDetails, *NodeReputation, error) {
 	nm.mutex.RLock()
 	defer nm.mutex.RUnlock()
-	
+
 	node, exists := nm.nodes[nodeID]
 	if !exists {
 		return nil, nil, fmt.Errorf("node %s not found", nodeID)
 	}
-	
+
 	reputation := nm.reputations[nodeID]
 	return node, reputation, nil
 }
@@ -411,7 +411,7 @@ func (nm *NodeManager) GetNodeStats(nodeID NodeID) (*NodeDetails, *NodeReputatio
 func (nm *NodeManager) ListNodes() map[NodeID]*NodeDetails {
 	nm.mutex.RLock()
 	defer nm.mutex.RUnlock()
-	
+
 	// Return copy to avoid race conditions
 	nodes := make(map[NodeID]*NodeDetails)
 	for id, node := range nm.nodes {
@@ -501,12 +501,12 @@ func minFloat(a, b float64) float64 {
 func (nm *NodeManager) CanClaimMorePositions(nodeID NodeID) bool {
 	nm.mutex.RLock()
 	defer nm.mutex.RUnlock()
-	
+
 	node, exists := nm.nodes[nodeID]
 	if !exists {
 		return false
 	}
-	
+
 	positionsToClaimCount := nm.calculatePositionsToClaim(node)
 	return positionsToClaimCount > 0
 }
@@ -515,19 +515,19 @@ func (nm *NodeManager) CanClaimMorePositions(nodeID NodeID) bool {
 func (nm *NodeManager) ClaimSpecificPosition(nodeID NodeID, position GlobalPosition) error {
 	nm.mutex.Lock()
 	defer nm.mutex.Unlock()
-	
+
 	node, exists := nm.nodes[nodeID]
 	if !exists {
 		return fmt.Errorf("node %s not found", nodeID)
 	}
-	
+
 	// Check if position is already claimed by this node
 	for _, claimedPos := range nm.positionClaims[nodeID] {
 		if claimedPos == position {
 			return nil // Already claimed by this node
 		}
 	}
-	
+
 	// Try to claim the position
 	if nm.tryClaimPosition(nodeID, position) {
 		nm.positionOwners[position] = nodeID
@@ -535,7 +535,7 @@ func (nm *NodeManager) ClaimSpecificPosition(nodeID NodeID, position GlobalPosit
 		node.ClaimedPositions = nm.positionClaims[nodeID]
 		return nil
 	}
-	
+
 	return fmt.Errorf("failed to claim position %d", position)
 }
 

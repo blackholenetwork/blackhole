@@ -16,7 +16,7 @@ economic:
     billing_cycle: "monthly"            # monthly, weekly, daily
     currency: "USD"                     # Base currency for all operations
     timezone: "UTC"                     # Timezone for billing calculations
-    
+
   # Subscription tier definitions
   subscription_tiers:
     free:
@@ -39,14 +39,14 @@ economic:
       storage_quota_gb: 1000.0
       bandwidth_quota_gb: 2000.0
       compute_quota_hours: 200.0
-      
+
   # Revenue distribution percentages
   distribution:
     content_creator_percentage: 70.0    # Fixed allocation to content creators
     network_ops_percentage: 2.5         # Fixed allocation to network operations
     app_developer_percentage: 2.5       # Fixed allocation to app developers
     infrastructure_percentage: 25.0     # Remaining for infrastructure providers
-    
+
   # Market-based pricing rates (AWS-compatible)
   market_rates:
     storage_per_gb_month: 0.023         # S3 Standard pricing
@@ -57,7 +57,7 @@ economic:
     storage_write_per_1k: 0.005         # Write operation pricing
     content_delivery_per_gb: 0.085      # CloudFront equivalent
     gpu_compute_per_hour: 2.50          # GPU instance pricing
-    
+
   # Content economy configuration
   content_economy:
     enabled: true
@@ -68,70 +68,70 @@ economic:
     marketplace_fee_rate: 0.025         # 2.5% platform fee
     tip_investor_share: 0.10            # 10% of tips shared with investors
     investment_threshold: 10.00         # Minimum investment amount
-    
+
   # Real-time billing configuration
   realtime_billing:
     enabled: true
     distribution_interval_seconds: 1    # How often to distribute rewards
     aggregation_window_seconds: 60      # Usage aggregation window
     max_pending_distributions: 1000    # Maximum queued distributions
-    
+
   # Persistence and audit configuration
   persistence:
     retention_period: "7y"              # 7 years for regulatory compliance
     audit_level: "full"                 # none, basic, full
     encryption_enabled: true            # Encrypt sensitive data
     backup_interval: "24h"              # Backup frequency
-    
+
   # Payment processing configuration
   payment_processor:
     provider: "stripe"                  # stripe, mock, custom
     webhook_endpoint: "/api/v1/webhooks/payments"
     retry_attempts: 3
     retry_delay_seconds: 30
-    
+
   # Payment processor specific configs
   stripe:
     public_key: "${STRIPE_PUBLIC_KEY}"
     secret_key: "${STRIPE_SECRET_KEY}"
     webhook_secret: "${STRIPE_WEBHOOK_SECRET}"
-    
+
   # Efficiency and performance settings
   efficiency:
     provider_efficiency_threshold: 0.80  # Minimum efficiency for bonuses
     efficiency_bonus_percentage: 0.20    # 20% bonus for efficient providers
     market_rate_update_interval: "1h"    # How often to update market rates
-    
+
   # Compliance and regulatory settings
   compliance:
     gdpr_enabled: true                   # GDPR compliance features
     data_residency: "auto"               # auto, EU, US, specific region
     audit_retention_years: 7             # Audit data retention
     regulatory_reporting: true           # Generate regulatory reports
-    
+
   # Dashboard and analytics configuration
   dashboard:
     realtime_updates: true               # Enable WebSocket updates
     cache_duration_seconds: 300          # Dashboard data cache duration
     max_concurrent_streams: 1000         # Max WebSocket connections
-    
+
   # Advanced features
   advanced:
     dynamic_pricing: false               # Enable dynamic market pricing
     prediction_engine: false             # Enable revenue prediction
     fraud_detection: true                # Enable fraud detection
     automated_payouts: true              # Enable automatic payouts
-    
+
   # Resource-specific configurations
   resources:
     storage:
       efficiency_weight: 0.35            # Weight in efficiency calculations
       base_allocation_percentage: 8.75   # % of infrastructure pool
-      
+
     bandwidth:
       efficiency_weight: 0.40            # Weight in efficiency calculations
       base_allocation_percentage: 10.0   # % of infrastructure pool
-      
+
     compute:
       efficiency_weight: 0.25            # Weight in efficiency calculations
       base_allocation_percentage: 6.25   # % of infrastructure pool
@@ -169,7 +169,7 @@ economic:
   core:
     use_realtime_billing: false         # Use simpler monthly billing for dev
     currency: "USD"
-    
+
   subscription_tiers:
     free:
       price: 0.00
@@ -178,20 +178,20 @@ economic:
     normal:
       price: 1.00                       # Lower prices for testing
       storage_quota_gb: 100.0
-      
+
   market_rates:
     storage_per_gb_month: 0.001         # Reduced rates for development
     bandwidth_per_gb: 0.01
     compute_per_cpu_hour: 0.005
-    
+
   payment_processor:
     provider: "mock"                    # Use mock payments in development
-    
+
   persistence:
     retention_period: "30d"             # Shorter retention for development
     audit_level: "basic"
     encryption_enabled: false           # Disable encryption for easier debugging
-    
+
   compliance:
     gdpr_enabled: false                 # Disable compliance features
     regulatory_reporting: false
@@ -204,25 +204,25 @@ economic:
   core:
     use_realtime_billing: true          # Full real-time billing
     currency: "USD"
-    
+
   subscription_tiers:
     # Production pricing as defined above
-    
+
   market_rates:
     # Full AWS-compatible pricing
-    
+
   payment_processor:
     provider: "stripe"                  # Real payment processing
-    
+
   persistence:
     retention_period: "7y"              # Full regulatory compliance
     audit_level: "full"
     encryption_enabled: true
-    
+
   compliance:
     gdpr_enabled: true                  # Full compliance features
     regulatory_reporting: true
-    
+
   advanced:
     dynamic_pricing: true               # Enable advanced features
     prediction_engine: true
@@ -237,13 +237,13 @@ The system validates configuration on startup:
 type ConfigValidationRules struct {
     // Percentages must sum to 100
     DistributionPercentagesSum float64 `validate:"eq=100"`
-    
+
     // Subscription prices must be non-negative
     SubscriptionPrices []float64 `validate:"dive,gte=0"`
-    
+
     // Market rates must be positive
     MarketRates map[string]float64 `validate:"dive,gt=0"`
-    
+
     // Content economy limits
     MaxInvestorsPerCreator int `validate:"gte=1,lte=10000"`
     InvestmentThreshold float64 `validate:"gte=0.01"`
