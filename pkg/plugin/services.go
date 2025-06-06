@@ -113,8 +113,11 @@ func GetStorageService(registry *Registry) (StorageService, error) {
 		return nil, errors.New("no storage service available")
 	}
 
-	// Type assertion needed: GetByCapability returns []Plugin
-	service, ok := plugins[0].(StorageService)
+	// Type assertion is necessary because Plugin interface doesn't guarantee StorageService
+	// Even though plugins with CapabilityStorage should implement StorageService,
+	// this is a runtime convention, not a compile-time guarantee
+	plugin := plugins[0]
+	service, ok := plugin.(StorageService) //nolint:gocritic // false positive - interfaces are different
 	if !ok {
 		return nil, errors.New("storage plugin does not implement StorageService")
 	}
@@ -129,7 +132,9 @@ func GetNetworkService(registry *Registry) (NetworkService, error) {
 		return nil, errors.New("no network service available")
 	}
 
-	service, ok := plugins[0].(NetworkService)
+	// Type assertion is necessary - Plugin interface doesn't guarantee NetworkService
+	plugin := plugins[0]
+	service, ok := plugin.(NetworkService) //nolint:gocritic // false positive - interfaces are different
 	if !ok {
 		return nil, errors.New("network plugin does not implement NetworkService")
 	}
@@ -144,7 +149,9 @@ func GetComputeService(registry *Registry) (ComputeService, error) {
 		return nil, errors.New("no compute service available")
 	}
 
-	service, ok := plugins[0].(ComputeService)
+	// Type assertion is necessary - Plugin interface doesn't guarantee ComputeService
+	plugin := plugins[0]
+	service, ok := plugin.(ComputeService) //nolint:gocritic // false positive - interfaces are different
 	if !ok {
 		return nil, errors.New("compute plugin does not implement ComputeService")
 	}

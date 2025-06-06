@@ -103,7 +103,7 @@ repos:
 
       - id: go-licenses
         name: Check Go Licenses
-        entry: bash -c 'command -v go-licenses >/dev/null && go-licenses check ./... || echo "Skipping: go-licenses not installed"'
+        entry: bash -c "command -v go-licenses >/dev/null && go-licenses check ./... || echo 'Skipping: go-licenses not installed'"
         language: system
         types: [go]
         pass_filenames: false

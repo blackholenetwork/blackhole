@@ -30,13 +30,12 @@ repos:
     rev: v0.5.1
     hooks:
       - id: go-fmt
-      - id: go-vet
+      # - id: go-vet  # Moved to local hooks due to directory issues
       - id: go-imports
         args: ['-local', 'github.com/blackholenetwork/blackhole']
       - id: go-cyclo
         args: ['-over', '15']
       - id: golangci-lint
-        args: ['--config', '.golangci.yml']
       - id: go-mod-tidy
       - id: go-unit-tests
       - id: go-build
@@ -80,6 +79,13 @@ repos:
   # Local hooks
   - repo: local
     hooks:
+      - id: go-vet
+        name: Go Vet
+        entry: go vet ./...
+        language: system
+        types: [go]
+        pass_filenames: false
+
       - id: go-test-coverage
         name: Check Test Coverage
         entry: bash -c 'echo "=== CHECKING TEST COVERAGE ===" && packages_without_tests=$(go test ./... 2>&1 | grep "\[no test files\]" | awk "{print \$2}" | sort) && if [ ! -z "$packages_without_tests" ]; then echo "❌ MISSING TESTS in the following packages:" && echo "$packages_without_tests" | sed "s/^/  - /" && echo "" && echo "⚠️  Please add tests for consistency and quality!" && exit 1; else echo "✅ All packages with code have tests!" && exit 0; fi'
@@ -110,7 +116,7 @@ repos:
 
       - id: go-security
         name: Go Security Check
-        entry: gosec -conf .gosec.toml -quiet ./...
+        entry: gosec -quiet ./...
         language: system
         types: [go]
         pass_filenames: false
