@@ -19,6 +19,7 @@ type Cache[K comparable, V any] struct {
 type item[V any] struct {
 	value      V
 	expiration time.Time
+	createdAt  time.Time // Add creation time for better eviction policy
 }
 
 // Option configures cache behavior
@@ -58,6 +59,7 @@ func (c *Cache[K, V]) Set(key K, value V) {
 	c.items[key] = &item[V]{
 		value:      value,
 		expiration: expiration,
+		createdAt:  time.Now(),
 	}
 
 	// Evict oldest if over size limit
@@ -161,16 +163,17 @@ func (c *Cache[K, V]) cleanup() {
 	}
 }
 
-// evictOldest removes the oldest item (simple implementation)
+// evictOldest removes the oldest item based on creation time
 func (c *Cache[K, V]) evictOldest() {
 	var oldestKey K
 	var oldestTime time.Time
 	first := true
 
 	for k, item := range c.items {
-		if first || item.expiration.Before(oldestTime) {
+		// Use creation time for eviction policy to ensure deterministic behavior
+		if first || item.createdAt.Before(oldestTime) {
 			oldestKey = k
-			oldestTime = item.expiration
+			oldestTime = item.createdAt
 			first = false
 		}
 	}
