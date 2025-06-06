@@ -21,17 +21,13 @@ import (
 // Plugin implements security functionality as a plugin
 type Plugin struct {
 	*plugin.BasePlugin
-	mu            sync.RWMutex
-	config        plugin.Config
-	keyPair       *KeyPair
-	identities    map[string]*Identity
-	sessions      map[string]*Session
-	permissions   map[string]*Permission
-	started       bool
-	registry      *plugin.Registry
-	healthStatus  plugin.HealthStatus
-	healthMessage string
-	logger        *log.Logger
+	mu           sync.RWMutex
+	keyPair      *KeyPair
+	identities   map[string]*Identity
+	sessions     map[string]*Session
+	permissions  map[string]*Permission
+	registry     *plugin.Registry
+	logger       *log.Logger
 }
 
 // KeyPair represents a cryptographic key pair
@@ -106,16 +102,20 @@ func NewPlugin(registry *plugin.Registry) *Plugin {
 	}
 
 	sp := &Plugin{
-		BasePlugin:    plugin.NewBasePlugin(info),
-		identities:    make(map[string]*Identity),
-		sessions:      make(map[string]*Session),
-		permissions:   make(map[string]*Permission),
-		registry:      registry,
-		healthStatus:  plugin.HealthStatusUnknown,
-		healthMessage: "Not initialized",
-		logger:        log.New(os.Stdout, "[Security] ", log.LstdFlags),
+		BasePlugin:  plugin.NewBasePlugin(info),
+		identities:  make(map[string]*Identity),
+		sessions:    make(map[string]*Session),
+		permissions: make(map[string]*Permission),
+		registry:    registry,
+		logger:      log.New(os.Stdout, "[Security] ", log.LstdFlags),
 	}
 	sp.SetRegistry(registry)
+
+	// Register lifecycle hooks
+	sp.RegisterHook(plugin.HookPreStart, sp.preStartHook)
+	sp.RegisterHook(plugin.HookPostStart, sp.postStartHook)
+	sp.RegisterHook(plugin.HookPreStop, sp.preStopHook)
+
 	return sp
 }
 
@@ -135,11 +135,14 @@ func (sp *Plugin) Info() plugin.Info {
 }
 
 // Init initializes the plugin with configuration
-func (sp *Plugin) Init(_ context.Context, config plugin.Config) error {
+func (sp *Plugin) Init(ctx context.Context, config plugin.Config) error {
+	// Call BasePlugin Init first
+	if err := sp.BasePlugin.Init(ctx, config); err != nil {
+		return err
+	}
+
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
-
-	sp.config = config
 
 	// Generate or load node key pair
 	if err := sp.initializeKeyPair(); err != nil {
@@ -156,52 +159,27 @@ func (sp *Plugin) Init(_ context.Context, config plugin.Config) error {
 		return fmt.Errorf("failed to initialize permissions: %w", err)
 	}
 
-	// Update health status
-	sp.healthStatus = plugin.HealthStatusHealthy
-	sp.healthMessage = "Security initialized"
-	sp.SetHealth(sp.healthStatus, sp.healthMessage)
-
+	sp.logger.Println("Security plugin initialized successfully")
 	return nil
 }
 
-// Start starts the plugin
-func (sp *Plugin) Start(_ context.Context) error {
-	sp.mu.Lock()
-	defer sp.mu.Unlock()
-
-	if sp.started {
-		return fmt.Errorf("security plugin already started")
-	}
-
-	// Start any background tasks here
-	// For now, just mark as started
-	sp.started = true
-
-	// Update and publish initial health status
-	sp.healthStatus = plugin.HealthStatusHealthy
-	sp.healthMessage = "Security operational (node identity active)"
-	sp.SetHealth(sp.healthStatus, sp.healthMessage)
-
+// preStartHook is called before the plugin starts
+func (sp *Plugin) preStartHook(ctx context.Context, data interface{}) error {
+	sp.logger.Println("Preparing security plugin for startup...")
 	return nil
 }
 
-// Stop gracefully shuts down the plugin
-func (sp *Plugin) Stop(_ context.Context) error {
-	sp.mu.Lock()
-	defer sp.mu.Unlock()
+// postStartHook is called after the plugin starts
+func (sp *Plugin) postStartHook(ctx context.Context, data interface{}) error {
+	sp.logger.Println("Security plugin started successfully - node identity active")
+	sp.SetHealth(plugin.HealthStatusHealthy, "Security operational (node identity active)")
+	return nil
+}
 
-	if !sp.started {
-		return nil
-	}
-
-	// Clean up resources
-	sp.started = false
-
-	// Update health status
-	sp.healthStatus = plugin.HealthStatusUnknown
-	sp.healthMessage = "Security stopped"
-	sp.SetHealth(sp.healthStatus, sp.healthMessage)
-
+// preStopHook is called before the plugin stops
+func (sp *Plugin) preStopHook(ctx context.Context, data interface{}) error {
+	sp.logger.Println("Shutting down security plugin...")
+	sp.SetHealth(plugin.HealthStatusUnknown, "Security stopping")
 	return nil
 }
 
@@ -233,9 +211,9 @@ func (sp *Plugin) Health() plugin.Health {
 	}
 
 	switch {
-	case !sp.started:
+	case sp.GetState() != plugin.StateRunning:
 		status = plugin.HealthStatusUnknown
-		message = "Security not started"
+		message = fmt.Sprintf("Security plugin state: %s", sp.GetState())
 	case !hasKeyPair:
 		status = plugin.HealthStatusUnhealthy
 		message = "No key pair available"
@@ -269,7 +247,7 @@ func (sp *Plugin) Health() plugin.Health {
 			"active_sessions":     activeSessions,
 			"permissions_defined": permissionCount,
 			"has_keypair":         hasKeyPair,
-			"started":             sp.started,
+			"started":             sp.IsStarted(),
 		},
 	}
 }
@@ -630,7 +608,8 @@ func (sp *Plugin) grantPermissionUnsafe(identityID string, permissionID string) 
 
 func (sp *Plugin) getDataDir() string {
 	// Check if data directory is configured
-	if dataDir, ok := sp.config["data_dir"].(string); ok && dataDir != "" {
+	config := sp.GetConfig()
+	if dataDir, ok := config["data_dir"].(string); ok && dataDir != "" {
 		return dataDir
 	}
 

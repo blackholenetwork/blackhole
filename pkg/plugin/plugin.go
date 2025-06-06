@@ -60,6 +60,19 @@ const (
 	HealthStatusUnknown   HealthStatus = "unknown"
 )
 
+// PluginState represents the lifecycle state of a plugin
+type PluginState string
+
+// Plugin state constants
+const (
+	StateInitialized PluginState = "initialized"
+	StateStarting    PluginState = "starting"
+	StateRunning     PluginState = "running"
+	StateStopping    PluginState = "stopping"
+	StateStopped     PluginState = "stopped"
+	StateError       PluginState = "error"
+)
+
 // Type represents the type of plugin
 type Type string
 

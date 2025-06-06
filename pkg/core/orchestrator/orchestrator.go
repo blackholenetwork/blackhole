@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"time"
 
@@ -49,14 +50,16 @@ const (
 
 // Orchestrator manages the lifecycle of all components
 type Orchestrator struct {
-	config     *config.Config
-	logger     *log.Logger
-	components map[string]Component
-	order      []string // Startup order based on dependencies
-	mu         sync.RWMutex
-	state      State
-	ctx        context.Context
-	cancel     context.CancelFunc
+	config        *config.Config
+	logger        *log.Logger
+	components    map[string]Component
+	order         []string // Startup order based on dependencies
+	mu            sync.RWMutex
+	state         State
+	ctx           context.Context
+	cancel        context.CancelFunc
+	startupLog    *os.File
+	startupLogger *log.Logger
 }
 
 // State represents the orchestrator's current state
@@ -83,14 +86,25 @@ func New(cfg *config.Config, logger *log.Logger) (*Orchestrator, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	return &Orchestrator{
+	o := &Orchestrator{
 		config:     cfg,
 		logger:     logger,
 		components: make(map[string]Component),
 		state:      StateInitialized,
 		ctx:        ctx,
 		cancel:     cancel,
-	}, nil
+	}
+
+	// Initialize startup log
+	if err := o.initStartupLog(); err != nil {
+		logger.Printf("Warning: failed to initialize startup log: %v", err)
+		// Continue without startup logging
+	}
+
+	// Log initial orchestrator state
+	o.logStartupEvent("ORCHESTRATOR", "state", fmt.Sprintf("Orchestrator created with state: %s", StateInitialized))
+
+	return o, nil
 }
 
 // Register adds a component to the orchestrator
@@ -121,6 +135,9 @@ func (o *Orchestrator) Register(component Component) error {
 	o.components[name] = component
 	o.logger.Printf("Registered component: %s", name)
 
+	// Log registration event to startup log
+	o.logStartupEvent("REGISTERED", name, fmt.Sprintf("Component %s registered", name))
+
 	// Recalculate startup order
 	if err := o.calculateStartupOrder(); err != nil {
 		delete(o.components, name)
@@ -140,6 +157,9 @@ func (o *Orchestrator) Start(ctx context.Context) error {
 	o.state = StateStarting
 	o.mu.Unlock()
 
+	// Log orchestrator state transition
+	o.logStartupEvent("ORCHESTRATOR", "state", fmt.Sprintf("State transition: %s → %s", StateInitialized, StateStarting))
+
 	o.logger.Println("Starting orchestrator...")
 
 	// Start components in order
@@ -152,6 +172,9 @@ func (o *Orchestrator) Start(ctx context.Context) error {
 			o.state = StateError
 			o.mu.Unlock()
 
+			// Log error state transition
+			o.logStartupEvent("ORCHESTRATOR", "state", fmt.Sprintf("State transition: %s → %s (failed on component %s)", StateStarting, StateError, name))
+
 			// Stop already started components
 			o.stopStartedComponents(name)
 
@@ -159,13 +182,22 @@ func (o *Orchestrator) Start(ctx context.Context) error {
 		}
 
 		o.logger.Printf("Component %s started successfully", name)
+
+		// Log startup event to startup log
+		o.logStartupEvent("STARTED", name, fmt.Sprintf("Component %s started successfully", name))
 	}
 
 	o.mu.Lock()
 	o.state = StateRunning
 	o.mu.Unlock()
 
+	// Log state transition to running
+	o.logStartupEvent("ORCHESTRATOR", "state", fmt.Sprintf("State transition: %s → %s", StateStarting, StateRunning))
+
 	o.logger.Println("All components started successfully")
+
+	// Log system event to startup log
+	o.logStartupEvent("SYSTEM", "orchestrator", "=== All components started successfully ===")
 
 	// Start periodic health reporting
 	go o.periodicHealthReport(ctx)
@@ -176,12 +208,16 @@ func (o *Orchestrator) Start(ctx context.Context) error {
 // Stop gracefully shuts down all components in reverse order
 func (o *Orchestrator) Stop(ctx context.Context) error {
 	o.mu.Lock()
+	prevState := o.state
 	if o.state != StateRunning && o.state != StateError {
 		o.mu.Unlock()
 		return fmt.Errorf("cannot stop from state %s", o.state)
 	}
 	o.state = StateStopping
 	o.mu.Unlock()
+
+	// Log orchestrator state transition
+	o.logStartupEvent("ORCHESTRATOR", "state", fmt.Sprintf("State transition: %s → %s", prevState, StateStopping))
 
 	o.logger.Println("Stopping orchestrator...")
 
@@ -205,6 +241,8 @@ func (o *Orchestrator) Stop(ctx context.Context) error {
 			// Continue stopping other components
 		} else {
 			o.logger.Printf("Component %s stopped successfully", name)
+			// Log stop event to startup log
+			o.logStartupEvent("STOPPED", name, fmt.Sprintf("Component %s stopped", name))
 		}
 	}
 
@@ -212,7 +250,14 @@ func (o *Orchestrator) Stop(ctx context.Context) error {
 	o.state = StateStopped
 	o.mu.Unlock()
 
+	// Log final state transition
+	o.logStartupEvent("ORCHESTRATOR", "state", fmt.Sprintf("State transition: %s → %s", StateStopping, StateStopped))
+
 	o.logger.Println("Orchestrator stopped")
+
+	// Close the startup log
+	o.closeStartupLog()
+
 	return nil
 }
 
@@ -340,5 +385,53 @@ func (o *Orchestrator) periodicHealthReport(ctx context.Context) {
 			// Each plugin manages its own health reporting through internal timers.
 			// The orchestrator's Health() method can still be called directly when needed.
 		}
+	}
+}
+
+// initStartupLog initializes the startup log file
+func (o *Orchestrator) initStartupLog() error {
+	// Create logs directory if it doesn't exist
+	logsDir := "./logs"
+	if err := os.MkdirAll(logsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create logs directory: %w", err)
+	}
+
+	// Open startup log file
+	startupLogPath := fmt.Sprintf("%s/startup_%s.log", logsDir, time.Now().Format("2006-01-02"))
+	logFile, err := os.OpenFile(startupLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open startup log file: %w", err)
+	}
+
+	o.startupLog = logFile
+	o.startupLogger = log.New(logFile, "", log.Ldate|log.Ltime|log.Lmicroseconds)
+
+	// Write initial startup marker
+	o.logStartupEvent("SYSTEM", "orchestrator", "=== Blackhole Network Startup Sequence Started ===")
+	o.logger.Printf("Startup log created at: %s", startupLogPath)
+
+	return nil
+}
+
+// logStartupEvent writes a startup event to the log file
+func (o *Orchestrator) logStartupEvent(eventType, componentName, message string) {
+	if o.startupLogger == nil {
+		return
+	}
+
+	if eventType == "SYSTEM" {
+		o.startupLogger.Printf("%s", message)
+	} else {
+		o.startupLogger.Printf("[%s] %s: %s", eventType, componentName, message)
+	}
+}
+
+// closeStartupLog closes the startup log file
+func (o *Orchestrator) closeStartupLog() {
+	if o.startupLog != nil {
+		o.logStartupEvent("SYSTEM", "orchestrator", "=== Blackhole Network Shutdown Sequence Started ===")
+		o.startupLog.Close()
+		o.startupLog = nil
+		o.startupLogger = nil
 	}
 }

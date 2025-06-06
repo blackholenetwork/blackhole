@@ -13,7 +13,7 @@ type BasePlugin struct {
 	mu       sync.RWMutex
 	info     Info
 	config   Config
-	started  bool
+	state    PluginState
 	hooks    map[Hook][]HookFunc
 	events   chan Event
 	registry *Registry
@@ -29,6 +29,7 @@ func NewBasePlugin(info Info) *BasePlugin {
 	return &BasePlugin{
 		info:   info,
 		config: make(Config),
+		state:  StateInitialized,
 		hooks:  make(map[Hook][]HookFunc),
 		events: make(chan Event, 100),
 	}
@@ -47,52 +48,93 @@ func (bp *BasePlugin) Info() Info {
 }
 
 // Init initializes the plugin with configuration
-func (bp *BasePlugin) Init(_ context.Context, config Config) error {
+func (bp *BasePlugin) Init(ctx context.Context, config Config) error {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 
-	if bp.started {
-		return fmt.Errorf("plugin already initialized")
+	if bp.state != StateInitialized {
+		return fmt.Errorf("plugin cannot be initialized from state %s", bp.state)
 	}
 
+	bp.logStateTransition(StateInitialized, StateInitialized, "configuring plugin")
 	bp.config = config
 
 	// Trigger init hooks
-	bp.triggerHook(HookPostInit, nil)
+	if err := bp.triggerHookSync(ctx, HookPostInit, nil); err != nil {
+		bp.setState(StateError)
+		bp.logStateTransition(StateInitialized, StateError, fmt.Sprintf("init hook failed: %v", err))
+		return fmt.Errorf("init hook failed: %w", err)
+	}
 
+	bp.logStateTransition(StateInitialized, StateInitialized, "plugin configured successfully")
 	return nil
 }
 
 // Start starts the plugin
-func (bp *BasePlugin) Start(_ context.Context) error {
+func (bp *BasePlugin) Start(ctx context.Context) error {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 
-	if bp.started {
-		return fmt.Errorf("plugin already started")
+	if bp.state != StateInitialized {
+		return fmt.Errorf("plugin cannot be started from state %s", bp.state)
 	}
 
-	bp.started = true
+	// Transition to starting
+	bp.setState(StateStarting)
+	bp.logStateTransition(StateInitialized, StateStarting, "plugin starting")
 
-	// Trigger start hooks
-	bp.triggerHook(HookPostStart, nil)
+	// Trigger pre-start hooks
+	if err := bp.triggerHookSync(ctx, HookPreStart, nil); err != nil {
+		bp.setState(StateError)
+		bp.logStateTransition(StateStarting, StateError, fmt.Sprintf("pre-start hook failed: %v", err))
+		return fmt.Errorf("pre-start hook failed: %w", err)
+	}
+
+	// Transition to running
+	bp.setState(StateRunning)
+	bp.logStateTransition(StateStarting, StateRunning, "plugin started successfully")
+
+	// Trigger post-start hooks
+	if err := bp.triggerHookSync(ctx, HookPostStart, nil); err != nil {
+		bp.logStateTransition(StateRunning, StateRunning, fmt.Sprintf("post-start hook failed (plugin still running): %v", err))
+		// Don't fail the start if post-start hooks fail, just log it
+	}
 
 	return nil
 }
 
 // Stop gracefully shuts down the plugin
-func (bp *BasePlugin) Stop(_ context.Context) error {
+func (bp *BasePlugin) Stop(ctx context.Context) error {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 
-	if !bp.started {
-		return nil
+	if bp.state == StateStopped {
+		return nil // Already stopped
 	}
 
-	// Trigger stop hooks
-	bp.triggerHook(HookPreStop, nil)
+	if bp.state != StateRunning {
+		return fmt.Errorf("plugin cannot be stopped from state %s", bp.state)
+	}
 
-	bp.started = false
+	// Transition to stopping
+	bp.setState(StateStopping)
+	bp.logStateTransition(StateRunning, StateStopping, "plugin stopping")
+
+	// Trigger pre-stop hooks
+	if err := bp.triggerHookSync(ctx, HookPreStop, nil); err != nil {
+		bp.logStateTransition(StateStopping, StateStopping, fmt.Sprintf("pre-stop hook failed (continuing shutdown): %v", err))
+		// Continue with shutdown even if pre-stop hooks fail
+	}
+
+	// Transition to stopped
+	bp.setState(StateStopped)
+	bp.logStateTransition(StateStopping, StateStopped, "plugin stopped successfully")
+
+	// Trigger post-stop hooks
+	if err := bp.triggerHookSync(ctx, HookPostStop, nil); err != nil {
+		bp.logStateTransition(StateStopped, StateStopped, fmt.Sprintf("post-stop hook failed: %v", err))
+		// Don't fail the stop if post-stop hooks fail
+	}
 
 	close(bp.events)
 
@@ -105,18 +147,31 @@ func (bp *BasePlugin) Health() Health {
 	bp.mu.RLock()
 	defer bp.mu.RUnlock()
 
-	if !bp.started {
+	switch bp.state {
+	case StateRunning:
 		return Health{
-			Status:    HealthStatusUnknown,
-			Message:   "Plugin not started",
+			Status:    HealthStatusHealthy,
+			Message:   "Plugin is running",
 			LastCheck: time.Now(),
 		}
-	}
-
-	return Health{
-		Status:    HealthStatusHealthy,
-		Message:   "Plugin is running",
-		LastCheck: time.Now(),
+	case StateError:
+		return Health{
+			Status:    HealthStatusUnhealthy,
+			Message:   "Plugin is in error state",
+			LastCheck: time.Now(),
+		}
+	case StateStarting, StateStopping:
+		return Health{
+			Status:    HealthStatusDegraded,
+			Message:   fmt.Sprintf("Plugin is %s", bp.state),
+			LastCheck: time.Now(),
+		}
+	default:
+		return Health{
+			Status:    HealthStatusUnknown,
+			Message:   fmt.Sprintf("Plugin state: %s", bp.state),
+			LastCheck: time.Now(),
+		}
 	}
 }
 
@@ -227,7 +282,7 @@ func (bp *BasePlugin) SetHealthWithDetails(status HealthStatus, message string, 
 func (bp *BasePlugin) IsStarted() bool {
 	bp.mu.RLock()
 	defer bp.mu.RUnlock()
-	return bp.started
+	return bp.state == StateRunning
 }
 
 // GetConfigValue retrieves a configuration value
@@ -470,4 +525,46 @@ func (bp *builtPlugin) Health() Health {
 	}
 
 	return bp.BasePlugin.Health()
+}
+
+// setState sets the plugin state (internal method)
+func (bp *BasePlugin) setState(state PluginState) {
+	bp.state = state
+}
+
+// GetState returns the current plugin state
+func (bp *BasePlugin) GetState() PluginState {
+	bp.mu.RLock()
+	defer bp.mu.RUnlock()
+	return bp.state
+}
+
+// logStateTransition logs a state transition to the orchestrator
+func (bp *BasePlugin) logStateTransition(from, to PluginState, message string) {
+	// This will be implemented to send events to orchestrator for logging
+	// For now, we'll just emit an event if registry is available
+	if bp.registry != nil {
+		event := Event{
+			Type:      "state_transition",
+			Source:    bp.info.Name,
+			Data: map[string]interface{}{
+				"from":    from,
+				"to":      to,
+				"message": message,
+			},
+			Timestamp: time.Now(),
+		}
+		bp.registry.Publish(event)
+	}
+}
+
+// triggerHookSync triggers hooks synchronously and returns any error
+func (bp *BasePlugin) triggerHookSync(ctx context.Context, hook Hook, data interface{}) error {
+	hooks := bp.hooks[hook]
+	for _, fn := range hooks {
+		if err := fn(ctx, data); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -14,15 +14,11 @@ import (
 // Plugin provides system monitoring and metrics collection
 type Plugin struct {
 	*plugin.BasePlugin
-	mu            sync.RWMutex
-	config        plugin.Config
-	metrics       map[string]*Metric
-	ticker        *time.Ticker
-	stopChan      chan struct{}
-	started       bool
-	registry      *plugin.Registry
-	healthStatus  plugin.HealthStatus
-	healthMessage string
+	mu       sync.RWMutex
+	metrics  map[string]*Metric
+	ticker   *time.Ticker
+	stopChan chan struct{}
+	registry *plugin.Registry
 }
 
 // Metric represents a collected metric
@@ -47,14 +43,18 @@ func NewPlugin(registry *plugin.Registry) *Plugin {
 	}
 
 	ap := &Plugin{
-		BasePlugin:    plugin.NewBasePlugin(info),
-		metrics:       make(map[string]*Metric),
-		stopChan:      make(chan struct{}),
-		registry:      registry,
-		healthStatus:  plugin.HealthStatusUnknown,
-		healthMessage: "Not initialized",
+		BasePlugin: plugin.NewBasePlugin(info),
+		metrics:    make(map[string]*Metric),
+		stopChan:   make(chan struct{}),
+		registry:   registry,
 	}
 	ap.SetRegistry(registry)
+
+	// Register lifecycle hooks
+	ap.RegisterHook(plugin.HookPreStart, ap.preStartHook)
+	ap.RegisterHook(plugin.HookPostStart, ap.postStartHook)
+	ap.RegisterHook(plugin.HookPreStop, ap.preStopHook)
+
 	return ap
 }
 
@@ -72,75 +72,68 @@ func (ap *Plugin) Info() plugin.Info {
 }
 
 // Init initializes the plugin with configuration
-func (ap *Plugin) Init(_ context.Context, config plugin.Config) error {
+func (ap *Plugin) Init(ctx context.Context, config plugin.Config) error {
+	// Call BasePlugin Init first
+	if err := ap.BasePlugin.Init(ctx, config); err != nil {
+		return err
+	}
+
 	ap.mu.Lock()
 	defer ap.mu.Unlock()
 
-	ap.config = config
-
-	// Update health status
-	ap.healthStatus = plugin.HealthStatusHealthy
-	ap.healthMessage = "Monitor initialized"
-	ap.SetHealth(ap.healthStatus, ap.healthMessage)
+	// Initialize initial metrics collection
+	ap.collectSystemMetrics()
 
 	return nil
 }
 
-// Start starts the plugin
-func (ap *Plugin) Start(ctx context.Context) error {
+// preStartHook is called before the plugin starts
+func (ap *Plugin) preStartHook(ctx context.Context, data interface{}) error {
 	ap.mu.Lock()
 	defer ap.mu.Unlock()
 
-	if ap.started {
-		return fmt.Errorf("monitor plugin already started")
-	}
-
 	// Get collection interval from config or use default
 	interval := 10 * time.Second
-	if intervalVal, ok := ap.config["interval"]; ok {
+	config := ap.GetConfig()
+	if intervalVal, ok := config["interval"]; ok {
 		if dur, ok := intervalVal.(time.Duration); ok {
 			interval = dur
 		}
 	}
 
-	// Start metrics collection
+	// Setup metrics collection
 	ap.ticker = time.NewTicker(interval)
-	ap.started = true
-
-	// Start collection goroutine
-	go ap.collectLoop(ctx)
-
-	// Update and publish initial health status
-	ap.healthStatus = plugin.HealthStatusHealthy
-	ap.healthMessage = "Monitor operational"
-	ap.SetHealth(ap.healthStatus, ap.healthMessage)
+	ap.stopChan = make(chan struct{}) // Recreate channel in case of restart
 
 	return nil
 }
 
-// Stop gracefully shuts down the plugin
-func (ap *Plugin) Stop(_ context.Context) error {
+// postStartHook is called after the plugin starts
+func (ap *Plugin) postStartHook(ctx context.Context, data interface{}) error {
+	// Start collection goroutine
+	go ap.collectLoop(ctx)
+
+	// Update health status
+	ap.SetHealth(plugin.HealthStatusHealthy, "Monitor operational")
+
+	return nil
+}
+
+// preStopHook is called before the plugin stops
+func (ap *Plugin) preStopHook(ctx context.Context, data interface{}) error {
 	ap.mu.Lock()
 	defer ap.mu.Unlock()
 
-	if !ap.started {
-		return nil
-	}
-
 	// Stop collection
-	close(ap.stopChan)
+	if ap.stopChan != nil {
+		close(ap.stopChan)
+	}
 	if ap.ticker != nil {
 		ap.ticker.Stop()
+		ap.ticker = nil
 	}
 
-	// Clean up resources
-	ap.started = false
-
-	// Update health status
-	ap.healthStatus = plugin.HealthStatusUnknown
-	ap.healthMessage = "Monitor stopped"
-	ap.SetHealth(ap.healthStatus, ap.healthMessage)
-
+	ap.SetHealth(plugin.HealthStatusUnknown, "Monitor stopping")
 	return nil
 }
 
@@ -156,9 +149,9 @@ func (ap *Plugin) Health() plugin.Health {
 	metricsCount := len(ap.metrics)
 
 	switch {
-	case !ap.started:
+	case ap.GetState() != plugin.StateRunning:
 		status = plugin.HealthStatusUnknown
-		message = "Monitor not started"
+		message = fmt.Sprintf("Monitor plugin state: %s", ap.GetState())
 	case metricsCount == 0:
 		status = plugin.HealthStatusDegraded
 		message = "No metrics collected yet"
@@ -175,7 +168,7 @@ func (ap *Plugin) Health() plugin.Health {
 			"metrics_count": metricsCount,
 			"goroutines":    runtime.NumGoroutine(),
 			"cpu_count":     runtime.NumCPU(),
-			"started":       ap.started,
+			"started":       ap.IsStarted(),
 		},
 	}
 }

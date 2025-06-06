@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Grid, Paper, Box, Typography, LinearProgress, Chip, List, ListItem, ListItemText } from '@mui/material';
 import {
   CheckCircle as CheckCircleIcon,
@@ -7,19 +7,13 @@ import {
   Memory as MemoryIcon,
   Speed as SpeedIcon
 } from '@mui/icons-material';
-import { PluginState } from '../types';
+import { PluginState, StartupLogResponse, StartupLogEvent } from '../types';
 import axios from 'axios';
 
 interface DashboardProps {
   plugins: Record<string, PluginState>;
   connected: boolean;
-}
-
-interface StartupLog {
-  time: string;
-  plugin: string;
-  status: string;
-  message: string;
+  lastMessage?: string;
 }
 
 interface SystemInfo {
@@ -29,32 +23,63 @@ interface SystemInfo {
   cpu_count?: number;
 }
 
-function Dashboard({ plugins, connected }: DashboardProps) {
-  const [startupLogs, setStartupLogs] = useState<StartupLog[]>([]);
+function Dashboard({ plugins, connected, lastMessage }: DashboardProps) {
+  const [startupEvents, setStartupEvents] = useState<StartupLogEvent[]>([]);
   const [systemInfo, setSystemInfo] = useState<SystemInfo>({});
+  const logEndRef = useRef<HTMLDivElement>(null);
 
-  // Track plugin status changes for startup progress
+  // Fetch startup log on mount
   useEffect(() => {
-    Object.entries(plugins).forEach(([name, plugin]) => {
-      if (plugin.status && plugin.status !== 'ready') {
-        const log: StartupLog = {
-          time: new Date().toLocaleTimeString(),
-          plugin: name,
-          status: plugin.status,
-          message: plugin.message
-        };
-
-        setStartupLogs(prev => {
-          // Check if we already have this status for this plugin
-          const exists = prev.some(l => l.plugin === name && l.status === plugin.status);
-          if (!exists) {
-            return [...prev, log].slice(-10); // Keep last 10 logs
-          }
-          return prev;
-        });
+    const fetchStartupLog = async () => {
+      try {
+        const response = await axios.get<StartupLogResponse>('/api/startup-log');
+        if (response.data.events) {
+          setStartupEvents(response.data.events);
+        }
+      } catch (error) {
+        console.error('Failed to fetch startup log:', error);
       }
-    });
-  }, [plugins]);
+    };
+
+    fetchStartupLog();
+  }, []);
+
+  // Handle incoming WebSocket messages for real-time startup events
+  useEffect(() => {
+    if (lastMessage) {
+      try {
+        const data = JSON.parse(lastMessage);
+        if (data.type === 'startup_event' && data.startup_event) {
+          // Convert real-time event to log format
+          const logEvent: StartupLogEvent = {
+            timestamp: new Date().toLocaleString('en-US', {
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+              hour12: false,
+              hour: '2-digit',
+              minute: '2-digit',
+              second: '2-digit',
+              fractionalSecondDigits: 6
+            } as any).replace(',', ''),
+            type: data.startup_event.event.toUpperCase(),
+            plugin: data.startup_event.plugin,
+            message: data.startup_event.message,
+            raw: `${new Date().toISOString()} [${data.startup_event.event.toUpperCase()}] ${data.startup_event.plugin}: ${data.startup_event.message}`
+          };
+          setStartupEvents(prev => [...prev, logEvent]); // Append to existing log
+        }
+      } catch (err) {
+        // Ignore parse errors
+      }
+    }
+  }, [lastMessage]);
+
+  // Auto-scroll to bottom when new events arrive
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [startupEvents]);
+
 
   // Fetch system information
   useEffect(() => {
@@ -116,6 +141,28 @@ function Dashboard({ plugins, connected }: DashboardProps) {
     }
   };
 
+  const getEventColor = (eventType?: string) => {
+    if (!eventType) return '#9e9e9e';
+
+    switch (eventType.toUpperCase()) {
+      case 'STARTED':
+        return '#4caf50';
+      case 'FAILED':
+        return '#f44336';
+      case 'STOPPED':
+        return '#ff9800';
+      case 'REGISTERED':
+      case 'INITIALIZED':
+        return '#2196f3';
+      case 'ORCHESTRATOR':
+        return '#9c27b0'; // Purple for orchestrator state transitions
+      case 'SYSTEM':
+        return '#00bcd4';
+      default:
+        return '#9e9e9e';
+    }
+  };
+
   const formatBytes = (bytes?: number) => {
     if (!bytes) return 'N/A';
     const mb = bytes / 1024 / 1024;
@@ -134,6 +181,19 @@ function Dashboard({ plugins, connected }: DashboardProps) {
           System Information
         </Typography>
         <Grid container spacing={3}>
+          <Grid item xs={12} sm={6} md={3}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <SpeedIcon color="info" />
+              <Box>
+                <Typography variant="body2" color="text.secondary">
+                  CPU Cores
+                </Typography>
+                <Typography variant="h6">
+                  {systemInfo.cpu_count || 'N/A'}
+                </Typography>
+              </Box>
+            </Box>
+          </Grid>
           <Grid item xs={12} sm={6} md={3}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <MemoryIcon color="primary" />
@@ -159,19 +219,6 @@ function Dashboard({ plugins, connected }: DashboardProps) {
                 </Typography>
                 <Typography variant="h6">
                   {systemInfo.goroutines || 'N/A'}
-                </Typography>
-              </Box>
-            </Box>
-          </Grid>
-          <Grid item xs={12} sm={6} md={3}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <SpeedIcon color="info" />
-              <Box>
-                <Typography variant="body2" color="text.secondary">
-                  CPU Cores
-                </Typography>
-                <Typography variant="h6">
-                  {systemInfo.cpu_count || 'N/A'}
                 </Typography>
               </Box>
             </Box>
@@ -228,35 +275,117 @@ function Dashboard({ plugins, connected }: DashboardProps) {
             : `${startedCount} of ${totalCount} plugins initialized`}
         </Typography>
 
-        {/* Startup Logs */}
-        {startupLogs.length > 0 && (
-          <Box sx={{ mt: 2 }}>
-            <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-              Startup Sequence Log:
-            </Typography>
-            <Box sx={{
-              maxHeight: 150,
-              overflowY: 'auto',
-              bgcolor: 'background.default',
-              borderRadius: 1,
-              p: 1
-            }}>
+        {/* Startup Sequence Log */}
+        <Box sx={{ mt: 2 }}>
+          <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+            Startup Sequence Log:
+          </Typography>
+          <Box sx={{
+            maxHeight: 200,
+            overflowY: 'auto',
+            bgcolor: 'background.default',
+            borderRadius: 1,
+            p: 1,
+            border: '1px solid',
+            borderColor: 'divider',
+            fontFamily: 'monospace',
+            fontSize: '0.75rem'
+          }}>
+            {startupEvents.length === 0 ? (
+              <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+                Waiting for startup events...
+              </Typography>
+            ) : (
               <List dense sx={{ py: 0 }}>
-                {startupLogs.map((log, index) => (
-                  <ListItem key={index} sx={{ py: 0.5 }}>
+                {startupEvents.map((event, index) => (
+                  <ListItem key={index} sx={{ py: 0.25, px: 0 }}>
                     <ListItemText
+                      sx={{ my: 0 }}
                       primary={
-                        <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>
-                          [{log.time}] {log.plugin}: {log.status} - {log.message}
-                        </Typography>
+                        event.type === 'SYSTEM' ? (
+                          // System message formatting
+                          <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <Typography
+                              component="span"
+                              variant="caption"
+                              sx={{
+                                fontFamily: 'monospace',
+                                color: 'text.secondary',
+                                minWidth: 140
+                              }}
+                            >
+                              {event.timestamp}
+                            </Typography>
+                            <Typography
+                              component="span"
+                              variant="caption"
+                              sx={{
+                                fontFamily: 'monospace',
+                                color: getEventColor('SYSTEM'),
+                                fontWeight: 600
+                              }}
+                            >
+                              {event.message}
+                            </Typography>
+                          </Box>
+                        ) : (
+                          // Regular event formatting
+                          <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <Typography
+                              component="span"
+                              variant="caption"
+                              sx={{
+                                fontFamily: 'monospace',
+                                color: 'text.secondary',
+                                minWidth: 140
+                              }}
+                            >
+                              {event.timestamp}
+                            </Typography>
+                            <Typography
+                              component="span"
+                              variant="caption"
+                              sx={{
+                                fontFamily: 'monospace',
+                                color: getEventColor(event.type),
+                                fontWeight: 600,
+                                minWidth: 80
+                              }}
+                            >
+                              [{event.type || 'INFO'}]
+                            </Typography>
+                            <Typography
+                              component="span"
+                              variant="caption"
+                              sx={{
+                                fontFamily: 'monospace',
+                                color: 'primary.main',
+                                minWidth: 120
+                              }}
+                            >
+                              {event.plugin || 'system'}
+                            </Typography>
+                            <Typography
+                              component="span"
+                              variant="caption"
+                              sx={{
+                                fontFamily: 'monospace',
+                                color: 'text.primary'
+                              }}
+                            >
+                              {event.message || event.raw}
+                            </Typography>
+                          </Box>
+                        )
                       }
                     />
                   </ListItem>
                 ))}
+                <div ref={logEndRef} />
               </List>
-            </Box>
+            )}
           </Box>
-        )}
+        </Box>
       </Paper>
 
       {/* Plugin Health - Renamed from Plugin Status */}
