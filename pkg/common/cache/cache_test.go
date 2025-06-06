@@ -21,7 +21,7 @@ func TestNewCache(t *testing.T) {
 	t.Run("cache with TTL", func(t *testing.T) {
 		c := New[string, int](WithTTL[string, int](time.Second))
 		defer c.Close()
-		
+
 		if c.ttl != time.Second {
 			t.Errorf("Expected TTL of 1s, got %v", c.ttl)
 		}
@@ -30,7 +30,7 @@ func TestNewCache(t *testing.T) {
 	t.Run("cache with max size", func(t *testing.T) {
 		c := New[string, int](WithMaxSize[string, int](100))
 		defer c.Close()
-		
+
 		if c.maxSize != 100 {
 			t.Errorf("Expected max size of 100, got %d", c.maxSize)
 		}
@@ -42,10 +42,10 @@ func TestNewCache(t *testing.T) {
 			evicted = true
 		}))
 		defer c.Close()
-		
+
 		c.Set("key", 1)
 		c.Delete("key")
-		
+
 		if !evicted {
 			t.Error("Evict callback was not called")
 		}
@@ -58,7 +58,7 @@ func TestCacheSetGet(t *testing.T) {
 
 	t.Run("basic set and get", func(t *testing.T) {
 		c.Set("key1", "value1")
-		
+
 		val, ok := c.Get("key1")
 		if !ok {
 			t.Error("Get() should return true for existing key")
@@ -71,7 +71,7 @@ func TestCacheSetGet(t *testing.T) {
 	t.Run("overwrite existing key", func(t *testing.T) {
 		c.Set("key1", "value1")
 		c.Set("key1", "value2")
-		
+
 		val, ok := c.Get("key1")
 		if !ok {
 			t.Error("Get() should return true for existing key")
@@ -94,13 +94,13 @@ func TestCacheSetGet(t *testing.T) {
 	t.Run("different types", func(t *testing.T) {
 		intCache := New[int, int]()
 		defer intCache.Close()
-		
+
 		intCache.Set(1, 100)
 		intCache.Set(2, 200)
-		
+
 		val1, _ := intCache.Get(1)
 		val2, _ := intCache.Get(2)
-		
+
 		if val1 != 100 || val2 != 200 {
 			t.Errorf("Expected values 100 and 200, got %d and %d", val1, val2)
 		}
@@ -116,12 +116,12 @@ func TestCacheDelete(t *testing.T) {
 
 	t.Run("delete existing key", func(t *testing.T) {
 		c.Delete("key1")
-		
+
 		_, ok := c.Get("key1")
 		if ok {
 			t.Error("Key should not exist after deletion")
 		}
-		
+
 		// key2 should still exist
 		val, ok := c.Get("key2")
 		if !ok || val != 2 {
@@ -137,16 +137,16 @@ func TestCacheDelete(t *testing.T) {
 	t.Run("delete with callback", func(t *testing.T) {
 		var evictedKey string
 		var evictedValue int
-		
+
 		c2 := New[string, int](WithEvictCallback[string, int](func(k string, v int) {
 			evictedKey = k
 			evictedValue = v
 		}))
 		defer c2.Close()
-		
+
 		c2.Set("test", 42)
 		c2.Delete("test")
-		
+
 		if evictedKey != "test" || evictedValue != 42 {
 			t.Errorf("Evict callback received wrong values: key=%v, value=%v", evictedKey, evictedValue)
 		}
@@ -193,16 +193,16 @@ func TestCacheTTL(t *testing.T) {
 
 	t.Run("item expires", func(t *testing.T) {
 		c.Set("key1", "value1")
-		
+
 		// Should exist immediately
 		val, ok := c.Get("key1")
 		if !ok || val != "value1" {
 			t.Error("Item should exist immediately after setting")
 		}
-		
+
 		// Wait for expiration
 		time.Sleep(60 * time.Millisecond)
-		
+
 		// Should be expired
 		_, ok = c.Get("key1")
 		if ok {
@@ -213,13 +213,13 @@ func TestCacheTTL(t *testing.T) {
 	t.Run("cleanup removes expired items", func(t *testing.T) {
 		c.Set("key2", "value2")
 		c.Set("key3", "value3")
-		
+
 		// Wait for expiration
 		time.Sleep(60 * time.Millisecond)
-		
+
 		// Trigger cleanup
 		c.cleanup()
-		
+
 		if c.Size() != 0 {
 			t.Errorf("Cleanup should remove expired items, got size %d", c.Size())
 		}
@@ -227,16 +227,16 @@ func TestCacheTTL(t *testing.T) {
 
 	t.Run("TTL refresh on set", func(t *testing.T) {
 		c.Set("key4", "value4")
-		
+
 		// Wait half the TTL
 		time.Sleep(25 * time.Millisecond)
-		
+
 		// Update the value (should refresh TTL)
 		c.Set("key4", "value4-updated")
-		
+
 		// Wait another half TTL (original would have expired)
 		time.Sleep(30 * time.Millisecond)
-		
+
 		// Should still exist
 		val, ok := c.Get("key4")
 		if !ok || val != "value4-updated" {
@@ -298,19 +298,19 @@ func TestCacheConcurrency(t *testing.T) {
 	for i := 0; i < goroutines; i++ {
 		go func(id int) {
 			defer wg.Done()
-			
+
 			for j := 0; j < operations; j++ {
 				key := id*operations + j
-				
+
 				// Set
 				c.Set(key, key*2)
-				
+
 				// Get
 				val, ok := c.Get(key)
 				if ok && val != key*2 {
 					t.Errorf("Goroutine %d: unexpected value %d for key %d", id, val, key)
 				}
-				
+
 				// Sometimes delete
 				if j%3 == 0 {
 					c.Delete(key)
@@ -446,10 +446,10 @@ func TestCacheEdgeCases(t *testing.T) {
 		defer c.Close()
 
 		c.Set("key", "value")
-		
+
 		// Should not expire
 		time.Sleep(10 * time.Millisecond)
-		
+
 		val, ok := c.Get("key")
 		if !ok || val != "value" {
 			t.Error("Item should not expire with zero TTL")
@@ -461,10 +461,10 @@ func TestCacheEdgeCases(t *testing.T) {
 		defer c.Close()
 
 		c.Set("key", "value")
-		
+
 		// Even with very short TTL, immediate get might succeed
 		c.Get("key")
-		
+
 		// But after any delay, should be expired
 		time.Sleep(time.Millisecond)
 		_, ok := c.Get("key")

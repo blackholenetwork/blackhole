@@ -56,11 +56,7 @@ func (p *WorkerPool) worker() {
 			// Execute task with panic recovery
 			func() {
 				defer func() {
-					if r := recover(); r != nil {
-						// Log panic but continue worker
-						// In a real implementation, you might want to log this
-						_ = r // Use the recovered value to avoid SA9003
-					}
+					_ = recover() // Ignore panics and continue
 				}()
 				task()
 			}()
@@ -79,9 +75,7 @@ func (p *WorkerPool) Submit(task Task) {
 
 	// Use a defer with recover to handle potential panic from sending to closed channel
 	defer func() {
-		if r := recover(); r != nil {
-			// Channel was closed, task not submitted
-		}
+		_ = recover() // Ignore panic if channel is closed
 	}()
 
 	select {
