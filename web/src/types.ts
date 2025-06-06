@@ -2,7 +2,6 @@ export interface PluginState {
   name: string;
   status: 'starting' | 'ready' | 'failed' | 'degraded';
   message: string;
-  progress: number;
   started_at: string;
 }
 

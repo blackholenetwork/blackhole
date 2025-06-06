@@ -1,15 +1,14 @@
-import { 
-  Box, 
-  Typography, 
-  Table, 
-  TableBody, 
-  TableCell, 
-  TableContainer, 
-  TableHead, 
-  TableRow, 
+import {
+  Box,
+  Typography,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
   Paper,
-  Chip,
-  LinearProgress
+  Chip
 } from '@mui/material';
 import { PluginState } from '../types';
 
@@ -41,7 +40,6 @@ function PluginStatus({ plugins }: PluginStatusProps) {
             <TableRow>
               <TableCell>Plugin Name</TableCell>
               <TableCell>Status</TableCell>
-              <TableCell>Progress</TableCell>
               <TableCell>Message</TableCell>
               <TableCell>Started At</TableCell>
             </TableRow>
@@ -55,25 +53,11 @@ function PluginStatus({ plugins }: PluginStatusProps) {
                   </Typography>
                 </TableCell>
                 <TableCell>
-                  <Chip 
-                    label={plugin.status} 
-                    size="small" 
+                  <Chip
+                    label={plugin.status}
+                    size="small"
                     color={getStatusColor(plugin.status) as any}
                   />
-                </TableCell>
-                <TableCell sx={{ minWidth: 150 }}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Box sx={{ width: '100%' }}>
-                      <LinearProgress 
-                        variant="determinate" 
-                        value={plugin.progress} 
-                        sx={{ height: 6 }}
-                      />
-                    </Box>
-                    <Typography variant="body2" color="text.secondary" sx={{ minWidth: 40 }}>
-                      {plugin.progress}%
-                    </Typography>
-                  </Box>
                 </TableCell>
                 <TableCell>
                   <Typography variant="body2" color="text.secondary">

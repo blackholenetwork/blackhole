@@ -1,8 +1,8 @@
 import { Grid, Paper, Box, Typography, LinearProgress, Chip } from '@mui/material';
-import { 
+import {
   CheckCircle as CheckCircleIcon,
   Error as ErrorIcon,
-  HourglassEmpty as HourglassIcon 
+  HourglassEmpty as HourglassIcon
 } from '@mui/icons-material';
 import { PluginState } from '../types';
 
@@ -13,11 +13,11 @@ interface DashboardProps {
 
 function Dashboard({ plugins, connected }: DashboardProps) {
   const pluginArray = Object.entries(plugins);
-  const totalProgress = pluginArray.length > 0
-    ? Math.round(pluginArray.reduce((sum, [_, p]) => sum + p.progress, 0) / pluginArray.length)
-    : 0;
-  
   const readyCount = pluginArray.filter(([_, p]) => p.status === 'ready').length;
+  const totalProgress = pluginArray.length > 0
+    ? Math.round((readyCount * 100) / pluginArray.length)
+    : 0;
+
   const isSystemReady = readyCount === pluginArray.length && pluginArray.length > 0;
 
   const getStatusIcon = (status: string) => {
@@ -59,9 +59,9 @@ function Dashboard({ plugins, connected }: DashboardProps) {
         </Typography>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
           <Box sx={{ flexGrow: 1 }}>
-            <LinearProgress 
-              variant="determinate" 
-              value={totalProgress} 
+            <LinearProgress
+              variant="determinate"
+              value={totalProgress}
               sx={{ height: 10, borderRadius: 5 }}
             />
           </Box>
@@ -86,25 +86,17 @@ function Dashboard({ plugins, connected }: DashboardProps) {
                     {name}
                   </Typography>
                 </Box>
-                <Chip 
-                  label={plugin.status} 
-                  size="small" 
+                <Chip
+                  label={plugin.status}
+                  size="small"
                   color={getStatusColor(plugin.status) as any}
                 />
               </Box>
-              
-              {plugin.status === 'starting' && (
-                <LinearProgress 
-                  variant="determinate" 
-                  value={plugin.progress} 
-                  sx={{ mb: 1 }}
-                />
-              )}
-              
+
               <Typography variant="body2" color="text.secondary">
                 {plugin.message}
               </Typography>
-              
+
               {plugin.started_at && (
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
                   Started: {new Date(plugin.started_at).toLocaleTimeString()}
