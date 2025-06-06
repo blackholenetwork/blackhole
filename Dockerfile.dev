@@ -2,6 +2,7 @@
 FROM golang:1.21-alpine
 
 # Install development dependencies
+# hadolint ignore=DL3018
 RUN apk add --no-cache \
     git \
     make \
@@ -19,14 +20,10 @@ RUN apk add --no-cache \
     vim \
     jq
 
-# Install Delve debugger
-RUN go install github.com/go-delve/delve/cmd/dlv@latest
-
-# Install Air for hot reload
-RUN go install github.com/cosmtrek/air@latest
-
-# Install additional Go tools
-RUN go install golang.org/x/tools/gopls@latest && \
+# Install Go development tools
+RUN go install github.com/go-delve/delve/cmd/dlv@latest && \
+    go install github.com/cosmtrek/air@latest && \
+    go install golang.org/x/tools/gopls@latest && \
     go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest && \
     go install github.com/swaggo/swag/cmd/swag@latest
 
