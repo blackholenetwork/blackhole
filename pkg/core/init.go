@@ -28,7 +28,7 @@ func InitializeOrchestrator(cfg *config.Config, logger *log.Logger) (*orchestrat
 	// The order matters: dependencies must be registered before dependents
 
 	// 1. Security Plugin - No dependencies, needed for authentication
-	securityPlugin := security.NewSecurityPlugin(registry)
+	securityPlugin := security.NewPlugin(registry)
 	securityAdapter := NewPluginComponentAdapter(securityPlugin, []string{})
 	if err := orch.Register(securityAdapter); err != nil {
 		return nil, fmt.Errorf("failed to register security plugin: %w", err)
@@ -38,7 +38,7 @@ func InitializeOrchestrator(cfg *config.Config, logger *log.Logger) (*orchestrat
 	}
 
 	// 2. Analytics Plugin - No dependencies, provides system metrics
-	analyticsPlugin := analytics.NewAnalyticsPlugin(registry)
+	analyticsPlugin := analytics.NewPlugin(registry)
 	analyticsAdapter := NewPluginComponentAdapter(analyticsPlugin, []string{})
 	if err := orch.Register(analyticsAdapter); err != nil {
 		return nil, fmt.Errorf("failed to register analytics plugin: %w", err)
@@ -68,7 +68,7 @@ func InitializeOrchestrator(cfg *config.Config, logger *log.Logger) (*orchestrat
 	networkPlugin := networking.New(registry)
 	networkConfig := plugin.Config{
 		"enable_auto_relay": false, // Disable for local development without bootstrap peers
-		"port": 4001,
+		"port":              4001,
 		// In production, add bootstrap peers:
 		// "bootstrap_peers": []string{
 		//     "/ip4/1.2.3.4/tcp/4001/p2p/QmPeerId1",
@@ -85,7 +85,7 @@ func InitializeOrchestrator(cfg *config.Config, logger *log.Logger) (*orchestrat
 	}
 
 	// Future plugins would be registered here with their dependencies:
-	// 
+	//
 	// 4. Storage Plugin - Depends on networking for data distribution
 	// storageAdapter := NewPluginComponentAdapter(storagePlugin, []string{"networking"})
 	//
@@ -96,7 +96,7 @@ func InitializeOrchestrator(cfg *config.Config, logger *log.Logger) (*orchestrat
 	// economicAdapter := NewPluginComponentAdapter(economicPlugin, []string{"storage", "compute", "networking"})
 
 	logger.Printf("Registered %d core plugins", 4)
-	
+
 	return orch, nil
 }
 

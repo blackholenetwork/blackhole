@@ -1,3 +1,4 @@
+// Package webserver provides HTTP/WebSocket server functionality
 package webserver
 
 import (
@@ -10,22 +11,28 @@ import (
 	"sync"
 	"time"
 
-	"github.com/blackholenetwork/blackhole/pkg/core/orchestrator"
-	"github.com/blackholenetwork/blackhole/pkg/plugin"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/gofiber/websocket/v2"
+
+	"github.com/blackholenetwork/blackhole/pkg/core/orchestrator"
+	"github.com/blackholenetwork/blackhole/pkg/plugin"
 )
 
-// WebServerPlugin provides HTTP/WebSocket server with progressive API activation
-type WebServerPlugin struct {
+const (
+	// statusReady indicates a plugin is ready
+	statusReady = "ready"
+)
+
+// Plugin provides HTTP/WebSocket server with progressive API activation
+type Plugin struct {
 	*plugin.BasePlugin
-	server        *fiber.App
-	config        WebServerConfig
-	registry      *plugin.Registry
-	orchestrator  interface{ 
+	server       *fiber.App
+	config       Config
+	registry     *plugin.Registry
+	orchestrator interface {
 		Health() map[string]orchestrator.ComponentHealth
 		HealthExcluding(caller string) map[string]orchestrator.ComponentHealth
 	}
@@ -37,10 +44,11 @@ type WebServerPlugin struct {
 	started       bool
 	healthStatus  plugin.HealthStatus
 	healthMessage string
+	logger        *log.Logger
 }
 
-// WebServerConfig holds configuration for the web server
-type WebServerConfig struct {
+// Config holds configuration for the web server
+type Config struct {
 	Port            int    `json:"port"`
 	Host            string `json:"host"`
 	EnableDashboard bool   `json:"enable_dashboard"`
@@ -53,15 +61,15 @@ type PluginStatus struct {
 	Name      string    `json:"name"`
 	Status    string    `json:"status"` // starting, ready, failed
 	Message   string    `json:"message"`
-	Progress  int       `json:"progress"` // 0-100
 	StartedAt time.Time `json:"started_at"`
 }
 
 // New creates a new web server plugin
-func New(registry *plugin.Registry, orch interface{ 
+func New(registry *plugin.Registry, orch interface {
 	Health() map[string]orchestrator.ComponentHealth
 	HealthExcluding(caller string) map[string]orchestrator.ComponentHealth
-}) *WebServerPlugin {
+},
+) *Plugin {
 	info := plugin.Info{
 		Name:         "webserver",
 		Version:      "1.0.0",
@@ -71,8 +79,8 @@ func New(registry *plugin.Registry, orch interface{
 		Dependencies: []string{"security"},
 		Capabilities: []string{string(plugin.CapabilityAPI)},
 	}
-	
-	ws := &WebServerPlugin{
+
+	ws := &Plugin{
 		BasePlugin:    plugin.NewBasePlugin(info),
 		registry:      registry,
 		orchestrator:  orch,
@@ -81,13 +89,14 @@ func New(registry *plugin.Registry, orch interface{
 		wsClients:     make(map[*websocket.Conn]bool),
 		healthStatus:  plugin.HealthStatusUnknown,
 		healthMessage: "Not initialized",
+		logger:        log.New(os.Stdout, "[WebServer] ", log.LstdFlags),
 	}
-	ws.BasePlugin.SetRegistry(registry)
+	ws.SetRegistry(registry)
 	return ws
 }
 
 // Info returns metadata about the plugin
-func (ws *WebServerPlugin) Info() plugin.Info {
+func (ws *Plugin) Info() plugin.Info {
 	return plugin.Info{
 		Name:         "webserver",
 		Version:      "1.0.0",
@@ -100,19 +109,19 @@ func (ws *WebServerPlugin) Info() plugin.Info {
 }
 
 // Init initializes the plugin with configuration
-func (ws *WebServerPlugin) Init(ctx context.Context, config plugin.Config) error {
+func (ws *Plugin) Init(_ context.Context, config plugin.Config) error {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
 
 	// Parse configuration
-	ws.config = WebServerConfig{
+	ws.config = Config{
 		Port:            8080,
 		Host:            "127.0.0.1", // Localhost only by default
 		EnableDashboard: true,
 		EnableWebSocket: true,
 		CORSOrigins:     "http://localhost:8080", // Allow localhost:8080
 	}
-	
+
 	if port, ok := config["port"].(int); ok {
 		ws.config.Port = port
 	}
@@ -135,7 +144,7 @@ func (ws *WebServerPlugin) Init(ctx context.Context, config plugin.Config) error
 }
 
 // Start starts the plugin
-func (ws *WebServerPlugin) Start(ctx context.Context) error {
+func (ws *Plugin) Start(_ context.Context) error {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
 
@@ -191,7 +200,7 @@ func (ws *WebServerPlugin) Start(ctx context.Context) error {
 	}()
 
 	ws.started = true
-	
+
 	// Update and publish initial health status
 	ws.healthStatus = plugin.HealthStatusHealthy
 	ws.healthMessage = fmt.Sprintf("WebServer operational on %s:%d", ws.config.Host, ws.config.Port)
@@ -201,7 +210,7 @@ func (ws *WebServerPlugin) Start(ctx context.Context) error {
 }
 
 // Stop gracefully shuts down the plugin
-func (ws *WebServerPlugin) Stop(ctx context.Context) error {
+func (ws *Plugin) Stop(_ context.Context) error {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
 
@@ -215,10 +224,10 @@ func (ws *WebServerPlugin) Stop(ctx context.Context) error {
 			return fmt.Errorf("failed to shutdown webserver: %w", err)
 		}
 	}
-	
+
 	// Clean up resources
 	ws.started = false
-	
+
 	// Update health status
 	ws.healthStatus = plugin.HealthStatusUnknown
 	ws.healthMessage = "WebServer stopped"
@@ -228,24 +237,25 @@ func (ws *WebServerPlugin) Stop(ctx context.Context) error {
 }
 
 // Health returns the current health status
-func (ws *WebServerPlugin) Health() plugin.Health {
+func (ws *Plugin) Health() plugin.Health {
 	ws.mu.RLock()
 	defer ws.mu.RUnlock()
 
 	// Calculate current health status
 	var status plugin.HealthStatus
 	var message string
-	
+
 	readyAPICount := len(ws.readyAPIs)
 	clientCount := len(ws.wsClients)
-	
-	if !ws.started {
+
+	switch {
+	case !ws.started:
 		status = plugin.HealthStatusUnknown
 		message = "WebServer not started"
-	} else if ws.server == nil {
+	case ws.server == nil:
 		status = plugin.HealthStatusUnhealthy
 		message = "WebServer not properly initialized"
-	} else {
+	default:
 		status = plugin.HealthStatusHealthy
 		message = fmt.Sprintf("WebServer operational (%d APIs ready, %d WS clients)", readyAPICount, clientCount)
 	}
@@ -255,35 +265,33 @@ func (ws *WebServerPlugin) Health() plugin.Health {
 		Message:   message,
 		LastCheck: time.Now(),
 		Details: map[string]interface{}{
-			"address":       fmt.Sprintf("%s:%d", ws.config.Host, ws.config.Port),
-			"apis_ready":    readyAPICount,
-			"ws_clients":    clientCount,
-			"started":       ws.started,
-			"dashboard":     ws.config.EnableDashboard,
-			"websocket":     ws.config.EnableWebSocket,
+			"address":    fmt.Sprintf("%s:%d", ws.config.Host, ws.config.Port),
+			"apis_ready": readyAPICount,
+			"ws_clients": clientCount,
+			"started":    ws.started,
+			"dashboard":  ws.config.EnableDashboard,
+			"websocket":  ws.config.EnableWebSocket,
 		},
 	}
 }
 
-
-
 // setupBasicEndpoints sets up endpoints that are always available
-func (ws *WebServerPlugin) setupBasicEndpoints() {
+func (ws *Plugin) setupBasicEndpoints() {
 	// Health check endpoint
 	ws.server.Get("/health", ws.healthHandler)
-	
+
 	// System status endpoint
 	ws.server.Get("/status", ws.statusHandler)
-	
+
 	// Startup progress endpoint
 	ws.server.Get("/startup", ws.startupProgressHandler)
-	
+
 	// Plugin list endpoint
 	ws.server.Get("/api/plugins", ws.pluginsHandler)
 }
 
 // Health check handler
-func (ws *WebServerPlugin) healthHandler(c *fiber.Ctx) error {
+func (ws *Plugin) healthHandler(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"status": "healthy",
 		"time":   time.Now(),
@@ -292,10 +300,10 @@ func (ws *WebServerPlugin) healthHandler(c *fiber.Ctx) error {
 }
 
 // Status handler shows system status
-func (ws *WebServerPlugin) statusHandler(c *fiber.Ctx) error {
+func (ws *Plugin) statusHandler(c *fiber.Ctx) error {
 	ws.mu.RLock()
 	defer ws.mu.RUnlock()
-	
+
 	return c.JSON(fiber.Map{
 		"status":     "operational",
 		"ready_apis": ws.readyAPIs,
@@ -305,39 +313,39 @@ func (ws *WebServerPlugin) statusHandler(c *fiber.Ctx) error {
 }
 
 // Startup progress handler
-func (ws *WebServerPlugin) startupProgressHandler(c *fiber.Ctx) error {
+func (ws *Plugin) startupProgressHandler(c *fiber.Ctx) error {
 	ws.mu.RLock()
 	defer ws.mu.RUnlock()
-	
+
 	// Calculate overall progress
 	totalPlugins := len(ws.startupStatus)
 	readyPlugins := 0
 	for _, status := range ws.startupStatus {
-		if status.Status == "ready" {
+		if status.Status == statusReady {
 			readyPlugins++
 		}
 	}
-	
+
 	overallProgress := 0
 	if totalPlugins > 0 {
 		overallProgress = (readyPlugins * 100) / totalPlugins
 	}
-	
+
 	return c.JSON(fiber.Map{
 		"overall_progress": overallProgress,
-		"plugins":         ws.startupStatus,
-		"ready":           readyPlugins == totalPlugins,
-		"time":            time.Now(),
+		"plugins":          ws.startupStatus,
+		"ready":            readyPlugins == totalPlugins,
+		"time":             time.Now(),
 	})
 }
 
 // Plugins handler lists all registered plugins
-func (ws *WebServerPlugin) pluginsHandler(c *fiber.Ctx) error {
+func (ws *Plugin) pluginsHandler(c *fiber.Ctx) error {
 	// TODO: Get from registry when proper state management is implemented
 	return c.JSON(fiber.Map{
 		"plugins": []string{
 			"security",
-			"analytics", 
+			"analytics",
 			"network",
 			"webserver",
 		},
@@ -346,37 +354,39 @@ func (ws *WebServerPlugin) pluginsHandler(c *fiber.Ctx) error {
 }
 
 // setupWebSocket sets up WebSocket endpoints for real-time updates
-func (ws *WebServerPlugin) setupWebSocket() {
+func (ws *Plugin) setupWebSocket() {
 	ws.server.Get("/ws", websocket.New(func(c *websocket.Conn) {
 		ws.handleWebSocket(c)
 	}))
 }
 
 // handleWebSocket handles WebSocket connections
-func (ws *WebServerPlugin) handleWebSocket(conn *websocket.Conn) {
+func (ws *Plugin) handleWebSocket(conn *websocket.Conn) {
 	// Register client
 	ws.wsClientsMu.Lock()
 	ws.wsClients[conn] = true
 	ws.wsClientsMu.Unlock()
-	
+
 	// Send initial status
 	ws.sendStartupStatus(conn)
-	
+
 	// Cleanup on disconnect
 	defer func() {
 		ws.wsClientsMu.Lock()
 		delete(ws.wsClients, conn)
 		ws.wsClientsMu.Unlock()
-		conn.Close()
+		if err := conn.Close(); err != nil {
+			ws.logger.Printf("Error closing WebSocket connection: %v", err)
+		}
 	}()
-	
+
 	// Keep connection alive and handle messages
 	for {
 		messageType, message, err := conn.ReadMessage()
 		if err != nil {
 			break
 		}
-		
+
 		// Echo back for now - implement command handling later
 		if err := conn.WriteMessage(messageType, message); err != nil {
 			break
@@ -385,60 +395,63 @@ func (ws *WebServerPlugin) handleWebSocket(conn *websocket.Conn) {
 }
 
 // sendStartupStatus sends current startup status to a WebSocket client
-func (ws *WebServerPlugin) sendStartupStatus(conn *websocket.Conn) {
+func (ws *Plugin) sendStartupStatus(conn *websocket.Conn) {
 	ws.mu.RLock()
 	defer ws.mu.RUnlock()
-	
+
 	// Make sure we have some status to send
 	if len(ws.startupStatus) == 0 {
 		// Initialize with current state if empty
 		ws.mu.RUnlock()
-		ws.updatePluginStatus("security", "ready", "Plugin operational", 100)
-		ws.updatePluginStatus("analytics", "ready", "Plugin operational", 100)
-		ws.updatePluginStatus("webserver", "ready", "Plugin operational", 100)
-		ws.updatePluginStatus("network", "degraded", "No peers connected", 100)
+		ws.updatePluginStatus("security", statusReady, "Plugin operational")
+		ws.updatePluginStatus("analytics", statusReady, "Plugin operational")
+		ws.updatePluginStatus("webserver", statusReady, "Plugin operational")
+		ws.updatePluginStatus("network", "degraded", "No peers connected")
 		ws.mu.RLock()
 	}
-	
+
 	status := map[string]interface{}{
 		"type":    "startup_status",
 		"plugins": ws.startupStatus,
 		"time":    time.Now(),
 	}
-	
+
 	data, _ := json.Marshal(status)
-	conn.WriteMessage(websocket.TextMessage, data)
+	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		ws.logger.Printf("Error sending connection status: %v", err)
+	}
 }
 
 // broadcastStatusSnapshot broadcasts status update using provided snapshot
-func (ws *WebServerPlugin) broadcastStatusSnapshot(currentStatus map[string]PluginStatus) {
+func (ws *Plugin) broadcastStatusSnapshot(currentStatus map[string]PluginStatus) {
 	ws.wsClientsMu.RLock()
 	defer ws.wsClientsMu.RUnlock()
-	
+
 	// Send full plugin status
 	update := map[string]interface{}{
 		"type":    "plugin_update",
 		"plugins": currentStatus,
 		"time":    time.Now(),
 	}
-	
+
 	data, _ := json.Marshal(update)
-	
+
 	for conn := range ws.wsClients {
-		conn.WriteMessage(websocket.TextMessage, data)
+		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+			ws.logger.Printf("Error broadcasting to WebSocket client: %v", err)
+		}
 	}
 }
 
-
 // monitorPluginStatus polls plugin health status periodically
-func (ws *WebServerPlugin) monitorPluginStatus(ctx context.Context) {
+func (ws *Plugin) monitorPluginStatus(ctx context.Context) {
 	// Poll plugin health every 5 seconds
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
-	
+
 	// Get initial status immediately
 	ws.pollPluginHealth()
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -450,29 +463,29 @@ func (ws *WebServerPlugin) monitorPluginStatus(ctx context.Context) {
 }
 
 // pollPluginHealth checks the current health of all plugins directly
-func (ws *WebServerPlugin) pollPluginHealth() {
+func (ws *Plugin) pollPluginHealth() {
 	if ws.registry == nil {
 		return
 	}
-	
+
 	plugins := ws.registry.List()
-	
+
 	// Process all plugins except ourselves
 	for _, p := range plugins {
 		pluginName := p.Info().Name
-		
+
 		// Skip ourselves to avoid circular dependency
 		if pluginName == "webserver" {
 			continue
 		}
-		
+
 		health := p.Health()
-		status := "ready"
 		message := health.Message
-		
+
+		var status string
 		switch health.Status {
 		case plugin.HealthStatusHealthy:
-			status = "ready"
+			status = statusReady
 		case plugin.HealthStatusDegraded:
 			status = "degraded"
 		case plugin.HealthStatusUnhealthy:
@@ -480,17 +493,17 @@ func (ws *WebServerPlugin) pollPluginHealth() {
 		default:
 			status = "starting"
 		}
-		
-		ws.updatePluginStatus(pluginName, status, message, 100)
+
+		ws.updatePluginStatus(pluginName, status, message)
 		ws.enableAPIForPlugin(pluginName)
 	}
-	
+
 	// Add our own health status
 	ourHealth := ws.Health()
-	ourStatus := "ready"
+	var ourStatus string
 	switch ourHealth.Status {
 	case plugin.HealthStatusHealthy:
-		ourStatus = "ready"
+		ourStatus = statusReady
 	case plugin.HealthStatusDegraded:
 		ourStatus = "degraded"
 	case plugin.HealthStatusUnhealthy:
@@ -498,21 +511,20 @@ func (ws *WebServerPlugin) pollPluginHealth() {
 	default:
 		ourStatus = "starting"
 	}
-	
-	ws.updatePluginStatus("webserver", ourStatus, ourHealth.Message, 100)
+
+	ws.updatePluginStatus("webserver", ourStatus, ourHealth.Message)
 	ws.enableAPIForPlugin("webserver")
 }
 
 // updatePluginStatus updates the status of a plugin
-func (ws *WebServerPlugin) updatePluginStatus(name, status, message string, progress int) {
+func (ws *Plugin) updatePluginStatus(name, status, message string) {
 	pluginStatus := PluginStatus{
 		Name:      name,
 		Status:    status,
 		Message:   message,
-		Progress:  progress,
 		StartedAt: time.Now(),
 	}
-	
+
 	// Update status under lock
 	ws.mu.Lock()
 	ws.startupStatus[name] = pluginStatus
@@ -523,38 +535,38 @@ func (ws *WebServerPlugin) updatePluginStatus(name, status, message string, prog
 		currentStatus[n] = s
 	}
 	ws.mu.Unlock()
-	
+
 	// Broadcast update to WebSocket clients (outside the lock to avoid deadlock)
 	ws.broadcastStatusSnapshot(currentStatus)
 }
 
 // enableAPIForPlugin enables API endpoints for a plugin
-func (ws *WebServerPlugin) enableAPIForPlugin(pluginName string) {
+func (ws *Plugin) enableAPIForPlugin(pluginName string) {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
-	
+
 	switch pluginName {
 	case "storage":
 		ws.server.Post("/api/storage/upload", ws.placeholderHandler("Storage upload"))
 		ws.server.Get("/api/storage/download/:cid", ws.placeholderHandler("Storage download"))
 		ws.server.Get("/api/storage/list", ws.placeholderHandler("Storage list"))
 		ws.readyAPIs["storage"] = true
-		
+
 	case "network":
 		ws.server.Get("/api/network/peers", ws.placeholderHandler("Network peers"))
 		ws.server.Get("/api/network/stats", ws.placeholderHandler("Network stats"))
 		ws.readyAPIs["network"] = true
-		
+
 	case "analytics":
 		ws.server.Get("/api/metrics", ws.placeholderHandler("System metrics"))
 		ws.server.Get("/api/diagnostics", ws.placeholderHandler("System diagnostics"))
 		ws.readyAPIs["analytics"] = true
-		
+
 	case "compute":
 		ws.server.Post("/api/compute/submit", ws.placeholderHandler("Submit compute job"))
 		ws.server.Get("/api/compute/status/:jobId", ws.placeholderHandler("Job status"))
 		ws.readyAPIs["compute"] = true
-		
+
 	case "economic":
 		ws.server.Get("/api/economic/balance", ws.placeholderHandler("Account balance"))
 		ws.server.Get("/api/economic/usage", ws.placeholderHandler("Resource usage"))
@@ -563,7 +575,7 @@ func (ws *WebServerPlugin) enableAPIForPlugin(pluginName string) {
 }
 
 // placeholderHandler returns a placeholder handler for APIs
-func (ws *WebServerPlugin) placeholderHandler(apiName string) fiber.Handler {
+func (ws *Plugin) placeholderHandler(apiName string) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
 			"api":     apiName,
@@ -575,21 +587,21 @@ func (ws *WebServerPlugin) placeholderHandler(apiName string) fiber.Handler {
 }
 
 // setupDashboard sets up the dashboard static files
-func (ws *WebServerPlugin) setupDashboard() {
+func (ws *Plugin) setupDashboard() {
 	// Check if React build exists
 	if _, err := os.Stat("./web/build/index.html"); err == nil {
 		// Serve React build in production
 		ws.server.Static("/static", "./web/build/static")
 		ws.server.Static("/assets", "./web/build/assets")
-		
+
 		// Serve index.html for all non-API routes (React Router)
 		ws.server.Get("/*", func(c *fiber.Ctx) error {
 			// Don't serve index.html for API routes
-			if strings.HasPrefix(c.Path(), "/api") || 
-			   strings.HasPrefix(c.Path(), "/ws") ||
-			   strings.HasPrefix(c.Path(), "/health") ||
-			   strings.HasPrefix(c.Path(), "/status") ||
-			   strings.HasPrefix(c.Path(), "/startup") {
+			if strings.HasPrefix(c.Path(), "/api") ||
+				strings.HasPrefix(c.Path(), "/ws") ||
+				strings.HasPrefix(c.Path(), "/health") ||
+				strings.HasPrefix(c.Path(), "/status") ||
+				strings.HasPrefix(c.Path(), "/startup") {
 				return c.Next()
 			}
 			return c.SendFile("./web/build/index.html")
@@ -600,37 +612,15 @@ func (ws *WebServerPlugin) setupDashboard() {
 			c.Set("Content-Type", "text/html")
 			return c.SendString(dashboardHTML)
 		})
-		
+
 		// Add a note about building the React app
 		ws.server.Get("/react-status", func(c *fiber.Ctx) error {
 			return c.JSON(fiber.Map{
-				"status": "development",
+				"status":  "development",
 				"message": "React app not built. Run 'cd web && npm install && npm run build' to build the dashboard.",
 			})
 		})
 	}
-}
-
-func contains(haystack, needle string) bool {
-	return len(haystack) >= len(needle) && (haystack == needle || len(haystack) > len(needle) && (haystack[:len(needle)] == needle || contains(haystack[1:], needle)))
-}
-
-// customErrorHandler provides custom error handling
-func customErrorHandler(c *fiber.Ctx, err error) error {
-	code := fiber.StatusInternalServerError
-	message := "Internal Server Error"
-	
-	if e, ok := err.(*fiber.Error); ok {
-		code = e.Code
-		message = e.Message
-	}
-	
-	return c.Status(code).JSON(fiber.Map{
-		"error":   true,
-		"message": message,
-		"code":    code,
-		"time":    time.Now(),
-	})
 }
 
 // Simple dashboard HTML for development
@@ -659,7 +649,7 @@ const dashboardHTML = `<!DOCTYPE html>
     <div class="container">
         <h1>Blackhole Network Node</h1>
         <div id="ws-status" class="ws-disconnected">Disconnected</div>
-        
+
         <div class="status-card">
             <h2>Startup Progress</h2>
             <div class="progress-bar">
@@ -667,25 +657,25 @@ const dashboardHTML = `<!DOCTYPE html>
             </div>
             <p id="progress-text">0% Complete</p>
         </div>
-        
+
         <div class="status-card">
             <h2>Plugin Status</h2>
             <div id="plugin-list"></div>
         </div>
-        
+
         <div class="status-card">
             <h2>System Information</h2>
             <div id="system-info">Loading...</div>
         </div>
     </div>
-    
+
     <script>
         let ws = null;
         let reconnectInterval = null;
-        
+
         function connect() {
             ws = new WebSocket('ws://localhost:8080/ws');
-            
+
             ws.onopen = () => {
                 document.getElementById('ws-status').textContent = 'Connected';
                 document.getElementById('ws-status').className = 'ws-connected';
@@ -694,14 +684,14 @@ const dashboardHTML = `<!DOCTYPE html>
                     reconnectInterval = null;
                 }
             };
-            
+
             ws.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 if (data.type === 'startup_status' || data.type === 'plugin_update') {
                     updatePluginStatus(data);
                 }
             };
-            
+
             ws.onclose = () => {
                 document.getElementById('ws-status').textContent = 'Disconnected';
                 document.getElementById('ws-status').className = 'ws-disconnected';
@@ -710,15 +700,15 @@ const dashboardHTML = `<!DOCTYPE html>
                 }
             };
         }
-        
+
         function updatePluginStatus(data) {
             const plugins = data.plugins || {};
             const pluginList = document.getElementById('plugin-list');
             pluginList.innerHTML = '';
-            
-            let totalProgress = 0;
-            let pluginCount = 0;
-            
+
+            let readyCount = 0;
+            let totalCount = 0;
+
             for (const [name, status] of Object.entries(plugins)) {
                 const div = document.createElement('div');
                 div.className = 'plugin-status';
@@ -728,26 +718,26 @@ const dashboardHTML = `<!DOCTYPE html>
                     '</div>' +
                     '<span class="status-badge ' + status.status + '">' + status.status + '</span>';
                 pluginList.appendChild(div);
-                
-                if (status.progress !== undefined) {
-                    totalProgress += status.progress;
-                    pluginCount++;
+
+                totalCount++;
+                if (status.status === 'ready') {
+                    readyCount++;
                 }
             }
-            
-            // Update overall progress
-            if (pluginCount > 0) {
-                const overallProgress = Math.round(totalProgress / pluginCount);
+
+            // Update overall progress based on ready plugins
+            if (totalCount > 0) {
+                const overallProgress = Math.round((readyCount * 100) / totalCount);
                 document.getElementById('overall-progress').style.width = overallProgress + '%';
                 document.getElementById('progress-text').textContent = overallProgress + '% Complete';
             }
         }
-        
+
         async function loadSystemInfo() {
             try {
                 const response = await fetch('/status');
                 const data = await response.json();
-                document.getElementById('system-info').innerHTML = 
+                document.getElementById('system-info').innerHTML =
                     '<p><strong>Status:</strong> ' + data.status + '</p>' +
                     '<p><strong>Ready APIs:</strong> ' + (Object.keys(data.ready_apis || {}).join(', ') || 'None') + '</p>' +
                     '<p><strong>Time:</strong> ' + new Date(data.time).toLocaleString() + '</p>';
@@ -755,7 +745,7 @@ const dashboardHTML = `<!DOCTYPE html>
                 document.getElementById('system-info').textContent = 'Failed to load system info';
             }
         }
-        
+
         // Initial connection
         connect();
         loadSystemInfo();
@@ -764,5 +754,5 @@ const dashboardHTML = `<!DOCTYPE html>
 </body>
 </html>`
 
-// Ensure WebServerPlugin implements the Plugin interface
-var _ plugin.Plugin = (*WebServerPlugin)(nil)
+// Ensure Plugin implements the Plugin interface
+var _ plugin.Plugin = (*Plugin)(nil)

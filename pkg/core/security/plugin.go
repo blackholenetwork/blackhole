@@ -1,3 +1,4 @@
+// Package security provides authentication, authorization, and identity management
 package security
 
 import (
@@ -7,27 +8,30 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/blackholenetwork/blackhole/pkg/plugin"
 )
 
-// SecurityPlugin implements security functionality as a plugin
-type SecurityPlugin struct {
+// Plugin implements security functionality as a plugin
+type Plugin struct {
 	*plugin.BasePlugin
-	mu             sync.RWMutex
-	config         plugin.Config
-	keyPair        *KeyPair
-	identities     map[string]*Identity
-	sessions       map[string]*Session
-	permissions    map[string]*Permission
-	started        bool
-	registry       *plugin.Registry
-	healthStatus   plugin.HealthStatus
-	healthMessage  string
+	mu            sync.RWMutex
+	config        plugin.Config
+	keyPair       *KeyPair
+	identities    map[string]*Identity
+	sessions      map[string]*Session
+	permissions   map[string]*Permission
+	started       bool
+	registry      *plugin.Registry
+	healthStatus  plugin.HealthStatus
+	healthMessage string
+	logger        *log.Logger
 }
 
 // KeyPair represents a cryptographic key pair
@@ -61,7 +65,7 @@ type Session struct {
 type Permission struct {
 	ID          string
 	Name        string
-	Resource    string // e.g., "storage", "compute", "network"
+	Resource    string   // e.g., "storage", "compute", "network"
 	Actions     []string // e.g., ["read", "write", "delete"]
 	Description string
 }
@@ -69,6 +73,7 @@ type Permission struct {
 // NodeRole represents different types of nodes in the network
 type NodeRole string
 
+// Node role constants
 const (
 	RoleNode      NodeRole = "node"      // Standard network participant
 	RoleRelay     NodeRole = "relay"     // Relay node for NAT traversal
@@ -88,8 +93,8 @@ type PersistentKeyData struct {
 	Role       NodeRole  `json:"role"`
 }
 
-// NewSecurityPlugin creates a new security plugin
-func NewSecurityPlugin(registry *plugin.Registry) *SecurityPlugin {
+// NewPlugin creates a new security plugin
+func NewPlugin(registry *plugin.Registry) *Plugin {
 	info := plugin.Info{
 		Name:         "security",
 		Version:      "1.0.0",
@@ -99,8 +104,8 @@ func NewSecurityPlugin(registry *plugin.Registry) *SecurityPlugin {
 		Dependencies: []string{},
 		Capabilities: []string{string(plugin.CapabilitySecurity)},
 	}
-	
-	sp := &SecurityPlugin{
+
+	sp := &Plugin{
 		BasePlugin:    plugin.NewBasePlugin(info),
 		identities:    make(map[string]*Identity),
 		sessions:      make(map[string]*Session),
@@ -108,13 +113,14 @@ func NewSecurityPlugin(registry *plugin.Registry) *SecurityPlugin {
 		registry:      registry,
 		healthStatus:  plugin.HealthStatusUnknown,
 		healthMessage: "Not initialized",
+		logger:        log.New(os.Stdout, "[Security] ", log.LstdFlags),
 	}
-	sp.BasePlugin.SetRegistry(registry)
+	sp.SetRegistry(registry)
 	return sp
 }
 
 // Info returns metadata about the plugin
-func (sp *SecurityPlugin) Info() plugin.Info {
+func (sp *Plugin) Info() plugin.Info {
 	return plugin.Info{
 		Name:         "security",
 		Version:      "1.0.0",
@@ -129,7 +135,7 @@ func (sp *SecurityPlugin) Info() plugin.Info {
 }
 
 // Init initializes the plugin with configuration
-func (sp *SecurityPlugin) Init(ctx context.Context, config plugin.Config) error {
+func (sp *Plugin) Init(_ context.Context, config plugin.Config) error {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 
@@ -144,12 +150,12 @@ func (sp *SecurityPlugin) Init(ctx context.Context, config plugin.Config) error 
 	if err := sp.createNodeIdentity(); err != nil {
 		return fmt.Errorf("failed to create node identity: %w", err)
 	}
-	
+
 	// Initialize default permissions
 	if err := sp.initializeDefaultPermissions(); err != nil {
 		return fmt.Errorf("failed to initialize permissions: %w", err)
 	}
-	
+
 	// Update health status
 	sp.healthStatus = plugin.HealthStatusHealthy
 	sp.healthMessage = "Security initialized"
@@ -159,7 +165,7 @@ func (sp *SecurityPlugin) Init(ctx context.Context, config plugin.Config) error 
 }
 
 // Start starts the plugin
-func (sp *SecurityPlugin) Start(ctx context.Context) error {
+func (sp *Plugin) Start(_ context.Context) error {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 
@@ -170,7 +176,7 @@ func (sp *SecurityPlugin) Start(ctx context.Context) error {
 	// Start any background tasks here
 	// For now, just mark as started
 	sp.started = true
-	
+
 	// Update and publish initial health status
 	sp.healthStatus = plugin.HealthStatusHealthy
 	sp.healthMessage = "Security operational (node identity active)"
@@ -180,7 +186,7 @@ func (sp *SecurityPlugin) Start(ctx context.Context) error {
 }
 
 // Stop gracefully shuts down the plugin
-func (sp *SecurityPlugin) Stop(ctx context.Context) error {
+func (sp *Plugin) Stop(_ context.Context) error {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 
@@ -190,7 +196,7 @@ func (sp *SecurityPlugin) Stop(ctx context.Context) error {
 
 	// Clean up resources
 	sp.started = false
-	
+
 	// Update health status
 	sp.healthStatus = plugin.HealthStatusUnknown
 	sp.healthMessage = "Security stopped"
@@ -200,7 +206,7 @@ func (sp *SecurityPlugin) Stop(ctx context.Context) error {
 }
 
 // Health returns the current health status
-func (sp *SecurityPlugin) Health() plugin.Health {
+func (sp *Plugin) Health() plugin.Health {
 	sp.mu.RLock()
 	defer sp.mu.RUnlock()
 
@@ -215,27 +221,28 @@ func (sp *SecurityPlugin) Health() plugin.Health {
 	// Calculate current health status
 	var status plugin.HealthStatus
 	var message string
-	
+
 	hasKeyPair := sp.keyPair != nil
 	identityCount := len(sp.identities)
 	sessionCount := len(sp.sessions)
 	permissionCount := len(sp.permissions)
-	
+
 	var keyAge time.Duration
 	if hasKeyPair && sp.keyPair.CreatedAt.After(time.Time{}) {
 		keyAge = time.Since(sp.keyPair.CreatedAt)
 	}
-	
-	if !sp.started {
+
+	switch {
+	case !sp.started:
 		status = plugin.HealthStatusUnknown
 		message = "Security not started"
-	} else if !hasKeyPair {
+	case !hasKeyPair:
 		status = plugin.HealthStatusUnhealthy
 		message = "No key pair available"
-	} else if permissionCount == 0 {
+	case permissionCount == 0:
 		status = plugin.HealthStatusDegraded
 		message = "Security initialized, no permissions defined"
-	} else if identityCount == 1 && sessionCount == 0 {
+	case identityCount == 1 && sessionCount == 0:
 		status = plugin.HealthStatusHealthy
 		nodeRole := "unknown"
 		for _, identity := range sp.identities {
@@ -245,10 +252,10 @@ func (sp *SecurityPlugin) Health() plugin.Health {
 			}
 		}
 		message = fmt.Sprintf("Auth system ready (role: %s, %d permissions, key age: %s)", nodeRole, permissionCount, formatDuration(keyAge))
-	} else if activeSessions > 0 {
+	case activeSessions > 0:
 		status = plugin.HealthStatusHealthy
 		message = fmt.Sprintf("Auth operational (%d identities, %d sessions, %d permissions)", identityCount, activeSessions, permissionCount)
-	} else {
+	default:
 		status = plugin.HealthStatusHealthy
 		message = fmt.Sprintf("Auth ready (%d identities, %d permissions)", identityCount, permissionCount)
 	}
@@ -258,9 +265,9 @@ func (sp *SecurityPlugin) Health() plugin.Health {
 		Message:   message,
 		LastCheck: time.Now(),
 		Details: map[string]interface{}{
-			"identities_count":     identityCount,
-			"active_sessions":      activeSessions,
-			"permissions_defined":  permissionCount,
+			"identities_count":    identityCount,
+			"active_sessions":     activeSessions,
+			"permissions_defined": permissionCount,
 			"has_keypair":         hasKeyPair,
 			"started":             sp.started,
 		},
@@ -270,7 +277,7 @@ func (sp *SecurityPlugin) Health() plugin.Health {
 // Plugin-specific methods
 
 // GenerateIdentity generates a new identity
-func (sp *SecurityPlugin) GenerateIdentity() (*Identity, error) {
+func (sp *Plugin) GenerateIdentity() (*Identity, error) {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 
@@ -298,7 +305,7 @@ func (sp *SecurityPlugin) GenerateIdentity() (*Identity, error) {
 }
 
 // GetIdentity retrieves an identity by ID
-func (sp *SecurityPlugin) GetIdentity(id string) (*Identity, error) {
+func (sp *Plugin) GetIdentity(id string) (*Identity, error) {
 	sp.mu.RLock()
 	defer sp.mu.RUnlock()
 
@@ -311,7 +318,7 @@ func (sp *SecurityPlugin) GetIdentity(id string) (*Identity, error) {
 }
 
 // SignData signs data with the node's private key
-func (sp *SecurityPlugin) SignData(data []byte) ([]byte, error) {
+func (sp *Plugin) SignData(data []byte) ([]byte, error) {
 	sp.mu.RLock()
 	defer sp.mu.RUnlock()
 
@@ -324,12 +331,12 @@ func (sp *SecurityPlugin) SignData(data []byte) ([]byte, error) {
 }
 
 // VerifySignature verifies a signature
-func (sp *SecurityPlugin) VerifySignature(publicKey ed25519.PublicKey, data, signature []byte) bool {
+func (sp *Plugin) VerifySignature(publicKey ed25519.PublicKey, data, signature []byte) bool {
 	return ed25519.Verify(publicKey, data, signature)
 }
 
 // Authenticate creates a new session for an identity
-func (sp *SecurityPlugin) Authenticate(identityID string, signature []byte, challenge []byte) (*Session, error) {
+func (sp *Plugin) Authenticate(identityID string, signature []byte, challenge []byte) (*Session, error) {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 
@@ -347,7 +354,7 @@ func (sp *SecurityPlugin) Authenticate(identityID string, signature []byte, chal
 	// Create session
 	sessionID := base64.URLEncoding.EncodeToString([]byte(fmt.Sprintf("%s-%d", identityID, time.Now().UnixNano())))
 	token := base64.URLEncoding.EncodeToString([]byte(fmt.Sprintf("%s-%s", sessionID, time.Now().String())))
-	
+
 	session := &Session{
 		ID:         sessionID,
 		IdentityID: identityID,
@@ -362,7 +369,7 @@ func (sp *SecurityPlugin) Authenticate(identityID string, signature []byte, chal
 }
 
 // ValidateSession checks if a session token is valid
-func (sp *SecurityPlugin) ValidateSession(token string) (*Session, error) {
+func (sp *Plugin) ValidateSession(token string) (*Session, error) {
 	sp.mu.RLock()
 	defer sp.mu.RUnlock()
 
@@ -376,7 +383,7 @@ func (sp *SecurityPlugin) ValidateSession(token string) (*Session, error) {
 }
 
 // Authorize checks if an identity has permission for a resource/action
-func (sp *SecurityPlugin) Authorize(identityID string, resource string, action string) (bool, error) {
+func (sp *Plugin) Authorize(identityID string, resource string, action string) (bool, error) {
 	sp.mu.RLock()
 	defer sp.mu.RUnlock()
 
@@ -406,7 +413,7 @@ func (sp *SecurityPlugin) Authorize(identityID string, resource string, action s
 }
 
 // GrantPermission grants a permission to an identity
-func (sp *SecurityPlugin) GrantPermission(identityID string, permissionID string) error {
+func (sp *Plugin) GrantPermission(identityID string, permissionID string) error {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 
@@ -432,12 +439,12 @@ func (sp *SecurityPlugin) GrantPermission(identityID string, permissionID string
 }
 
 // CreatePermission creates a new permission
-func (sp *SecurityPlugin) CreatePermission(name, resource string, actions []string, description string) (*Permission, error) {
+func (sp *Plugin) CreatePermission(name, resource string, actions []string, description string) (*Permission, error) {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 
 	permID := base64.URLEncoding.EncodeToString([]byte(fmt.Sprintf("%s-%s-%d", name, resource, time.Now().UnixNano())))
-	
+
 	permission := &Permission{
 		ID:          permID,
 		Name:        name,
@@ -452,11 +459,11 @@ func (sp *SecurityPlugin) CreatePermission(name, resource string, actions []stri
 
 // Private methods
 
-func (sp *SecurityPlugin) initializeKeyPair() error {
+func (sp *Plugin) initializeKeyPair() error {
 	// Get the key file path from config or use default
 	dataDir := sp.getDataDir()
 	keyFile := filepath.Join(dataDir, "node.key")
-	
+
 	// Try to load existing key
 	if keyData, err := sp.loadKeyFromDisk(keyFile); err == nil {
 		fmt.Printf("[Security] initializeKeyPair: Loaded existing key from %s\n", keyFile)
@@ -467,7 +474,7 @@ func (sp *SecurityPlugin) initializeKeyPair() error {
 		}
 		return nil
 	}
-	
+
 	// Generate new key pair if none exists
 	fmt.Printf("[Security] initializeKeyPair: Generating new key pair\n")
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -480,7 +487,7 @@ func (sp *SecurityPlugin) initializeKeyPair() error {
 		PrivateKey: priv,
 		CreatedAt:  time.Now(),
 	}
-	
+
 	// Save the new key to disk
 	nodeID := base64.URLEncoding.EncodeToString(pub[:8])
 	keyData := &PersistentKeyData{
@@ -490,7 +497,7 @@ func (sp *SecurityPlugin) initializeKeyPair() error {
 		NodeID:     nodeID,
 		Role:       RoleNode, // Default role
 	}
-	
+
 	if err := sp.saveKeyToDisk(keyFile, keyData); err != nil {
 		fmt.Printf("[Security] Warning: Failed to save key to disk: %v\n", err)
 	} else {
@@ -500,7 +507,7 @@ func (sp *SecurityPlugin) initializeKeyPair() error {
 	return nil
 }
 
-func (sp *SecurityPlugin) createNodeIdentity() error {
+func (sp *Plugin) createNodeIdentity() error {
 	if sp.keyPair == nil {
 		return fmt.Errorf("no key pair available")
 	}
@@ -533,26 +540,24 @@ func (sp *SecurityPlugin) createNodeIdentity() error {
 	return nil
 }
 
-
 // formatDuration formats a duration in a human-readable way
 func formatDuration(d time.Duration) string {
-	if d < time.Minute {
+	switch {
+	case d < time.Minute:
 		return fmt.Sprintf("%ds", int(d.Seconds()))
-	} else if d < time.Hour {
+	case d < time.Hour:
 		return fmt.Sprintf("%dm", int(d.Minutes()))
-	} else if d < 24*time.Hour {
+	case d < 24*time.Hour:
 		return fmt.Sprintf("%dh", int(d.Hours()))
-	} else {
+	default:
 		days := int(d.Hours() / 24)
 		return fmt.Sprintf("%dd", days)
 	}
 }
 
-func (sp *SecurityPlugin) initializeDefaultPermissions() error {
+func (sp *Plugin) initializeDefaultPermissions() error {
 	// Create a simple admin permission for now
-	if _, err := sp.createPermissionUnsafe("admin.full", "*", []string{"*"}, "Full administrative access"); err != nil {
-		return fmt.Errorf("failed to create admin permission: %w", err)
-	}
+	sp.createPermissionUnsafe("admin.full", "*", []string{"*"}, "Full administrative access")
 
 	// Grant admin permission to the node identity
 	if len(sp.identities) > 0 {
@@ -583,9 +588,9 @@ func (sp *SecurityPlugin) initializeDefaultPermissions() error {
 }
 
 // createPermissionUnsafe creates a permission without acquiring locks (must be called while holding lock)
-func (sp *SecurityPlugin) createPermissionUnsafe(name, resource string, actions []string, description string) (*Permission, error) {
+func (sp *Plugin) createPermissionUnsafe(name, resource string, actions []string, description string) *Permission {
 	permID := base64.URLEncoding.EncodeToString([]byte(fmt.Sprintf("%s-%s-%d", name, resource, time.Now().UnixNano())))
-	
+
 	permission := &Permission{
 		ID:          permID,
 		Name:        name,
@@ -595,11 +600,11 @@ func (sp *SecurityPlugin) createPermissionUnsafe(name, resource string, actions 
 	}
 
 	sp.permissions[permID] = permission
-	return permission, nil
+	return permission
 }
 
 // grantPermissionUnsafe grants a permission without acquiring locks (must be called while holding lock)
-func (sp *SecurityPlugin) grantPermissionUnsafe(identityID string, permissionID string) error {
+func (sp *Plugin) grantPermissionUnsafe(identityID string, permissionID string) error {
 	identity, exists := sp.identities[identityID]
 	if !exists {
 		return fmt.Errorf("identity not found: %s", identityID)
@@ -623,12 +628,12 @@ func (sp *SecurityPlugin) grantPermissionUnsafe(identityID string, permissionID 
 
 // Helper methods for persistent key storage
 
-func (sp *SecurityPlugin) getDataDir() string {
+func (sp *Plugin) getDataDir() string {
 	// Check if data directory is configured
 	if dataDir, ok := sp.config["data_dir"].(string); ok && dataDir != "" {
 		return dataDir
 	}
-	
+
 	// Default to current directory + .blackhole
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -637,75 +642,99 @@ func (sp *SecurityPlugin) getDataDir() string {
 	return filepath.Join(home, ".blackhole")
 }
 
-func (sp *SecurityPlugin) loadKeyFromDisk(keyFile string) (*PersistentKeyData, error) {
-	data, err := os.ReadFile(keyFile)
+func (sp *Plugin) loadKeyFromDisk(keyFile string) (*PersistentKeyData, error) {
+	// Validate key file path
+	if !sp.isValidKeyPath(keyFile) {
+		return nil, fmt.Errorf("invalid key file path: %s", keyFile)
+	}
+	data, err := os.ReadFile(keyFile) // #nosec G304 - path is validated
 	if err != nil {
 		return nil, err
 	}
-	
+
 	var keyData PersistentKeyData
 	if err := json.Unmarshal(data, &keyData); err != nil {
 		return nil, err
 	}
-	
+
 	return &keyData, nil
 }
 
-func (sp *SecurityPlugin) saveKeyToDisk(keyFile string, keyData *PersistentKeyData) error {
+func (sp *Plugin) saveKeyToDisk(keyFile string, keyData *PersistentKeyData) error {
 	// Ensure directory exists
-	if err := os.MkdirAll(filepath.Dir(keyFile), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(keyFile), 0o700); err != nil {
 		return err
 	}
-	
+
 	data, err := json.MarshalIndent(keyData, "", "  ")
 	if err != nil {
 		return err
 	}
-	
+
 	// Save with restricted permissions (only owner can read/write)
-	return os.WriteFile(keyFile, data, 0600)
+	return os.WriteFile(keyFile, data, 0o600)
 }
 
 // GetNodeRole returns the current node's role
-func (sp *SecurityPlugin) GetNodeRole() string {
+func (sp *Plugin) GetNodeRole() string {
 	sp.mu.RLock()
 	defer sp.mu.RUnlock()
-	
+
 	// Find the node identity and get its role
 	for _, identity := range sp.identities {
 		if role, exists := identity.Metadata["role"]; exists {
 			return role
 		}
 	}
-	
+
 	return string(RoleNode) // Default fallback
 }
 
 // SetNodeRole updates the node's role (requires admin permission)
-func (sp *SecurityPlugin) SetNodeRole(newRole NodeRole) error {
+func (sp *Plugin) SetNodeRole(newRole NodeRole) error {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
-	
+
 	// Update the node identity metadata
 	for _, identity := range sp.identities {
 		if identity.Metadata["type"] == "node_identity" {
 			identity.Metadata["role"] = string(newRole)
-			
+
 			// Update the saved key data
 			dataDir := sp.getDataDir()
 			keyFile := filepath.Join(dataDir, "node.key")
 			if keyData, err := sp.loadKeyFromDisk(keyFile); err == nil {
 				keyData.Role = newRole
-				sp.saveKeyToDisk(keyFile, keyData)
+				if err := sp.saveKeyToDisk(keyFile, keyData); err != nil {
+					sp.logger.Printf("Error saving updated key to disk: %v", err)
+				}
 			}
-			
+
 			fmt.Printf("[Security] SetNodeRole: Updated node role to '%s'\n", string(newRole))
 			return nil
 		}
 	}
-	
+
 	return fmt.Errorf("node identity not found")
 }
 
-// Ensure SecurityPlugin implements the Plugin interface
-var _ plugin.Plugin = (*SecurityPlugin)(nil)
+// isValidKeyPath validates that the key path is in expected locations
+func (sp *Plugin) isValidKeyPath(path string) bool {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+
+	// Get expected data directory
+	dataDir := sp.getDataDir()
+	absDataDir, err := filepath.Abs(dataDir)
+	if err != nil {
+		return false
+	}
+
+	// Check if path is under data directory
+	return strings.HasPrefix(absPath, absDataDir)
+}
+
+// Ensure Plugin implements the Plugin interface
+var _ plugin.Plugin = (*Plugin)(nil)
