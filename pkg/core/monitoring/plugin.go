@@ -1,3 +1,4 @@
+// Package monitoring provides system monitoring and analytics functionality
 package monitoring
 
 import (
@@ -9,21 +10,17 @@ import (
 	"github.com/blackholenetwork/blackhole/pkg/plugin"
 )
 
-// MonitoringPlugin provides system monitoring capabilities
-type MonitoringPlugin struct {
+// Plugin provides system monitoring capabilities
+type Plugin struct {
 	*plugin.BasePlugin
-	mu       sync.RWMutex
-	metrics  map[string]interface{}
-	ticker   *time.Ticker
-	stopChan chan struct{}
 }
 
-// NewMonitoringPlugin creates a new monitoring plugin using the builder pattern
-func NewMonitoringPlugin(registry *plugin.Registry) plugin.Plugin {
+// NewPlugin creates a new monitoring plugin using the builder pattern
+func NewPlugin(registry *plugin.Registry) plugin.Plugin {
 	// Store registry for use in the plugin
 	monitoringRegistry = registry
-	
-	return plugin.NewPluginBuilder("monitoring").
+
+	return plugin.NewBuilder("monitoring").
 		WithDescription("System monitoring and metrics collection").
 		WithAuthor("Blackhole Network").
 		WithLicense("Apache-2.0").
@@ -45,13 +42,14 @@ type monitoringState struct {
 	healthMessage string
 }
 
-var stateKey = struct{}{}
-var monitoringRegistry *plugin.Registry
-var globalState *monitoringState
-var healthTicker *time.Ticker
-var healthDone chan struct{}
+var (
+	monitoringRegistry *plugin.Registry
+	globalState        *monitoringState
+	healthTicker       *time.Ticker
+	healthDone         chan struct{}
+)
 
-func initMonitoring(ctx context.Context, config plugin.Config) error {
+func initMonitoring(_ context.Context, _ plugin.Config) error {
 	globalState = &monitoringState{
 		metrics:       make(map[string]interface{}),
 		stopChan:      make(chan struct{}),
@@ -101,7 +99,7 @@ func startMonitoring(ctx context.Context) error {
 			}
 		}
 	}()
-	
+
 	// Start health monitoring
 	healthDone = make(chan struct{})
 	healthTicker = time.NewTicker(5 * time.Second)
@@ -110,7 +108,7 @@ func startMonitoring(ctx context.Context) error {
 	return nil
 }
 
-func stopMonitoring(ctx context.Context) error {
+func stopMonitoring(_ context.Context) error {
 	if globalState != nil {
 		// Update health status
 		globalState.mu.Lock()
@@ -123,7 +121,7 @@ func stopMonitoring(ctx context.Context) error {
 			globalState.ticker.Stop()
 		}
 	}
-	
+
 	// Stop health monitoring
 	if healthTicker != nil {
 		healthTicker.Stop()
@@ -189,15 +187,15 @@ func monitorHealth(ctx context.Context) {
 			if globalState == nil {
 				continue
 			}
-			
+
 			// Check current status
 			globalState.mu.RLock()
-			status := globalState.healthStatus
-			message := globalState.healthMessage
 			metricsCount := len(globalState.metrics)
 			globalState.mu.RUnlock()
-			
+
 			// Determine health based on metrics
+			var status plugin.HealthStatus
+			var message string
 			if metricsCount == 0 {
 				status = plugin.HealthStatusDegraded
 				message = "No metrics collected yet"
@@ -205,14 +203,14 @@ func monitorHealth(ctx context.Context) {
 				status = plugin.HealthStatusHealthy
 				message = "Monitoring is operational"
 			}
-			
+
 			// Update if changed
 			globalState.mu.Lock()
 			if globalState.healthStatus != status || globalState.healthMessage != message {
 				globalState.healthStatus = status
 				globalState.healthMessage = message
 				globalState.mu.Unlock()
-				
+
 				// Publish health event
 				if monitoringRegistry != nil {
 					monitoringRegistry.Publish(plugin.Event{
@@ -312,10 +310,10 @@ func (mp *FullMonitoringPlugin) GetDiagnostics() map[string]interface{} {
 
 	return map[string]interface{}{
 		"runtime": map[string]interface{}{
-			"goroutines":  runtime.NumGoroutine(),
-			"cpu_count":   runtime.NumCPU(),
-			"go_version":  runtime.Version(),
-			"memory":      m,
+			"goroutines": runtime.NumGoroutine(),
+			"cpu_count":  runtime.NumCPU(),
+			"go_version": runtime.Version(),
+			"memory":     m,
 		},
 		"metrics_count": mp.metrics.Count(),
 		"uptime":        time.Since(mp.BasePlugin.Info().CreatedAt),
@@ -357,6 +355,7 @@ func (mp *FullMonitoringPlugin) collectSystemMetrics() {
 
 // MetricsCollector methods
 
+// Set adds or updates a metric in the collector
 func (mc *MetricsCollector) Set(name string, value interface{}, unit string) {
 	mc.mu.Lock()
 	defer mc.mu.Unlock()
@@ -369,6 +368,7 @@ func (mc *MetricsCollector) Set(name string, value interface{}, unit string) {
 	}
 }
 
+// Get retrieves a specific metric by name
 func (mc *MetricsCollector) Get(name string) (Metric, bool) {
 	mc.mu.RLock()
 	defer mc.mu.RUnlock()
@@ -377,6 +377,7 @@ func (mc *MetricsCollector) Get(name string) (Metric, bool) {
 	return metric, exists
 }
 
+// GetAll returns all metrics as a map
 func (mc *MetricsCollector) GetAll() map[string]interface{} {
 	mc.mu.RLock()
 	defer mc.mu.RUnlock()
@@ -393,6 +394,7 @@ func (mc *MetricsCollector) GetAll() map[string]interface{} {
 	return result
 }
 
+// Count returns the number of metrics in the collector
 func (mc *MetricsCollector) Count() int {
 	mc.mu.RLock()
 	defer mc.mu.RUnlock()
