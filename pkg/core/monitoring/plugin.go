@@ -290,10 +290,16 @@ func (mp *FullMonitoringPlugin) Start(ctx context.Context) error {
 
 // Stop stops the monitoring plugin
 func (mp *FullMonitoringPlugin) Stop(ctx context.Context) error {
-	close(mp.stopChan)
+	// Stop the ticker first to prevent new events
 	if mp.ticker != nil {
 		mp.ticker.Stop()
 	}
+
+	// Signal the goroutine to stop
+	close(mp.stopChan)
+
+	// Give the goroutine time to exit
+	time.Sleep(10 * time.Millisecond)
 
 	return mp.BasePlugin.Stop(ctx)
 }
