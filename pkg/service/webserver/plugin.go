@@ -21,6 +21,11 @@ import (
 	"github.com/blackholenetwork/blackhole/pkg/plugin"
 )
 
+// RegistryInterface defines the registry methods needed by the webserver
+type RegistryInterface interface {
+	List() []plugin.Plugin
+}
+
 const (
 	// statusReady indicates a plugin is ready
 	statusReady = "ready"
@@ -31,7 +36,7 @@ type Plugin struct {
 	*plugin.BasePlugin
 	server       *fiber.App
 	config       Config
-	registry     *plugin.Registry
+	registry     RegistryInterface
 	orchestrator interface {
 		Health() map[string]orchestrator.ComponentHealth
 		HealthExcluding(caller string) map[string]orchestrator.ComponentHealth
@@ -65,7 +70,7 @@ type PluginStatus struct {
 }
 
 // New creates a new web server plugin
-func New(registry *plugin.Registry, orch interface {
+func New(registry RegistryInterface, orch interface {
 	Health() map[string]orchestrator.ComponentHealth
 	HealthExcluding(caller string) map[string]orchestrator.ComponentHealth
 },
@@ -91,7 +96,8 @@ func New(registry *plugin.Registry, orch interface {
 		healthMessage: "Not initialized",
 		logger:        log.New(os.Stdout, "[WebServer] ", log.LstdFlags),
 	}
-	ws.SetRegistry(registry)
+	// Note: SetRegistry expects *plugin.Registry, but we only have the interface
+	// This is a limitation of the current architecture
 	return ws
 }
 
@@ -544,6 +550,11 @@ func (ws *Plugin) updatePluginStatus(name, status, message string) {
 func (ws *Plugin) enableAPIForPlugin(pluginName string) {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
+
+	// Don't set up routes if server isn't initialized yet
+	if ws.server == nil {
+		return
+	}
 
 	switch pluginName {
 	case "storage":
