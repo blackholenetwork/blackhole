@@ -1,0 +1,65 @@
+# Default Blackhole node configuration
+
+# Network configuration
+network:
+  # Listen addresses
+  listen_addresses:
+    - /ip4/0.0.0.0/tcp/4001
+    - /ip6/::/tcp/4001
+  
+  # Bootstrap peers
+  bootstrap_peers: []
+  
+  # Connection limits
+  connection_manager:
+    high_water: 900
+    low_water: 600
+    grace_period: 20s
+  
+  # Transport configuration
+  transports:
+    tcp:
+      enabled: true
+    quic:
+      enabled: true
+    websocket:
+      enabled: false
+  
+  # Security configuration
+  security:
+    tls:
+      enabled: true
+    noise:
+      enabled: true
+
+# Peer identity
+identity:
+  # Private key path (will be generated if not exists)
+  private_key_path: ~/.blackhole/private_key
+
+# Metrics configuration
+metrics:
+  enabled: true
+  address: :9090
+  path: /metrics
+
+# Logging configuration
+logging:
+  level: info
+  format: json
+  output: stdout
+
+# Discovery configuration
+discovery:
+  mdns:
+    enabled: true
+    interval: 10s
+  dht:
+    enabled: true
+    mode: auto
+
+# Resource management
+resources:
+  max_memory: 1GB
+  max_file_descriptors: 4096
+  max_connections: 1000

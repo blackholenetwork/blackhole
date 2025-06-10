@@ -1,0 +1,72 @@
+# Example Blackhole node configuration
+
+# Network configuration
+network:
+  # Listen on all interfaces, both TCP and QUIC
+  listen_addresses:
+    - /ip4/0.0.0.0/tcp/4001
+    - /ip4/0.0.0.0/udp/4001/quic
+    - /ip6/::/tcp/4001
+    - /ip6/::/udp/4001/quic
+  
+  # Example bootstrap peers (replace with actual peers)
+  bootstrap_peers:
+    - /ip4/192.168.1.100/tcp/4001/p2p/QmPeerID1234567890
+    - /ip4/10.0.0.50/tcp/4001/p2p/QmPeerID0987654321
+  
+  # Connection manager settings
+  connection_manager:
+    high_water: 500      # Start pruning connections when above this
+    low_water: 250       # Prune connections down to this number
+    grace_period: 30s    # Grace period before pruning new connections
+  
+  # Transport protocols
+  transports:
+    tcp:
+      enabled: true
+    quic:
+      enabled: true
+    websocket:
+      enabled: true      # Enable for browser connectivity
+  
+  # Security protocols
+  security:
+    tls:
+      enabled: true
+    noise:
+      enabled: true
+
+# Peer identity
+identity:
+  # Private key will be generated here if it doesn't exist
+  private_key_path: ~/.blackhole/node_key
+
+# Metrics and monitoring
+metrics:
+  enabled: true
+  address: :9090         # Prometheus metrics endpoint
+  path: /metrics
+
+# Logging configuration
+logging:
+  level: debug           # debug, info, warn, error
+  format: json           # json or text
+  output: stdout         # stdout, stderr, or file path
+
+# Peer discovery
+discovery:
+  # Local network discovery
+  mdns:
+    enabled: true
+    interval: 30s
+  
+  # DHT for global discovery
+  dht:
+    enabled: true
+    mode: server         # server, client, or auto
+
+# Resource limits
+resources:
+  max_memory: 2GB
+  max_file_descriptors: 8192
+  max_connections: 2000
